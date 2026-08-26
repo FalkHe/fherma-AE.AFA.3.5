@@ -564,6 +564,38 @@ components written against a stub must survive its replacement unchanged):
 Appended by implementing agents when a step finishes — decisions later steps
 depend on. 1–3 bullets per step, no prose.
 
+### Step 2.1 (catalogue models & services)
+
+- **Service contracts** (all module-level, `AsyncSession` first):
+  `product_service.slugify(name)`, `create_backlog(session, name)` →
+  `DuplicateModelError` (carries the slug in `args[0]`),
+  `transition(session, motorbike, new_status)` → `InvalidTransitionError`
+  (`.current` / `.requested`, `str(error)` is a ready 422 detail),
+  `upsert_draft_spec(session, motorbike_id, values: Mapping[str, Any])`;
+  `document_service.create_document(session, motorbike_id, *, source_type,
+  source_title, raw_path, content_markdown, fetched_at, source_url=None)` and
+  `list_for_motorbike(session, motorbike_id)`. Public functions **commit**;
+  private helpers (`_apply_approval`, `_upsert_spec`) deliberately do not, so
+  approval stays one transaction. `LEGAL_TRANSITIONS` is the exported matrix —
+  status changes go through `transition`, never `motorbike.status = …`.
+- **Spec writes are keyed on `motorbike_spec.SPEC_FIELDS`** (the frozen column
+  set, table order; also `SPEC_CATEGORIES` / `PRICE_BANDS` for the pinned
+  vocabularies). `values` is full-object: omitted fields are reset to NULL
+  (`extra` to `{}`), a key outside `SPEC_FIELDS` raises `ValueError` (bug, not
+  user input — 2.3's Pydantic schema is the boundary). `a2_eligible` is derived
+  in `_resolve_a2_eligible` (skipped when `wet_weight_kg <= 0`); approval
+  re-runs it while promoting draft → verified. `motorbike_specs` deliberately
+  has **no `created_at`/`updated_at`** — only `extracted_at`.
+- Migration `4ea01933a43b` (all four tables) leaves head at `4ea01933a43b`;
+  its downgrade drops the four native enum types explicitly (as in
+  `f68e3fe43b2d`) — copy that when adding `operations`/`chunks`. Documents are
+  ordered by `source_type != 'wikipedia'` then `created_at` (false sorts
+  first) — reuse that expression for the 2.9 list endpoint.
+  `tests/services/conftest.py`'s `FakeAsyncSession` now interprets any mapped
+  entity plus `select`/`delete`/`update`, `AND`-ed `==`/`!=` where-clauses and
+  `order_by` (`.store()` / `.rows(Model)` accessors; server defaults are **not**
+  simulated — services set enum defaults in Python, tests stamp `created_at`).
+
 ### Step 2.4 (SSE client hook & query keys)
 
 - `frontend/src/queryKeys.ts` exports one `queryKeys` object; every query uses

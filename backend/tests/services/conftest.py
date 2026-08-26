@@ -1,25 +1,44 @@
-"""In-memory fake `AsyncSession` for `user_service`/`session_service` tests.
+"""In-memory fake `AsyncSession` for the service-layer tests.
 
 `StubSession` in the top-level `conftest.py` only records `execute()` calls for
-route-level tests that never inspect a result. The auth services genuinely
-read back what they write (uniqueness checks, session lookups, role-fresh
-loads), so this fixture is a small in-memory store instead: it interprets the
-handful of `select(...)`/`delete(...)` shapes the services actually issue
-(single-column equality `where()`), without ever opening a real database
-connection or event loop of its own — everything here is plain `async def`
-called from the test's own `asyncio.run()`.
+route-level tests that never inspect a result. The services genuinely read back
+what they write (uniqueness checks, session lookups, spec upserts), so this
+fixture is a small in-memory store instead: it interprets the handful of
+`select`/`delete`/`update` shapes the services actually issue, without ever
+opening a real database connection or event loop of its own — everything here
+is plain `async def` called from the test's own `asyncio.run()`.
+
+Supported: `select`/`delete`/`update` against a single mapped entity, `where`
+clauses built from `==`/`!=` comparisons of a column against a literal combined
+with `AND`, and `order_by` over the same kind of expressions. Anything else
+raises `NotImplementedError` loudly rather than silently matching nothing, so a
+future service change this fixture cannot interpret fails fast instead of
+pretending to pass.
 """
 
+import operator
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from sqlalchemy import Delete, Select
+from sqlalchemy import BinaryExpression, Delete, Select, Update
+from sqlalchemy.sql.elements import BindParameter, BooleanClauseList, ColumnClause, UnaryExpression
+from sqlalchemy.sql.operators import and_, eq, ne
 
-from app.db.models.base import new_ulid
+from app.db.models.base import Base, new_ulid
 from app.db.models.session import Session
 from app.db.models.user import User
+
+_COMPARISONS = {eq: operator.eq, ne: operator.ne}
+
+
+@dataclass
+class _FakeScalars:
+    rows: list[Any]
+
+    def all(self) -> list[Any]:
+        return self.rows
 
 
 @dataclass
@@ -32,72 +51,115 @@ class _FakeResult:
         assert len(self.rows) == 1, "fake store matched more than one row"
         return self.rows[0]
 
+    def scalars(self) -> _FakeScalars:
+        return _FakeScalars(self.rows)
+
 
 class FakeAsyncSession:
-    """Interprets the exact `select`/`delete` shapes used by the services.
-
-    Only single equality `where()` clauses on `select(User|Session)` and
-    `delete(Session)` are supported — that is all the current services emit.
-    A shape outside that raises `NotImplementedError` loudly rather than
-    silently returning nothing, so a future service change that this fixture
-    can't yet interpret fails fast instead of pretending to pass.
-    """
+    """Interprets the exact statement shapes used by the services."""
 
     def __init__(self) -> None:
-        self.users: dict[str, User] = {}
-        self.sessions: dict[str, Session] = {}
+        self.stores: dict[type[Any], dict[str, Any]] = {}
         self.commit_count = 0
         self.deleted_objects: list[Any] = []
 
-    def add(self, obj: User | Session) -> None:
+    @property
+    def users(self) -> dict[str, User]:
+        return self.store(User)
+
+    @property
+    def sessions(self) -> dict[str, Session]:
+        return self.store(Session)
+
+    def store(self, entity: type[Any]) -> dict[str, Any]:
+        """Return the row store of one mapped class, creating it on first use."""
+        return self.stores.setdefault(entity, {})
+
+    def rows(self, entity: type[Any]) -> list[Any]:
+        """Return every stored row of one mapped class, in insertion order."""
+        return list(self.store(entity).values())
+
+    def add(self, obj: Any) -> None:
         """Mimic ORM flush-time PK assignment, then insert into the store."""
+        if not isinstance(obj, Base):  # pragma: no cover - defensive
+            raise TypeError(f"FakeAsyncSession.add: unsupported type {type(obj)!r}")
         if getattr(obj, "id", None) is None:
             obj.id = new_ulid()
-        if isinstance(obj, User):
-            self.users[obj.id] = obj
-        elif isinstance(obj, Session):
-            self.sessions[obj.id] = obj
-        else:  # pragma: no cover - defensive
-            raise TypeError(f"FakeAsyncSession.add: unsupported type {type(obj)!r}")
+        self.store(type(obj))[obj.id] = obj
 
     async def commit(self) -> None:
         self.commit_count += 1
 
-    async def delete(self, obj: User | Session) -> None:
+    async def delete(self, obj: Any) -> None:
         self.deleted_objects.append(obj)
-        if isinstance(obj, User):
-            self.users.pop(obj.id, None)
-        elif isinstance(obj, Session):
-            self.sessions.pop(obj.id, None)
+        self.store(type(obj)).pop(obj.id, None)
 
     async def execute(self, statement: object) -> _FakeResult:
         if isinstance(statement, Select):
             return self._execute_select(statement)
         if isinstance(statement, Delete):
             return self._execute_delete(statement)
+        if isinstance(statement, Update):
+            return self._execute_update(statement)
         raise NotImplementedError(f"FakeAsyncSession.execute: unsupported statement {statement!r}")
 
     def _execute_select(self, statement: Select) -> _FakeResult:
         entity = statement.column_descriptions[0]["entity"]
-        store = self.users if entity is User else self.sessions
-        rows = self._filter(list(store.values()), statement.whereclause)
+        rows = self._filter(self.rows(entity), statement.whereclause)
+        for clause in reversed(statement._order_by_clauses):
+            rows = self._sorted(rows, clause)
         return _FakeResult(rows)
 
     def _execute_delete(self, statement: Delete) -> _FakeResult:
-        table_name = statement.table.name
-        store = self.users if table_name == "users" else self.sessions
-        matches = self._filter(list(store.values()), statement.whereclause)
-        for obj in matches:
+        store = self.store(self._entity_of(statement.table.name))
+        for obj in self._filter(list(store.values()), statement.whereclause):
             store.pop(obj.id, None)
         return _FakeResult([])
 
+    def _execute_update(self, statement: Update) -> _FakeResult:
+        entity = self._entity_of(statement.table.name)
+        matches = self._filter(self.rows(entity), statement.whereclause)
+        for column, value in statement._values.items():
+            for obj in matches:
+                setattr(obj, column.key, self._value(value, obj))
+        return _FakeResult([])
+
     @staticmethod
-    def _filter(rows: list[Any], whereclause: object) -> list[Any]:
+    def _entity_of(table_name: str) -> type[Any]:
+        for mapper in Base.registry.mappers:
+            if mapper.local_table is not None and mapper.local_table.name == table_name:
+                return mapper.class_
+        raise NotImplementedError(f"FakeAsyncSession: no mapped class for table {table_name!r}")
+
+    @classmethod
+    def _filter(cls, rows: list[Any], whereclause: object) -> list[Any]:
         if whereclause is None:
             return rows
-        column_name = whereclause.left.key
-        value = whereclause.right.value
-        return [row for row in rows if getattr(row, column_name) == value]
+        return [row for row in rows if cls._value(whereclause, row)]
+
+    @classmethod
+    def _sorted(cls, rows: list[Any], clause: object) -> list[Any]:
+        descending = isinstance(clause, UnaryExpression) and clause.modifier is not None
+        key = clause.element if isinstance(clause, UnaryExpression) else clause
+        return sorted(rows, key=lambda row: cls._value(key, row), reverse=descending)
+
+    @classmethod
+    def _value(cls, clause: object, row: Any) -> Any:
+        """Evaluate one SQL expression against a stored row, in Python."""
+        if isinstance(clause, BindParameter):
+            return clause.value
+        if isinstance(clause, BooleanClauseList):
+            if clause.operator is not and_:
+                raise NotImplementedError(f"FakeAsyncSession: unsupported junction {clause!r}")
+            return all(cls._value(part, row) for part in clause.clauses)
+        if isinstance(clause, BinaryExpression):
+            comparison = _COMPARISONS.get(clause.operator)
+            if comparison is None:
+                raise NotImplementedError(f"FakeAsyncSession: unsupported operator {clause!r}")
+            return comparison(cls._value(clause.left, row), cls._value(clause.right, row))
+        if isinstance(clause, ColumnClause):
+            return getattr(row, clause.key)
+        raise NotImplementedError(f"FakeAsyncSession: unsupported expression {clause!r}")
 
 
 @pytest.fixture
