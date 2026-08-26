@@ -6,6 +6,39 @@
   "nav": {
     "home": "Home"
   },
+  "common": {
+    "loading": "Loading"
+  },
+  "auth": {
+    "fields": {
+      "username": "Username",
+      "password": "Password",
+      "confirmPassword": "Confirm password"
+    },
+    "login": {
+      "title": "Sign in",
+      "rememberMe": "Remember me",
+      "submit": "Sign in",
+      "noAccount": "No account yet?",
+      "registerLink": "Create one"
+    },
+    "register": {
+      "title": "Create account",
+      "usernameHint": "3–32 characters: letters, digits, . _ -",
+      "passwordHint": "At least 8 characters",
+      "submit": "Create account",
+      "haveAccount": "Already have an account?",
+      "loginLink": "Sign in"
+    },
+    "errors": {
+      "invalidCredentials": "Invalid username or password.",
+      "usernameTaken": "This username is already taken.",
+      "usernameInvalid": "Use 3–32 characters: letters, digits, . _ -",
+      "passwordTooShort": "Password must be at least 8 characters.",
+      "passwordMismatch": "Passwords do not match.",
+      "serverError": "Something went wrong. Please try again."
+    }
+  },
   "themeMode": {
     "menuLabel": "Colour theme",
     "buttonLabel": "Change colour theme",

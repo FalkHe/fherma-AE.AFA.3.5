@@ -261,3 +261,23 @@ depend on. 1–3 bullets per step, no prose.
   transaction so demotion/reset stay single-transaction.
 - ORM models define **no relationships** (avoids async lazy-load traps); the
   `UserRole` native enum uses `values_callable` so lowercase values are stored.
+
+### Step 1.2 (auth screens, UI-only)
+
+- `hooks/useAuth.ts` exports the types `AuthUser`, `LoginInput`
+  (`{username, password, rememberMe}`), `RegisterInput` (`{username, password}`)
+  and returns **real `useMutation` results** (`UseMutationResult<AuthUser, Error, …>`;
+  logout `<void, Error, void>`) — step 1.6 replaces only the `mutationFn`, so
+  `isPending`/`mutate`/`mutateAsync` usage in components stays valid. Step 1.6
+  must re-export the same type names or update both routes.
+- Contract for 1.6: the register→login chain lives **inside `useRegister`**
+  (hence it resolves to the authenticated `AuthUser`, not the created one);
+  `["auth","me"]` invalidation belongs in the hooks, `navigate()` and the
+  status-code→message mapping belong in the routes. Both routes already hold
+  the general-error slot as local state typed to `auth.errors.*` keys
+  (`GeneralErrorKey`), cleared at the start of every submit.
+- Deliberate omissions left for 1.6, per the step's out-of-scope list: no
+  navigation on success, no `Navigate`-away-when-authenticated, no username ref
+  on `LoginRoute` (register has refs for first-invalid-field focus). Per
+  ui-spec §1 login does **no** client-side validation beyond `required`; only
+  `RegisterRoute` mirrors the pinned username/password rules (on submit only).
