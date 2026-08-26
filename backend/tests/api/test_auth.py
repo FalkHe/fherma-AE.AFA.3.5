@@ -188,6 +188,30 @@ def test_login_unknown_username_returns_401(auth_client: TestClient) -> None:
     assert response.json() == {"detail": "Invalid username or password."}
 
 
+# Login applies no format validation (unlike register): a credential that is
+# too short to be valid is a wrong credential, so it must fail with 401 and
+# not with a 422 the SPA would show as a generic server error.
+
+
+def test_login_with_too_short_password_returns_401_not_422(auth_client: TestClient) -> None:
+    _register(auth_client, "liam")
+
+    response = _login(auth_client, "liam", password="short12")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid username or password."}
+
+
+@pytest.mark.parametrize("username", ["ab", "bad user!"])
+def test_login_with_invalid_username_returns_401_not_422(
+    auth_client: TestClient, username: str
+) -> None:
+    response = _login(auth_client, username, password="secret123")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid username or password."}
+
+
 # --- GET /auth/me -------------------------------------------------------------
 
 

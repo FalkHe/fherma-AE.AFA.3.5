@@ -92,6 +92,13 @@ never on the detail string, and shows its own i18n message.
   unique index on the stored lowercase value.
 - **Password**: min 8, max 128 chars; no other policy (strict password policy
   is explicitly out of scope per `docs/architecture.md`).
+- **Both constraints apply at registration only.** `POST /auth/login` performs
+  the username normalisation (`strip().lower()`, the service looks up the
+  normalised form) but **no format or length validation**: login is a
+  credential check, not data entry, so a syntactically impossible credential
+  simply fails authentication with `401 {"detail": "Invalid username or
+  password."}` on the usual constant-time path. Login still returns the
+  default `422` for a missing field or a wrong JSON type.
 
 ---
 
@@ -370,3 +377,22 @@ depend on. 1–3 bullets per step, no prose.
   `routes/LoginRoute.test.tsx` is the landed guard; note it must opt out of
   `act()` (`IS_REACT_ACT_ENVIRONMENT = false`), delay the stubbed response and
   make jsdom's `focus()` respect `disabled`, or it passes against the bug.
+
+### Post-1.6 adjustment (login validation dropped — user-approved)
+
+- **Login no longer validates credential format** (user decision): a 7-char
+  password or a 2-char/invalid-pattern username used to return 422, which the
+  SPA rendered as a generic server error instead of "invalid credentials".
+  `LoginRequest` now only normalises the username; the length/pattern checks
+  moved onto `RegisterRequest`, whose behaviour is unchanged.
+- Structure in `app/api/schemas/auth.py`: `_CredentialsRequest` holds
+  `username`/`password` plus the `normalize_username` validator only;
+  `RegisterRequest` adds `check_username_format` + `check_password_length`.
+  **Validator order is load-bearing** — the inherited normaliser runs before
+  the subclass format check, so `"  Alice  "` is folded, not rejected
+  (`test_register_username_is_stripped_and_lowercased` guards it).
+- The validators are `@field_validator`s, so they never appeared as
+  `minLength`/`maxLength`/`pattern` in OpenAPI: the exported schema changed
+  only in the two models' `description` strings and no client regeneration is
+  needed. Any future endpoint wanting machine-readable constraints must use
+  `Field(...)` instead.

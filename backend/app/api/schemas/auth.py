@@ -7,6 +7,12 @@ alias generator does the translation on the wire.
 The username and password rules are field validators rather than checks inside
 the endpoints, so a rejected value produces FastAPI's default 422 body with the
 offending field in `loc`.
+
+Those rules apply to **registration only**. Login is a credential check, not
+data entry: a syntactically impossible username or password is simply a wrong
+credential and must fail authentication with 401, not 422. `LoginRequest`
+therefore normalises the username (the service looks up the normalised form)
+but validates neither field's format.
 """
 
 import re
@@ -31,7 +37,7 @@ class AuthSchema(BaseModel):
 
 
 class _CredentialsRequest(AuthSchema):
-    """A username/password pair carrying the pinned validation rules."""
+    """A username/password pair, with the username folded to its stored form."""
 
     username: str
     password: str
@@ -39,20 +45,33 @@ class _CredentialsRequest(AuthSchema):
     @field_validator("username")
     @classmethod
     def normalize_username(cls, value: str) -> str:
-        """Fold the username to its stored form and reject unusable ones."""
-        normalized = value.strip().lower()
+        """Fold the username to the single form that is stored and queried."""
+        return value.strip().lower()
 
-        if not USERNAME_MIN_LENGTH <= len(normalized) <= USERNAME_MAX_LENGTH:
+
+class RegisterRequest(_CredentialsRequest):
+    """Credentials for a new account, carrying the pinned validation rules."""
+
+    @field_validator("username")
+    @classmethod
+    def check_username_format(cls, value: str) -> str:
+        """Reject usernames that could never be stored.
+
+        `value` has already been normalised by `normalize_username`: the
+        inherited validator runs first, so uppercase and surrounding whitespace
+        are folded rather than rejected.
+        """
+        if not USERNAME_MIN_LENGTH <= len(value) <= USERNAME_MAX_LENGTH:
             raise ValueError(
                 f"Username must be between {USERNAME_MIN_LENGTH} and "
                 f"{USERNAME_MAX_LENGTH} characters long."
             )
-        if USERNAME_PATTERN.match(normalized) is None:
+        if USERNAME_PATTERN.match(value) is None:
             raise ValueError(
                 "Username may only contain lowercase letters, digits, "
                 "underscores, dots and hyphens."
             )
-        return normalized
+        return value
 
     @field_validator("password")
     @classmethod
@@ -66,12 +85,13 @@ class _CredentialsRequest(AuthSchema):
         return value
 
 
-class RegisterRequest(_CredentialsRequest):
-    """Credentials for a new account."""
-
-
 class LoginRequest(_CredentialsRequest):
-    """Credentials for an existing account, plus the cookie lifetime choice."""
+    """Credentials for an existing account, plus the cookie lifetime choice.
+
+    Deliberately unvalidated beyond the username normalisation: a credential
+    that could not possibly match is rejected by `user_service.authenticate`
+    with a 401, on the same constant-time path as any other wrong password.
+    """
 
     remember_me: bool = False
 
