@@ -5,8 +5,9 @@ exceptions raised here into status codes or exit codes.
 
 Two rules are enforced here and nowhere else:
 
-* the **legal transition matrix** — every status change goes through
-  `transition`, so an illegal one is impossible regardless of caller;
+* the **legal transition matrices** — every status change goes through
+  `transition` (catalogue rows) or `transition_image` (moderation of a
+  downloaded picture), so an illegal one is impossible regardless of caller;
 * **`verified` specifications are only ever promotions of a draft.** Approval
   copies the draft row and flips pending images in the same transaction, so a
   model can never be publicly visible with a half-applied review.
@@ -44,6 +45,16 @@ LEGAL_TRANSITIONS: dict[MotorbikeStatus, frozenset[MotorbikeStatus]] = {
     MotorbikeStatus.REJECTED: frozenset({MotorbikeStatus.INGESTING}),
 }
 
+# Which moderation state an image may move to. Approval of a whole model flips
+# pending images through `_apply_approval`; an admin may also judge a single
+# image, and rejection is final — a rejected picture is never shown again.
+LEGAL_IMAGE_TRANSITIONS: dict[ImageStatus, frozenset[ImageStatus]] = {
+    ImageStatus.PENDING: frozenset({ImageStatus.APPROVED, ImageStatus.REJECTED}),
+    # Un-publishing an approved image stays possible.
+    ImageStatus.APPROVED: frozenset({ImageStatus.REJECTED}),
+    ImageStatus.REJECTED: frozenset(),
+}
+
 # A2 driving licence limits: at most 35 kW and at most 0.2 kW per kg.
 A2_MAX_POWER_KW = Decimal("35")
 A2_MAX_POWER_TO_WEIGHT = Decimal("0.2")
@@ -60,6 +71,17 @@ class InvalidTransitionError(Exception):
 
     def __init__(self, current: MotorbikeStatus, requested: MotorbikeStatus) -> None:
         super().__init__(f"Cannot change status from '{current.value}' to '{requested.value}'.")
+        self.current = current
+        self.requested = requested
+
+
+class InvalidImageTransitionError(Exception):
+    """Raised when a requested image moderation change is not legal."""
+
+    def __init__(self, current: ImageStatus, requested: ImageStatus) -> None:
+        super().__init__(
+            f"Cannot change image status from '{current.value}' to '{requested.value}'."
+        )
         self.current = current
         self.requested = requested
 
@@ -132,6 +154,31 @@ async def get_specs(
     return grouped
 
 
+async def get_image(session: AsyncSession, image_id: str) -> MotorbikeImage | None:
+    """Return one image row, or `None` when the id is unknown."""
+    result = await session.execute(select(MotorbikeImage).where(MotorbikeImage.id == image_id))
+    return result.scalar_one_or_none()
+
+
+async def list_images(
+    session: AsyncSession, *, motorbike_id: str | None = None
+) -> list[MotorbikeImage]:
+    """Return image rows, newest first; `motorbike_id` is the `filter[product]` set.
+
+    Unpaginated on purpose: ingestion stores at most one image per run, so the
+    result is a handful of rows per model and the review screen renders the
+    newest one.
+    """
+    conditions = [] if motorbike_id is None else [MotorbikeImage.motorbike_id == motorbike_id]
+
+    result = await session.execute(
+        select(MotorbikeImage)
+        .where(*conditions)
+        .order_by(MotorbikeImage.created_at.desc(), MotorbikeImage.id.desc())
+    )
+    return list(result.scalars().all())
+
+
 async def create_backlog(session: AsyncSession, name: str) -> Motorbike:
     """Create a `backlog` entry for `name` and return it.
 
@@ -171,6 +218,27 @@ async def transition(
     await session.commit()
     await _announce(session, motorbike_id)
     return motorbike
+
+
+async def transition_image(
+    session: AsyncSession, image: MotorbikeImage, new_status: ImageStatus
+) -> MotorbikeImage:
+    """Move `image` to `new_status` and announce its model as updated.
+
+    The announcement is `product.updated`: images are part of a model's review
+    state, and the admin screens refetch a product's images from there.
+
+    Raises:
+        InvalidImageTransitionError: the change is not in `LEGAL_IMAGE_TRANSITIONS`.
+    """
+    if new_status not in LEGAL_IMAGE_TRANSITIONS[image.status]:
+        raise InvalidImageTransitionError(image.status, new_status)
+
+    motorbike_id = image.motorbike_id
+    image.status = new_status
+    await session.commit()
+    await _announce(session, motorbike_id)
+    return image
 
 
 async def upsert_draft_spec(

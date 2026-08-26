@@ -773,3 +773,33 @@ depend on. 1–3 bullets per step, no prose.
   `ServerSentEvent(event=<name>, data=<payload JSON>)`, subscriber queue removed
   in the generator's `finally`. `sse-starlette~=3.4.0` was already a dependency —
   nothing added to `pyproject.toml`/`uv.lock`, no `make build` needed.
+
+### Step 2.9 (documents & product-images endpoints)
+
+- **Image moderation lives in `product_service`** (it already owned
+  `MotorbikeImage` through `_apply_approval`): `LEGAL_IMAGE_TRANSITIONS`
+  (`pending→{approved,rejected}`, `approved→{rejected}`, `rejected→{}`),
+  `InvalidImageTransitionError(current, requested)` (`str(error)` is a ready 422
+  detail), `transition_image(session, image, new_status)` (commits, then
+  announces `product.updated` via the existing private `_announce`),
+  `get_image(session, image_id)` and `list_images(session, *, motorbike_id=None)`
+  (order `created_at DESC, id DESC`). No `refresh` needed after the image write —
+  `motorbike_images` has no server-side `onupdate` column and the sessionmaker
+  sets `expire_on_commit=False`. 2.12 must keep writing image rows through a
+  service, never flip `image.status` directly.
+- **Both lists are deliberately unpaginated** (no `page[number]`/`page[size]`
+  params): documents reuse `document_service.list_for_motorbike` verbatim with
+  its pinned ordering, images are ≤1 row per ingestion run, and ui-spec §7 wants
+  the complete document list for its picker. `meta.totalCount` is therefore the
+  number of rows returned. `filter[product]` is **required** on `/api/documents`
+  (absent → 400 `missing-filter`, a new error code) and **optional** on
+  `/api/product-images` (absent = whole catalogue); on both, more than one
+  comma-separated member → 400 `invalid-filter`. `rawPath` (documents) and
+  `originalPath` (images) are never exposed.
+- **The variant URL formula lives in `app/api/schemas/images.py`**:
+  `MEDIA_URL_PREFIX = "/media"` plus `variant_urls(motorbike_id, image_id) ->
+  ImageVariants` whose field names (`thumb`/`card`/`detail`) *are* the variant
+  names — `/media/motorbikes/{motorbike_id}/{image_id}_{variant}.webp`, computed
+  per response, no disk access. 2.12 writes the matching
+  `MEDIA_DIR/motorbikes/{motorbike_id}/{image_id}_{variant}.webp` files and must
+  keep the two in sync (the API layer stays import-free for jobs).
