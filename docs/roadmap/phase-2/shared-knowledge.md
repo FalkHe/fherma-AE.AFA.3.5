@@ -615,6 +615,31 @@ depend on. 1–3 bullets per step, no prose.
   `/api/events`) — 2.7 must therefore keep the endpoint inside the
   credentials-allowing CORS config.
 
+### Step 2.5 (Taskiq broker & worker service)
+
+- **One deviation from the pinned broker call, required by redis-py 8.1:**
+  `ListQueueBroker(url=…, socket_timeout=None)`. redis-py ≥ 8 defaults
+  connections to `socket_timeout=5` while `ListQueueBroker.listen()` issues an
+  infinite `BRPOP`; the blocking read then raises `redis.TimeoutError`, which
+  taskiq-redis 1.2.3 does not catch (`ConnectionError` only), so every worker
+  process — plus whatever task it was running — died every 5 idle seconds
+  (verified: 18 `worker is dead. Scheduling reload.` lines in 90 s; 0 after the
+  fix). Do not remove the kwarg; do not pin `redis<8` instead.
+- Job modules import `broker` from `app.jobs.broker` and raise
+  `app.jobs.TransientJobError` (defined in `jobs/__init__.py`, so job modules
+  need not import the Redis wiring) for anything retryable; every task gets
+  `@broker.task("<family>.<name>", retry_on_error=True)`. Task names are
+  positional, matching the pinned `demo.ping` / `ingestion.run` /
+  `embeddings.rebuild`. The broker keeps taskiq's `DummyResultBackend` — never
+  call `.wait_result()`.
+- CLI enqueue contract (`app/cli/jobs.py`, follow it for `app ingest run` /
+  `app embeddings rebuild`): sync Typer body → `asyncio.run(_impl())`; `_impl`
+  does `await broker.startup()` → `await <task>.kiq(...)` → `await
+  broker.shutdown()` in a `finally`, prints the returned `task_id`, waits for
+  nothing. Tests stub `app.cli.jobs.broker` and the task object by name
+  (`tests/cli/test_jobs.py`), so no test needs Redis. Each new job family also
+  gets its module appended to `app-worker`'s command in `compose.yaml`.
+
 ### Step 2.8 (backlog screen, UI-only)
 
 - **Error contract for products calls:** `hooks/useProducts.ts` exports
