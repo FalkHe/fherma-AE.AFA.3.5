@@ -1,6 +1,9 @@
 # Local environment — never commit; use .env.dist as the template.
 .env
 
+# Retained ingestion payloads and generated media (DATA_DIR / MEDIA_DIR).
+backend/var/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -3,7 +3,7 @@
 import typer
 
 from app import __version__
-from app.cli import jobs, openapi, operations, users
+from app.cli import ingest, jobs, openapi, operations, users
 
 app = typer.Typer(
     name="app",
@@ -12,6 +12,7 @@ app = typer.Typer(
     add_completion=False,
 )
 
+app.add_typer(ingest.app, name="ingest")
 app.add_typer(jobs.app, name="jobs")
 app.add_typer(openapi.app, name="openapi")
 app.add_typer(operations.app, name="operations")

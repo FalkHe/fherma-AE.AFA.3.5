@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     environment: Environment = "development"
     log_level: LogLevel = "INFO"
 
+    # Ingestion: where retained payloads live and how much of a remote page we
+    # are willing to spend time and memory on.
+    data_dir: Path = Path("/app/var/data")
+    ingestion_fetch_timeout_seconds: float = 20
+    ingestion_max_fetch_bytes: int = 5_242_880
+
 
 @lru_cache
 def get_settings() -> Settings:

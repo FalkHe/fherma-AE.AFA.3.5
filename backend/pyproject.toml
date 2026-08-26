@@ -8,6 +8,12 @@ dependencies = [
     "fastapi~=0.141.0",
     "uvicorn[standard]~=0.52.0",
     "sse-starlette~=3.4.0",
+    # Outbound HTTP (ingestion fetch, search providers). HTTPX 2.x ships under
+    # the `httpx2` distribution; it was already installed as a test-only
+    # dependency of fastapi.testclient and is now runtime.
+    "httpx2~=2.0.0",
+    # Main-text extraction from fetched article HTML.
+    "trafilatura~=2.2.0",
     # Models / validation / configuration
     "pydantic~=2.13.0",
     "pydantic-settings~=2.15.0",
@@ -34,8 +40,6 @@ dev = [
     "ruff~=0.15.0",
     # Tests
     "pytest~=9.0.0",
-    # Required by fastapi.testclient; Starlette 1.x wants httpx2, not httpx 0.x.
-    "httpx2~=2.0.0",
 ]
 
 [build-system]
