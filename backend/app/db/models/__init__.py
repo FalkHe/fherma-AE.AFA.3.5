@@ -5,6 +5,7 @@ Importing this package must register every model on `Base.metadata`; Alembic's
 """
 
 from app.db.models.base import Base, ULIDPrimaryKeyMixin, new_ulid
+from app.db.models.chunk import Chunk
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus, MotorbikeImage
 from app.db.models.motorbike_spec import MotorbikeSpec, SpecKind
@@ -15,6 +16,7 @@ from app.db.models.user import User, UserRole
 
 __all__ = [
     "Base",
+    "Chunk",
     "ImageStatus",
     "Motorbike",
     "MotorbikeImage",

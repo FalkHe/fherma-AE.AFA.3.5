@@ -30,6 +30,10 @@ dependencies = [
     "langchain-openrouter>=0.2.8,<0.3",
     # Prompt templates (Markdown + Jinja files under app/llm/prompts/).
     "jinja2~=3.1",
+    # Structural chunking of source documents (headings, then characters).
+    "langchain-text-splitters~=1.0",
+    # pgvector SQLAlchemy column type for the chunk embeddings.
+    "pgvector~=0.4.1",
     # Image variants generated at ingest time and served as static files.
     "pillow~=12.3.0",
     # CLI

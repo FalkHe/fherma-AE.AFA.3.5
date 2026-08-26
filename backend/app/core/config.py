@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # dependency) one extraction call may spend on source documents.
     extraction_max_input_chars: int = 60_000
 
+    # Chunking: the structural splitter's target slice size and the overlap
+    # carried between two neighbouring slices, both in characters.
+    chunk_size_chars: int = 3_200
+    chunk_overlap_chars: int = 400
+
 
 @lru_cache
 def get_settings() -> Settings:
