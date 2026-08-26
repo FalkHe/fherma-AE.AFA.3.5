@@ -1265,3 +1265,39 @@ depend on. 1–3 bullets per step, no prose.
   `app embeddings rebuild` → operation `failed`, progress 50,
   `error = "Embedding skipped: OPENROUTER_API_KEY is not configured."`. The
   throwaway model, its files and both operation rows were deleted afterwards.
+
+### Step 2.20 (review wired live, S2)
+
+- **The 2.13 stub contract survived untouched** — no review component or route
+  changed. `useProductReview.ts` now re-exports the same five hooks and types,
+  with the hand-written types replaced by generated ones (`SourceType`/
+  `ImageStatus` = the schema enums, `SourceDocument` = `{id} &
+  DocumentAttributes`, `ProductImage` = `{id} & ProductImageAttributes`).
+  `useProduct` throws **`ProductError`** (imported from `useProducts.ts`, so the
+  route's `instanceof` 404 branch works); the mapping helper is copied inline
+  rather than exported from `useProducts.ts`, like the page walk in 2.15.
+  `SaveDraftSpecError.validationFields` is filled from the last segment of each
+  FastAPI 422 `loc` (`["body","data","attributes","draftSpec","powerKw"]` →
+  `powerKw`); a JSON:API error document has no `loc`, so domain failures map to
+  the form's general Alert.
+- **`useSaveDraftSpec` reads the last-fetched draft from the query cache**
+  (`queryClient.getQueryData(queryKeys.products.detail(id))`) and PATCHes
+  `{...allNullSpec, ...cached.draftSpec, ...formValues}` — all 16 frozen fields
+  always travel, so the full-object replace never resets a field the form does
+  not show (proved live: draft was NULL, saving created the row = the upsert
+  path). Per 2.9 both list endpoints are unpaginated, so `useProductDocuments` /
+  `useProductImage` send **no `page[…]` parameters** and the 2.15 page-walk loop
+  is deliberately *not* repeated; `useProductImage` picks the newest row by
+  `createdAt` rather than by position. `useRejectImage` invalidates
+  `["products"]` + `["operations"]` + `["productImages"]` (ui-spec §1 blanket
+  rule; the image PATCH announces `product.updated` server-side).
+- **Known dev-only gap (not fixed — would have meant improvising):** image
+  variant URLs are the API's server-relative `/media/...` paths and are passed
+  through verbatim, so in the cross-origin dev setup (Vite :5173 → API :8000)
+  the three previews resolve against Vite, which answers the SPA fallback
+  `index.html` and the `<img>` renders blank (`naturalWidth 0`); same-origin
+  production is unaffected. One-line fix if wanted: prefix `variants.*` with
+  `import.meta.env.VITE_API_URL` in the hook. `AdminModelReviewRoute.test.tsx`
+  now serves `/api/documents` + `/api/product-images` fixtures from its
+  `stubFetch` API (component sources unchanged), and `useProductReview.test.ts`
+  covers ordering, newest-image, merge-before-PATCH, 422 `loc` and invalidations.

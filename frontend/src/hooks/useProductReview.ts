@@ -6,83 +6,60 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+import { apiClient } from "../api/client";
 import type { components } from "../api/schema";
 import { queryKeys } from "../queryKeys";
 
-import type { Product } from "./useProducts";
+import { ProductError, type Product } from "./useProducts";
 
 /**
- * STUB — replaced wholesale by step 2.20, which wires these five hooks to
- * `GET /api/products/{id}`, `GET /api/documents`, `GET /api/product-images` and
- * their `PATCH`es through the generated client. Nothing outside this file may
- * know that the review screen currently runs on fixtures: the hooks return real
- * `useQuery`/`useMutation` results, keyed with the pinned query keys, so the
- * components written against them survive the replacement unchanged.
+ * Everything the review screen reads and writes for one model: the product
+ * itself, its retrieved documents, its fetched image, the draft specification
+ * and the one image moderation action this phase offers.
  *
- * Two deliberate stub behaviours:
+ * As in `useProducts`, the JSON:API envelope is unwrapped **here and nowhere
+ * else** — components receive flat rows (`id` merged with the attributes) and
+ * never reach into `.attributes`. Nothing updates optimistically: every mutation
+ * awaits the server and then invalidates, so the screen renders refetched server
+ * truth.
  *
- * - `useProduct` answers with the fixture for **any** id, echoing back the id it
- *   was asked for. The route param therefore stays the real catalogue id, which
- *   matters because `useTransitionProduct` (step 2.15, already live) sends its
- *   approve/reject `PATCH` to the real API.
- * - The fixture store is mutable, as in the step-2.8 stubs: saving a draft spec
- *   and rejecting the image really change it, so both flows are observable —
- *   the mutations invalidate their queries and the screen re-reads the store.
- *
- * The product's `status` comes from the fixture, so a gate of §6 is reached by
- * editing `FIXTURE_PRODUCT.status` (the step's pinned verification path).
+ * Neither `/api/documents` nor `/api/product-images` is paginated (a model has a
+ * handful of documents and at most one image per ingestion run, and the review
+ * screen needs the complete document list for its picker), so unlike the backlog
+ * list hooks these two send no `page[…]` parameters and read `meta.totalCount`
+ * as "the number of rows delivered".
  */
 
 /** A specification revision as the API returns it (`draftSpec`/`verifiedSpec`). */
 export type DraftSpec = components["schemas"]["SpecAttributes"];
 
 /** Provenance class of a source document (`source_type` in the catalogue). */
-export type SourceType = "wikipedia" | "product" | "technical" | "magazine" | "upload";
+export type SourceType = components["schemas"]["SourceType"];
 
-/**
- * One retrieved source document, flattened out of its JSON:API envelope exactly
- * as `Product` is — components never see `.attributes`.
- *
- * Typed by hand because the documents endpoints are not in the generated schema
- * this step builds against; 2.20 replaces this with
- * `{ id: string } & components["schemas"]["DocumentAttributes"]`.
- */
-export interface SourceDocument {
+/** One retrieved source document, flattened out of its JSON:API envelope. */
+export type SourceDocument = {
   id: string;
-  sourceType: SourceType;
-  /** `null` for uploads, which have no origin URL. */
-  sourceUrl: string | null;
-  sourceTitle: string;
-  contentMarkdown: string;
-  fetchedAt: string;
-  createdAt: string;
-}
+} & components["schemas"]["DocumentAttributes"];
 
 /** Moderation state of a fetched image. */
-export type ImageStatus = "pending" | "approved" | "rejected";
+export type ImageStatus = components["schemas"]["ImageStatus"];
 
 /**
- * The one image an ingestion run fetched, with its computed variant URLs
- * (`/media/motorbikes/{motorbikeId}/{imageId}_{variant}.webp` server-side).
+ * The one image an ingestion run fetched, with the variant URLs the API computes
+ * (`/media/motorbikes/{motorbikeId}/{imageId}_{variant}.webp`).
  */
-export interface ProductImage {
+export type ProductImage = {
   id: string;
-  sourceUrl: string;
-  /** Licence/author line, `null` when Wikimedia carried no metadata. */
-  attribution: string | null;
-  status: ImageStatus;
-  variants: { thumb: string; card: string; detail: string };
-  createdAt: string;
-}
+} & components["schemas"]["ProductImageAttributes"];
 
 /**
  * A failed draft-spec save.
  *
- * Same shape and rationale as Phase-1's `AuthError`: the screen decides its own
- * message from the status code, and `validationFields` carries the field names
- * out of a 422 body (`loc`'s last segment) so a rejected value can be shown on
- * the field it belongs to instead of as a general error. 2.20 keeps this class
- * and fills it from the real error document.
+ * Same shape and rationale as Phase-1's `AuthError`: the backend's `detail` is
+ * English prose for developers, so the screen decides its own message from the
+ * status code, and `validationFields` carries the field names out of a
+ * request-validation 422 (the last segment of each `loc`) so a rejected value
+ * can be shown on the field it belongs to instead of as a general error.
  */
 export class SaveDraftSpecError extends Error {
   readonly status: number;
@@ -96,244 +73,108 @@ export class SaveDraftSpecError extends Error {
   }
 }
 
-/**
- * Fixture latency, so the pending states (save spinner, disabled reject dialog)
- * are observable instead of finishing within one frame.
- */
-const STUB_LATENCY_MS = 350;
+/** The error bodies these endpoints answer with (see shared-knowledge). */
+type ErrorBody =
+  | components["schemas"]["ErrorDocument"]
+  | components["schemas"]["HTTPValidationError"]
+  | undefined;
 
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, milliseconds);
-  });
+/**
+ * The stable application code of a domain failure (`not-found`,
+ * `invalid-transition`, `missing-filter`, …), `null` for the shapes that carry
+ * none — FastAPI's request-validation 422 and the auth/CSRF `{"detail": …}`
+ * bodies. Never branch on `detail` text.
+ */
+function errorCode(body: ErrorBody): string | null {
+  return body !== undefined && "errors" in body && body.errors.length > 0
+    ? body.errors[0].code
+    : null;
 }
 
 /**
- * The Wikipedia article: headings plus a GFM table (proves the react-markdown
- * configuration) and a line of raw HTML that must render as visible text —
- * retrieved content stays inert, raw HTML is off.
+ * The field names of a request-validation 422, e.g. `["body", "data",
+ * "attributes", "draftSpec", "powerKw"]` → `"powerKw"`. A JSON:API error
+ * document has no `loc`, so a domain failure maps to no field and the form shows
+ * its general error instead.
  */
-const WIKIPEDIA_MARKDOWN = `# Suzuki GSR 600
+function validationFields(body: ErrorBody): string[] {
+  if (body === undefined || !("detail" in body) || body.detail === undefined) {
+    return [];
+  }
 
-The **GSR 600** is a naked bike Suzuki built between 2006 and 2011. It uses a
-detuned version of the GSX-R600 engine in a steel frame, with an upright riding
-position aimed at everyday use.
-
-## Technical data
-
-| Specification | Value |
-| --- | --- |
-| Engine | 599 cm³ inline-four |
-| Power | 72 kW at 12,000 rpm |
-| Torque | 63 Nm at 10,000 rpm |
-| Wet weight | 209 kg |
-| Seat height | 785 mm |
-
-## Reception
-
-Reviewers praised the engine's top end and criticised the soft suspension.
-Later model years added ABS as an option. See the
-[manufacturer archive](https://example.invalid/suzuki/gsr600) for the original
-brochure.
-
-<b>Raw HTML is disabled</b> — this line and <script>alert("xss")</script> are
-rendered as text, never as markup.
-`;
-
-const MAGAZINE_MARKDOWN = `## Long-term test: 12,000 km on a GSR 600
-
-The motor is the highlight: smooth to 8,000 rpm, then genuinely quick. Fuel
-consumption settled around 5.6 l/100 km on our route.
-
-- Comfortable for two hours, then the seat foam gives up.
-- Chain and sprockets lasted the whole test.
-- The original tyres were the weakest part of the package.
-`;
-
-/**
- * Fixture product: an `in_review` model with a full draft spec that carries
- * nulls (`torqueNm`, `msrpEur`, …), which is what the form's null handling and
- * the three-state A2 select are built for.
- */
-const FIXTURE_PRODUCT: Omit<Product, "id"> = {
-  name: "Suzuki GSR 600",
-  slug: "suzuki-gsr-600",
-  manufacturer: "Suzuki",
-  modelName: "GSR 600",
-  yearFrom: 2006,
-  yearTo: 2011,
-  status: "in_review",
-  draftSpec: {
-    category: "naked",
-    engineCc: 599,
-    cylinders: 4,
-    powerKw: 72,
-    torqueNm: null,
-    wetWeightKg: 209,
-    seatHeightMm: 785,
-    tankCapacityL: 16.5,
-    topSpeedKmh: null,
-    abs: false,
-    a2Eligible: null,
-    priceBand: "budget",
-    msrpEur: null,
-    extra: {
-      frame: "Steel tube",
-      "front suspension": "41 mm telescopic fork",
-      gearbox: "6-speed",
-      colours: ["black", "blue", "silver"],
-    },
-    sourceHints: { powerKw: "Wikipedia infobox", engineCc: "manufacturer brochure" },
-    extractedAt: "2026-08-25T09:12:00Z",
-  },
-  verifiedSpec: null,
-  createdAt: "2026-08-25T09:03:00Z",
-  updatedAt: "2026-08-25T09:14:00Z",
-};
-
-const FIXTURE_DOCUMENTS: readonly SourceDocument[] = [
-  {
-    id: "01DOCUMENTWIKIPEDIA0000001",
-    sourceType: "wikipedia",
-    sourceUrl: "https://en.wikipedia.org/wiki/Suzuki_GSR600",
-    sourceTitle: "Suzuki GSR600",
-    contentMarkdown: WIKIPEDIA_MARKDOWN,
-    fetchedAt: "2026-08-25T09:04:00Z",
-    createdAt: "2026-08-25T09:04:01Z",
-  },
-  {
-    id: "01DOCUMENTMAGAZINE00000001",
-    sourceType: "magazine",
-    sourceUrl: "https://example.invalid/reviews/suzuki-gsr-600-long-term",
-    sourceTitle: "Suzuki GSR 600 — long-term test",
-    contentMarkdown: MAGAZINE_MARKDOWN,
-    fetchedAt: "2026-08-25T09:06:00Z",
-    createdAt: "2026-08-25T09:06:02Z",
-  },
-];
-
-/**
- * Fixture image: `pending` with attribution, as ingestion leaves it.
- *
- * The variant URLs are inline SVG data URIs rather than `/media/...` paths, so
- * the three previews actually render against fixture ids (no media file exists
- * for a fixture). 2.20 gets the computed URLs from the API.
- */
-function placeholderVariant(width: number, height: number, label: string): string {
-  // Fixture image *content*, not UI styling — hence the literal colours.
-  const svg = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}"`,
-    ` height="${height}" viewBox="0 0 ${width} ${height}">`,
-    `<rect width="100%" height="100%" fill="#37474f"/>`,
-    `<text x="50%" y="50%" fill="#eceff1" font-family="sans-serif"`,
-    ` font-size="${Math.round(width / 12)}" text-anchor="middle"`,
-    ` dominant-baseline="middle">${label}</text></svg>`,
-  ].join("");
-
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  return body.detail
+    .map((entry) => entry.loc.at(-1))
+    .filter((segment): segment is string => typeof segment === "string");
 }
-
-const FIXTURE_IMAGE: ProductImage = {
-  id: "01IMAGEWIKIMEDIA000000001",
-  sourceUrl:
-    "https://upload.wikimedia.org/wikipedia/commons/3/3f/Suzuki_GSR600_2006.jpg",
-  attribution:
-    "Jane Doe · CC BY-SA 3.0 · https://creativecommons.org/licenses/by-sa/3.0",
-  status: "pending",
-  variants: {
-    thumb: placeholderVariant(320, 213, "thumb 320"),
-    card: placeholderVariant(640, 427, "card 640"),
-    detail: placeholderVariant(1280, 853, "detail 1280"),
-  },
-  createdAt: "2026-08-25T09:11:00Z",
-};
-
-/** Mutable fixture store — the two mutations below really change it. */
-const reviewStore: {
-  product: Omit<Product, "id">;
-  documents: readonly SourceDocument[];
-  image: ProductImage | null;
-} = {
-  product: FIXTURE_PRODUCT,
-  documents: FIXTURE_DOCUMENTS,
-  image: FIXTURE_IMAGE,
-};
 
 /** `GET /api/products/{id}` — the shell of the review screen. */
-export function useProduct(id: string): UseQueryResult<Product, Error> {
-  return useQuery({
-    queryKey: queryKeys.products.detail(id),
-    queryFn: () => Promise.resolve({ id, ...reviewStore.product }),
-    enabled: id !== "",
+async function getProduct(id: string): Promise<Product> {
+  const { data, error, response } = await apiClient.GET("/api/products/{product_id}", {
+    params: { path: { product_id: id } },
   });
+
+  if (!response.ok || data === undefined) {
+    // A vanished or mistyped id answers 404 `not-found`; the route tells that
+    // apart from a network/5xx failure by the status.
+    throw new ProductError(response.status, errorCode(error));
+  }
+
+  return { id: data.data.id, ...data.data.attributes };
 }
 
-/** `GET /api/documents?filter[product]=…` — Wikipedia first, then by age. */
-export function useProductDocuments(
-  productId: string,
-): UseQueryResult<SourceDocument[], Error> {
-  return useQuery({
-    queryKey: queryKeys.documents.byProduct(productId),
-    queryFn: () => Promise.resolve([...reviewStore.documents]),
-    enabled: productId !== "",
+/** `GET /api/documents?filter[product]=…` — Wikipedia first, then oldest first. */
+async function listDocuments(productId: string): Promise<SourceDocument[]> {
+  const { data, error, response } = await apiClient.GET("/api/documents", {
+    params: { query: { "filter[product]": productId } },
   });
+
+  if (!response.ok || data === undefined) {
+    throw new ProductError(response.status, errorCode(error));
+  }
+
+  // Order is the server's (Wikipedia first) and stays untouched: the panel's
+  // "no selection = the first document" rule depends on it.
+  return data.data.map((resource) => ({ id: resource.id, ...resource.attributes }));
 }
 
 /**
- * `GET /api/product-images?filter[product]=…`, reduced to the newest image.
+ * The newest of a product's images.
  *
- * `null` is a normal answer: ingestion stores at most one image per run and may
- * find none at all.
+ * The endpoint already sorts newest first, but the newest row is *the* contract
+ * of this hook (ingestion keeps at most one image per run, and a re-run leaves
+ * the previous one behind), so it is picked by `createdAt` rather than by
+ * position. Equal timestamps keep the earlier row, which is the server's own
+ * tiebreak.
  */
-export function useProductImage(
-  productId: string,
-): UseQueryResult<ProductImage | null, Error> {
-  return useQuery({
-    queryKey: queryKeys.productImages.byProduct(productId),
-    queryFn: () =>
-      Promise.resolve(reviewStore.image === null ? null : { ...reviewStore.image }),
-    enabled: productId !== "",
+function newestImage(rows: ProductImage[]): ProductImage | null {
+  return rows.reduce<ProductImage | null>(
+    (newest, row) =>
+      newest === null || row.createdAt > newest.createdAt ? row : newest,
+    null,
+  );
+}
+
+/** `GET /api/product-images?filter[product]=…`, reduced to the newest row. */
+async function getNewestImage(productId: string): Promise<ProductImage | null> {
+  const { data, error, response } = await apiClient.GET("/api/product-images", {
+    params: { query: { "filter[product]": productId } },
   });
+
+  if (!response.ok || data === undefined) {
+    throw new ProductError(response.status, errorCode(error));
+  }
+
+  return newestImage(
+    data.data.map((resource) => ({ id: resource.id, ...resource.attributes })),
+  );
 }
 
 /**
- * Saves the draft specification (`PATCH /api/products/{id}` with `draftSpec`).
+ * All-null specification: the base of every merge, and what a model whose
+ * extraction produced nothing starts from.
  *
- * The endpoint replaces the whole object while the form edits a subset of the
- * frozen fields, so the merge with the last-known draft happens here — that is
- * what keeps `cylinders`, `tankCapacityL`, `topSpeedKmh`, `abs`, `msrpEur`,
- * `extra` and `sourceHints` alive across a save. Invalidation is deliberately
- * narrow (`["products", "detail", id]`): a saved draft changes nothing in the
- * backlog list.
- */
-export function useSaveDraftSpec(
-  id: string,
-): UseMutationResult<DraftSpec, Error, { values: Partial<DraftSpec> }> {
-  const queryClient = useQueryClient();
-
-  return useMutation<DraftSpec, Error, { values: Partial<DraftSpec> }>({
-    mutationFn: async ({ values }) => {
-      await sleep(STUB_LATENCY_MS);
-
-      const merged: DraftSpec = {
-        ...emptyDraftSpec(),
-        ...reviewStore.product.draftSpec,
-        ...values,
-      };
-
-      reviewStore.product = { ...reviewStore.product, draftSpec: merged };
-
-      return merged;
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.products.detail(id) });
-    },
-  });
-}
-
-/**
- * All-null specification, the starting point when extraction produced nothing —
- * the form then simply saves what the admin filled in.
+ * Spelled out rather than derived, because the `PATCH` is a full-object replace
+ * — a field missing from the merge is a field reset to NULL server-side.
  */
 function emptyDraftSpec(): DraftSpec {
   return {
@@ -356,10 +197,122 @@ function emptyDraftSpec(): DraftSpec {
   };
 }
 
+/** `PATCH /api/products/{id}` carrying a complete draft specification. */
+async function patchDraftSpec(id: string, draftSpec: DraftSpec): Promise<DraftSpec> {
+  const { data, error, response } = await apiClient.PATCH("/api/products/{product_id}", {
+    params: { path: { product_id: id } },
+    body: { data: { type: "products", attributes: { draftSpec } } },
+  });
+
+  if (!response.ok || data === undefined) {
+    throw new SaveDraftSpecError(response.status, validationFields(error));
+  }
+
+  // The upsert answers with the stored draft; the merged object is the fallback
+  // for the (impossible by contract) case of a response without one.
+  return data.data.attributes.draftSpec ?? draftSpec;
+}
+
+/** `PATCH /api/product-images/{id}` — the one image transition this UI performs. */
+async function patchImageStatus(
+  imageId: string,
+  status: ImageStatus,
+): Promise<ProductImage> {
+  const { data, error, response } = await apiClient.PATCH(
+    "/api/product-images/{image_id}",
+    {
+      params: { path: { image_id: imageId } },
+      body: { data: { type: "product-images", attributes: { status } } },
+    },
+  );
+
+  if (!response.ok || data === undefined) {
+    // An illegal move answers 422 `invalid-transition`, a vanished row 404.
+    throw new ProductError(response.status, errorCode(error));
+  }
+
+  return { id: data.data.id, ...data.data.attributes };
+}
+
+/** The reviewed model itself. */
+export function useProduct(id: string): UseQueryResult<Product, Error> {
+  return useQuery({
+    queryKey: queryKeys.products.detail(id),
+    queryFn: () => getProduct(id),
+    // The route param can be empty for a fraction of a render; asking the API
+    // for product "" would answer 404 and show the wrong gate.
+    enabled: id !== "",
+  });
+}
+
+/** Every source document the ingestion retained for the model. */
+export function useProductDocuments(
+  productId: string,
+): UseQueryResult<SourceDocument[], Error> {
+  return useQuery({
+    queryKey: queryKeys.documents.byProduct(productId),
+    queryFn: () => listDocuments(productId),
+    enabled: productId !== "",
+  });
+}
+
 /**
- * Rejects an image (`PATCH /api/product-images/{id}` status `rejected`) — the
- * only image transition this phase's UI performs. A rejected image is kept and
- * stays visible; the model can still be approved without one.
+ * The model's image, or `null`.
+ *
+ * `null` is a normal answer, not an error: ingestion may find no usable image at
+ * all, and a model can be published without one.
+ */
+export function useProductImage(
+  productId: string,
+): UseQueryResult<ProductImage | null, Error> {
+  return useQuery({
+    queryKey: queryKeys.productImages.byProduct(productId),
+    queryFn: () => getNewestImage(productId),
+    enabled: productId !== "",
+  });
+}
+
+/**
+ * Saves the draft specification (`PATCH /api/products/{id}` with `draftSpec`).
+ *
+ * The endpoint replaces the whole object while the form edits a subset of the
+ * frozen fields, so the merge with the **last-fetched** draft happens here: the
+ * cached product detail supplies the current values, the form values override
+ * them, and the all-null base fills what neither knows. That is what keeps
+ * `cylinders`, `tankCapacityL`, `topSpeedKmh`, `abs`, `msrpEur`, `extra`,
+ * `sourceHints` and `extractedAt` alive across a save.
+ *
+ * Invalidation is deliberately narrow (`["products", "detail", id]`): a saved
+ * draft changes nothing in the backlog list or in any operation.
+ */
+export function useSaveDraftSpec(
+  id: string,
+): UseMutationResult<DraftSpec, Error, { values: Partial<DraftSpec> }> {
+  const queryClient = useQueryClient();
+
+  return useMutation<DraftSpec, Error, { values: Partial<DraftSpec> }>({
+    mutationFn: ({ values }) => {
+      const cached = queryClient.getQueryData<Product>(queryKeys.products.detail(id));
+
+      return patchDraftSpec(id, {
+        ...emptyDraftSpec(),
+        ...cached?.draftSpec,
+        ...values,
+      });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.products.detail(id) });
+    },
+  });
+}
+
+/**
+ * Rejects an image (`PATCH /api/product-images/{id}` status `rejected`).
+ *
+ * A rejected image is kept and stays visible — the admin can still see what was
+ * turned down, and the model can be approved without one. The write also
+ * announces `product.updated` server-side, hence the blanket product/operation
+ * invalidation next to the image one.
  */
 export function useRejectImage(): UseMutationResult<
   ProductImage,
@@ -369,21 +322,11 @@ export function useRejectImage(): UseMutationResult<
   const queryClient = useQueryClient();
 
   return useMutation<ProductImage, Error, { imageId: string; productId: string }>({
-    mutationFn: async ({ imageId }) => {
-      await sleep(STUB_LATENCY_MS);
-
-      if (reviewStore.image === null || reviewStore.image.id !== imageId) {
-        throw new Error(`Unknown image ${imageId}`);
-      }
-
-      reviewStore.image = { ...reviewStore.image, status: "rejected" };
-
-      return reviewStore.image;
-    },
-    onSuccess: (_image, { productId }) => {
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.productImages.byProduct(productId),
-      });
+    mutationFn: ({ imageId }) => patchImageStatus(imageId, "rejected"),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.operations.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.productImages.all });
     },
   });
 }

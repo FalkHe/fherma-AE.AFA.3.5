@@ -15,8 +15,8 @@ import { AdminModelReviewRoute } from "./AdminModelReviewRoute";
  * The page-gate matrix of the review screen: which of the five statuses shows
  * tabs, which replaces them with an explanation, and which offers the action
  * bar. `useProduct` is doubled per case because that is the only input the gates
- * read; the documents/specs/image panels run against the step's review stub, and
- * the status `PATCH` goes through the real `useTransitionProduct`.
+ * read; everything else — the documents/image panels, the status `PATCH` — runs
+ * against the in-memory API below.
  */
 
 const PRODUCT_ID = "01PRODUCTINREVIEW000000001";
@@ -66,11 +66,66 @@ let latestOperation: Pick<Operation, "status" | "progress" | "message"> | null =
 /** Bodies of every `PATCH` the route sent, so the transitions are observable. */
 let patches: components["schemas"]["ProductPatchRequest"][];
 
+/**
+ * The retrieved Wikipedia article of the reviewed model: headings, a GFM table
+ * (which is what proves the react-markdown configuration) and a line of raw HTML
+ * that must reach the page as text, never as markup.
+ */
+const WIKIPEDIA_MARKDOWN = `# Suzuki GSR 600
+
+The **GSR 600** is a naked bike Suzuki built between 2006 and 2011.
+
+| Specification | Value |
+| --- | --- |
+| Engine | 599 cm³ inline-four |
+| Power | 72 kW at 12,000 rpm |
+
+<b>Raw HTML is disabled</b> — this line and <script>alert("xss")</script> are
+rendered as text, never as markup.
+`;
+
+const DOCUMENT_RESOURCE: components["schemas"]["DocumentResource"] = {
+  id: "01DOCWIKIPEDIA000000000001",
+  type: "documents",
+  attributes: {
+    sourceType: "wikipedia",
+    sourceUrl: "https://en.wikipedia.org/wiki/Suzuki_GSR600",
+    sourceTitle: "Suzuki GSR600",
+    contentMarkdown: WIKIPEDIA_MARKDOWN,
+    fetchedAt: "2026-08-25T09:04:00Z",
+    createdAt: "2026-08-25T09:04:01Z",
+  },
+};
+
+const IMAGE_RESOURCE: components["schemas"]["ProductImageResource"] = {
+  id: "01IMAGEWIKIMEDIA000000001",
+  type: "product-images",
+  attributes: {
+    sourceUrl: "https://upload.wikimedia.org/wikipedia/commons/3/3f/GSR600.jpg",
+    attribution: "Jane Doe · CC BY-SA 3.0",
+    status: "pending",
+    variants: {
+      thumb: `/media/motorbikes/${PRODUCT_ID}/01IMAGEWIKIMEDIA000000001_thumb.webp`,
+      card: `/media/motorbikes/${PRODUCT_ID}/01IMAGEWIKIMEDIA000000001_card.webp`,
+      detail: `/media/motorbikes/${PRODUCT_ID}/01IMAGEWIKIMEDIA000000001_detail.webp`,
+    },
+    createdAt: "2026-08-25T09:11:00Z",
+  },
+};
+
 function installApi(): void {
   patches = [];
 
   stubFetch(async (request) => {
     const url = new URL(request.url);
+
+    if (url.pathname === "/api/documents") {
+      return jsonResponse({ data: [DOCUMENT_RESOURCE], meta: { totalCount: 1 } });
+    }
+
+    if (url.pathname === "/api/product-images") {
+      return jsonResponse({ data: [IMAGE_RESOURCE], meta: { totalCount: 1 } });
+    }
 
     if (url.pathname === "/api/operations") {
       const rows =
@@ -195,7 +250,7 @@ describe("AdminModelReviewRoute gates", () => {
 
     expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve & publish" })).toBeInTheDocument();
-    // The stub's Wikipedia document is selected by default, GFM table included.
+    // The Wikipedia document is selected by default, GFM table included.
     expect(
       await screen.findByRole("heading", { name: "Suzuki GSR600", level: 3 }),
     ).toBeInTheDocument();

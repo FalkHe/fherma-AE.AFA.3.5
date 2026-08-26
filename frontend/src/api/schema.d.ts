@@ -153,6 +153,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the source documents of one product
+         * @description Return every document of one product, Wikipedia first, then oldest first.
+         *
+         *     Unpaginated on purpose: ingestion stores a handful of documents per model
+         *     (one Wikipedia article plus at most six web sources), and the review screen
+         *     needs the complete list to build its document picker.
+         */
+        get: operations["list_documents_api_documents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/product-images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List product images
+         * @description Return the images of one product (or of the whole catalogue), newest first.
+         *
+         *     Unpaginated on purpose: ingestion stores at most one image per run, so a
+         *     product has a handful of rows and the review screen renders the newest.
+         */
+        get: operations["list_product_images_api_product_images_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/product-images/{image_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Approve or reject a product image
+         * @description Move one image to a new moderation state.
+         *
+         *     Legal moves are pinned in `product_service.LEGAL_IMAGE_TRANSITIONS`;
+         *     anything else — including a no-op — is a 422 `invalid-transition`.
+         */
+        patch: operations["update_product_image_api_product_images__image_id__patch"];
+        trace?: never;
+    };
     "/api/operations": {
         parameters: {
             query?: never;
@@ -188,10 +258,11 @@ export interface paths {
         put?: never;
         /**
          * Add a product to the backlog
-         * @description Create a `backlog` entry from a display name.
+         * @description Create an entry from a display name and start ingesting it.
          *
-         *     Ingestion is **not** started here yet; that side effect arrives with the
-         *     auto-start step, and until then a new row simply waits in `backlog`.
+         *     Adding a model auto-starts its ingestion: the row is created in `backlog`,
+         *     moved to `ingesting` and its job enqueued — every step committed before the
+         *     next — so the answer already carries the state the admin backlog shows.
          */
         post: operations["create_product_api_products_post"];
         delete?: never;
@@ -223,6 +294,8 @@ export interface paths {
          *
          *     Both attributes are optional and applied in that order, so a request that
          *     saves a draft and approves in one go promotes the values it just sent.
+         *     A transition to `ingesting` is a retry: it re-enqueues the ingestion job
+         *     server-side, so the UI only ever asks for the status it wants.
          */
         patch: operations["update_product_api_products__product_id__patch"];
         trace?: never;
@@ -231,6 +304,53 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * DocumentAttributes
+         * @description The pinned attribute set of a source document.
+         */
+        DocumentAttributes: {
+            sourceType: components["schemas"]["SourceType"];
+            /** Sourceurl */
+            sourceUrl: string | null;
+            /** Sourcetitle */
+            sourceTitle: string;
+            /** Contentmarkdown */
+            contentMarkdown: string;
+            /**
+             * Fetchedat
+             * Format: date-time
+             */
+            fetchedAt: string;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+        };
+        /**
+         * DocumentListDocument
+         * @description Body of `GET /api/documents`.
+         */
+        DocumentListDocument: {
+            /** Data */
+            data: components["schemas"]["DocumentResource"][];
+            meta: components["schemas"]["Meta"];
+        };
+        /**
+         * DocumentResource
+         * @description A source-document resource object.
+         */
+        DocumentResource: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default documents
+             * @constant
+             */
+            type: "documents";
+            attributes: components["schemas"]["DocumentAttributes"];
+        };
         /**
          * DraftSpecRequest
          * @description A full draft specification: every omitted field is reset.
@@ -315,6 +435,27 @@ export interface components {
              * @constant
              */
             status: "ok";
+        };
+        /**
+         * ImageStatus
+         * @description Moderation state of an image.
+         * @enum {string}
+         */
+        ImageStatus: "pending" | "approved" | "rejected";
+        /**
+         * ImageVariants
+         * @description The three resized renditions of one image, as URLs.
+         *
+         *     The field names *are* the variant names of the path formula, which is why
+         *     they are spelled out rather than kept in a separate constant.
+         */
+        ImageVariants: {
+            /** Thumb */
+            thumb: string;
+            /** Card */
+            card: string;
+            /** Detail */
+            detail: string;
         };
         /**
          * LoginRequest
@@ -488,6 +629,81 @@ export interface components {
             data: components["schemas"]["ProductResource"];
         };
         /**
+         * ProductImageAttributes
+         * @description The pinned attribute set of a product image.
+         */
+        ProductImageAttributes: {
+            /** Sourceurl */
+            sourceUrl: string;
+            /** Attribution */
+            attribution: string | null;
+            status: components["schemas"]["ImageStatus"];
+            variants: components["schemas"]["ImageVariants"];
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+        };
+        /**
+         * ProductImageDocument
+         * @description Body of `PATCH` on a single product image.
+         */
+        ProductImageDocument: {
+            data: components["schemas"]["ProductImageResource"];
+        };
+        /**
+         * ProductImageListDocument
+         * @description Body of `GET /api/product-images`.
+         */
+        ProductImageListDocument: {
+            /** Data */
+            data: components["schemas"]["ProductImageResource"][];
+            meta: components["schemas"]["Meta"];
+        };
+        /**
+         * ProductImagePatchAttributes
+         * @description The one writable attribute of an image: its moderation state.
+         */
+        ProductImagePatchAttributes: {
+            status: components["schemas"]["ImageStatus"];
+        };
+        /**
+         * ProductImagePatchRequest
+         * @description Body of `PATCH /api/product-images/{id}`.
+         */
+        ProductImagePatchRequest: {
+            data: components["schemas"]["ProductImagePatchResource"];
+        };
+        /**
+         * ProductImagePatchResource
+         * @description The resource object of an image update request.
+         */
+        ProductImagePatchResource: {
+            /**
+             * Type
+             * @default product-images
+             * @constant
+             */
+            type: "product-images";
+            attributes: components["schemas"]["ProductImagePatchAttributes"];
+        };
+        /**
+         * ProductImageResource
+         * @description A product-image resource object.
+         */
+        ProductImageResource: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default product-images
+             * @constant
+             */
+            type: "product-images";
+            attributes: components["schemas"]["ProductImageAttributes"];
+        };
+        /**
          * ProductListDocument
          * @description Body of `GET /api/products`.
          */
@@ -572,6 +788,12 @@ export interface components {
             /** Password */
             password: string;
         };
+        /**
+         * SourceType
+         * @description Where a document came from; also drives list ordering and prompts.
+         * @enum {string}
+         */
+        SourceType: "wikipedia" | "product" | "technical" | "magazine" | "upload";
         /**
          * SpecAttributes
          * @description One specification revision of a product, as returned.
@@ -823,6 +1045,133 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": string;
+                };
+            };
+        };
+    };
+    list_documents_api_documents_get: {
+        parameters: {
+            query?: {
+                /** @description ULID of the product whose documents to return (required). */
+                "filter[product]"?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentListDocument"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_product_images_api_product_images_get: {
+        parameters: {
+            query?: {
+                /** @description ULID of the product whose images to return. */
+                "filter[product]"?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductImageListDocument"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_product_image_api_product_images__image_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description ULID of the image. */
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProductImagePatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductImageDocument"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
                 };
             };
         };
