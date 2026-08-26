@@ -361,16 +361,23 @@ def _write_files(
     resolve(original, media_dir=media_dir).write_bytes(payload.content)
 
     variant_paths: dict[str, str] = {}
-    with Image.open(io.BytesIO(payload.content)) as opened:
-        prepared = _prepared(opened)
-        for variant, max_width in VARIANT_WIDTHS.items():
-            relative = variant_path(motorbike_id, image_id, variant)
-            _capped(prepared, max_width).save(
-                resolve(relative, media_dir=media_dir),
-                format=VARIANT_FORMAT,
-                quality=VARIANT_QUALITY,
-            )
-            variant_paths[variant] = relative
+    try:
+        with Image.open(io.BytesIO(payload.content)) as opened:
+            prepared = _prepared(opened)
+            for variant, max_width in VARIANT_WIDTHS.items():
+                relative = variant_path(motorbike_id, image_id, variant)
+                _capped(prepared, max_width).save(
+                    resolve(relative, media_dir=media_dir),
+                    format=VARIANT_FORMAT,
+                    quality=VARIANT_QUALITY,
+                )
+                variant_paths[variant] = relative
+    except Exception:
+        # No row will reference these files — remove them instead of leaving
+        # orphans behind (the original is written before decoding is attempted).
+        for relative in (original, *variant_paths.values()):
+            resolve(relative, media_dir=media_dir).unlink(missing_ok=True)
+        raise
 
     logger.info(
         "Wrote %d image variants for %s under %s.",
