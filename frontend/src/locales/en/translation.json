@@ -8,7 +8,15 @@
     "admin": "Admin"
   },
   "common": {
-    "loading": "Loading"
+    "loading": "Loading",
+    "retry": "Try again",
+    "cancel": "Cancel",
+    "yes": "Yes",
+    "no": "No",
+    "unknown": "Unknown",
+    "errors": {
+      "serverError": "Something went wrong. Please try again."
+    }
   },
   "auth": {
     "fields": {
@@ -50,9 +58,140 @@
     "tabs": {
       "backlog": "Backlog"
     },
+    "live": {
+      "disconnected": "Live updates interrupted — reconnecting…"
+    },
+    "status": {
+      "backlog": "Backlog",
+      "ingesting": "Ingesting",
+      "in_review": "In review",
+      "approved": "Approved",
+      "rejected": "Rejected"
+    },
     "backlog": {
-      "emptyTitle": "Backlog — coming soon",
-      "emptyBody": "Catalogue-gap reports from consultations will appear here for review in a later release."
+      "filterLabel": "Status",
+      "filterAll": "All statuses",
+      "addModel": "Add model",
+      "review": "Review",
+      "retryIngestion": "Retry ingestion",
+      "startIngestion": "Start ingestion",
+      "operationQueued": "Queued…",
+      "percentComplete": "{{value}}%",
+      "ingestionFailed": "Ingestion failed",
+      "progressLabel": "Ingestion progress for {{name}}",
+      "loadError": "Could not load the backlog",
+      "emptyTitle": "No models yet",
+      "emptyBody": "Add a motorcycle model to start ingestion. It will appear here with live progress and move to review when its documents, specs and image are ready.",
+      "emptyFilteredTitle": "No models with this status",
+      "emptyFilteredBody": "Nothing in the catalogue currently has this status.",
+      "clearFilter": "Show all statuses",
+      "table": {
+        "ariaLabel": "Motorbike backlog",
+        "model": "Model",
+        "status": "Status",
+        "progress": "Ingestion",
+        "updated": "Updated",
+        "actions": "Actions"
+      },
+      "addDialog": {
+        "title": "Add model to backlog",
+        "nameLabel": "Model name",
+        "nameHint": "Manufacturer and model, e.g. “Suzuki GSR 600”",
+        "nameRequired": "Enter a model name.",
+        "duplicate": "This model is already in the catalogue.",
+        "submit": "Add & start ingestion"
+      }
+    },
+    "review": {
+      "back": "Backlog",
+      "notFoundTitle": "Model not found",
+      "notFoundBody": "This model does not exist or was removed.",
+      "loadError": "Could not load this model",
+      "ingestingTitle": "Ingestion in progress",
+      "ingestingBody": "Documents, specs and an image are being collected. Review opens automatically when ingestion finishes.",
+      "backlogNotice": "This model has not been ingested yet.",
+      "approvedNotice": "This model is published. Specs shown are the verified values.",
+      "tabs": {
+        "documents": "Documents",
+        "specs": "Specs",
+        "image": "Image"
+      },
+      "documents": {
+        "listLabel": "Source documents",
+        "fetchedAt": "Fetched {{date}}",
+        "emptyTitle": "No documents",
+        "emptyBody": "Ingestion did not store any source documents for this model.",
+        "sourceType": {
+          "wikipedia": "Wikipedia",
+          "product": "Product page",
+          "technical": "Technical documentation",
+          "magazine": "Magazine",
+          "upload": "Upload"
+        }
+      },
+      "specs": {
+        "draftHeading": "Draft specification",
+        "draftHint": "You are editing the draft. Approving the model promotes these values to the verified specification.",
+        "verifiedHeading": "Verified specification",
+        "extraHeading": "Additional extracted data",
+        "save": "Save draft",
+        "resetBtn": "Discard changes",
+        "saved": "Draft saved.",
+        "fields": {
+          "engineCc": "Engine displacement",
+          "powerKw": "Power",
+          "torqueNm": "Torque",
+          "wetWeightKg": "Wet weight",
+          "seatHeightMm": "Seat height",
+          "a2Eligible": "A2 eligible",
+          "priceBand": "Price band",
+          "category": "Category"
+        },
+        "units": {
+          "cc": "cc",
+          "kw": "kW",
+          "nm": "Nm",
+          "kg": "kg",
+          "mm": "mm"
+        },
+        "priceBandValues": {},
+        "categoryValues": {},
+        "errors": {
+          "numberInvalid": "Enter a positive number."
+        }
+      },
+      "image": {
+        "imageStatus": {
+          "pending": "Pending",
+          "approved": "Approved",
+          "rejected": "Rejected"
+        },
+        "variant": {
+          "thumb": "Thumbnail",
+          "card": "Card"
+        },
+        "attributionHeading": "Attribution / licence",
+        "attributionUnknown": "No licence information could be retrieved for this image — verify before approving.",
+        "sourceLink": "Image source",
+        "reject": "Reject image",
+        "rejectConfirmTitle": "Reject this image?",
+        "rejectConfirmBody": "The image will not be published with the model. Uploading a replacement is not available yet.",
+        "rejectedNotice": "Image rejected. The model can still be approved without an image.",
+        "emptyTitle": "No image",
+        "emptyBody": "Ingestion did not fetch an image for this model."
+      },
+      "actions": {
+        "approve": "Approve & publish",
+        "reject": "Reject",
+        "approveConfirmTitle": "Publish this model?",
+        "approveConfirmBody": "The draft specification becomes the verified specification, a pending image is approved, and the model goes live in the catalogue.",
+        "confirmApprove": "Publish",
+        "rejectConfirmTitle": "Reject this model?",
+        "rejectConfirmBody": "The model is marked rejected. Its documents and draft specification are kept — you can restart ingestion from the backlog list.",
+        "confirmReject": "Reject",
+        "unsavedWarning": "You have unsaved spec edits — approval publishes the last saved draft, not your current changes.",
+        "actionError": "The action failed. Please try again."
+      }
     }
   },
   "themeMode": {

@@ -2,7 +2,7 @@ import { Route, Routes } from "react-router";
 
 import { AdminLayout } from "./components/AdminLayout";
 import { AppLayout } from "./components/AppLayout";
-import { AdminHomeRoute } from "./routes/admin/AdminHomeRoute";
+import { AdminBacklogRoute } from "./routes/admin/AdminBacklogRoute";
 import { HomeRoute } from "./routes/HomeRoute";
 import { LoginRoute } from "./routes/LoginRoute";
 import { RegisterRoute } from "./routes/RegisterRoute";
@@ -30,7 +30,7 @@ export default function App() {
           <Route index element={<HomeRoute />} />
           <Route element={<RequireAdmin />}>
             <Route path="admin" element={<AdminLayout />}>
-              <Route index element={<AdminHomeRoute />} />
+              <Route index element={<AdminBacklogRoute />} />
             </Route>
           </Route>
         </Route>

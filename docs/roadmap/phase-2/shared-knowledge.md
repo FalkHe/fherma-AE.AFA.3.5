@@ -614,3 +614,32 @@ depend on. 1–3 bullets per step, no prose.
   cross-origin :5173 → :8000; production same-origin resolves to the pinned
   `/api/events`) — 2.7 must therefore keep the endpoint inside the
   credentials-allowing CORS config.
+
+### Step 2.8 (backlog screen, UI-only)
+
+- **Error contract for products calls:** `hooks/useProducts.ts` exports
+  `ProductError` (`status: number`, Phase-1 `AuthError` shape) and screens map
+  **status codes only** (409 → duplicate, 422 → name error, else
+  `common.errors.serverError`). Step 2.15 must keep this export and build it
+  from the JSON:API error object (`status`, and `code` if it adds it); the
+  stubs additionally keep an in-memory table, so add/retry visibly change rows
+  until 2.15.
+- **Component contracts (written to survive 2.15/2.13 unchanged):**
+  `EmptyState({icon,title,body,action?})` takes *already translated* strings;
+  `MotorbikeStatusChip({status})` and `OperationProgress({operation,name,onRetry?})`
+  import `ProductStatus` / `Operation` from the hook files — 2.15/2.20 must
+  re-export those type names. `OperationProgress` takes
+  `Pick<Operation,"status"|"progress"|"message">`, returns `null` on
+  `succeeded`, and renders its own retry button only when `onRetry` is passed
+  (the backlog does not: retry lives in the Actions column).
+  `AddModelDialog({onClose,onCreated})` is **rendered conditionally** with
+  `<Dialog open>` (mount-per-opening discards stale input); the route owns
+  closing and clearing the `status` param.
+- **Timer-reset pattern + omissions:** eslint `react-hooks/set-state-in-effect`
+  forbids the "reset state in an effect" idiom, so the 5 s SSE grace timer is a
+  local `LiveDisconnectAlert` component that `AdminLayout` mounts only while
+  `connected === false` — unmount resets the grace. Reuse that pattern instead
+  of a reset effect. Deliberately omitted: no error surface for the row
+  transition mutation (ui-spec defines none), and `admin.review.*` i18n keys
+  landed verbatim from ui-spec §10 with `priceBandValues`/`categoryValues`
+  still empty for 2.13 to fill.
