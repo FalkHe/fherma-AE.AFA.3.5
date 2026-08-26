@@ -2,8 +2,9 @@
 
 `app llm ping` proves the chat path end to end (configuration → prompt file →
 LangChain → OpenRouter → reply); `app llm embeddings-smoke` proves the
-embeddings route and, crucially, that the vectors it returns have the 1536
-dimensions the `chunks.embedding` column is built for. Both are manual tools:
+embeddings route and, crucially, that the vectors it returns have the
+`EMBEDDING_DIMENSIONS` the `chunks.embedding` column is built for. Both are
+manual tools:
 nothing in the test suite calls a real model.
 
 Follows the CLI conventions of `app.cli.users` / `app.cli.ingest`: the Typer
@@ -37,13 +38,6 @@ PING_WORD = "pong"
 # OpenRouter's own API base, taken from the SDK that ships with
 # langchain-openrouter instead of being spelled out here.
 OPENROUTER_API_BASE = openrouter.SERVERS[openrouter.SERVER_PRODUCTION]
-
-# Embeddings configuration lands in step 2.19 (`EMBEDDING_MODEL`,
-# `EMBEDDING_DIMENSIONS`); until then this command carries the pinned values so
-# the route can be smoke-checked early, while a wrong vector size would still be
-# cheap to react to.
-EMBEDDING_MODEL = "openai/text-embedding-3-small"
-EMBEDDING_DIMENSIONS = 1536
 
 # Generous, so a slow first token does not look like a broken key.
 REQUEST_TIMEOUT_SECONDS = 60.0
@@ -81,25 +75,30 @@ def ping(
 @app.command("embeddings-smoke")
 def embeddings_smoke(
     model: Annotated[
-        str,
-        typer.Option(help="OpenRouter embedding model id."),
-    ] = EMBEDDING_MODEL,
+        str | None,
+        typer.Option(help="OpenRouter embedding model id; defaults to EMBEDDING_MODEL."),
+    ] = None,
 ) -> None:
     """Embed one short text through OpenRouter and assert the vector size.
 
     A key/account sanity check for the route the knowledge base depends on: it
-    fails loudly if OpenRouter returns anything other than
-    `EMBEDDING_DIMENSIONS` floats, because that number is the `vector(1536)`
-    column width.
+    fails loudly if OpenRouter returns anything other than the configured
+    `EMBEDDING_DIMENSIONS` floats, because that number is the width of the
+    `chunks.embedding` column.
+
+    Deliberately a thin HTTPX call rather than `app.llm.embeddings`: this command
+    checks the *route and the key*, so it must not depend on the wrapper it is
+    the fallback diagnosis for.
     """
     settings = get_settings()
     if not settings.openrouter_api_key:
         _fail("OPENROUTER_API_KEY is not configured. Set it in .env and retry.")
 
+    model = model or settings.embedding_model
     typer.echo(f"Model: {model}", err=True)
     vector = asyncio.run(_embed(model, settings.openrouter_api_key))
-    if len(vector) != EMBEDDING_DIMENSIONS:
-        _fail(f"Expected {EMBEDDING_DIMENSIONS} dimensions, got {len(vector)}.")
+    if len(vector) != settings.embedding_dimensions:
+        _fail(f"Expected {settings.embedding_dimensions} dimensions, got {len(vector)}.")
 
     typer.echo(f"Vector: {len(vector)} dimensions, first value {vector[0]}.")
 

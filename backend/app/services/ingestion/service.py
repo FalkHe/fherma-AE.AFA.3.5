@@ -2,18 +2,18 @@
 
 This is the composition layer of the ingestion pipeline. It owns no HTTP, no
 extraction and no image handling of its own — it calls the adapters
-(`wikipedia`, `search`, `fetch`, `extract`, `storage`, `image_service`) in the
-pinned order, writes what they produce through the catalogue services, and
-reports every step into the operation the admin UI is watching.
+(`wikipedia`, `search`, `fetch`, `extract`, `storage`, `image_service`,
+`embedding_service`) in the pinned order, writes what they produce through the
+catalogue services, and reports every step into the operation the admin UI is
+watching.
 
 Three rules are implemented here and nowhere else:
 
 * **The milestone sequence is a contract.** 5 % `Looking up Wikipedia`, 15 %
   `Searching the web`, 20–60 % `Fetching sources (n/m)`, 65 % `Processing
-  images`, 80 % `Extracting specifications`, 100 % succeeded. The admin UI
-  renders those messages verbatim, so the constants below are the wording, not
-  a paraphrase of it. Step 2.19 (embeddings, 90 %) inserts itself between the
-  extraction stage and `_complete`.
+  images`, 80 % `Extracting specifications`, 90 % `Generating embeddings`,
+  100 % succeeded. The admin UI renders those messages verbatim, so the
+  constants below are the wording, not a paraphrase of it.
 * **A partial failure is a warning, never a failure.** Every adapter returns a
   typed failure instead of raising, and each one is appended to the operation
   `message` while the run continues. **Zero usable documents** is the one
@@ -46,6 +46,7 @@ from app.db.models.source_document import SOURCE_TITLE_LENGTH, SourceDocument, S
 from app.jobs import TransientJobError
 from app.services import (
     document_service,
+    embedding_service,
     image_service,
     operation_service,
     product_service,
@@ -60,6 +61,7 @@ WIKIPEDIA_MILESTONE = (5, "Looking up Wikipedia")
 SEARCH_MILESTONE = (15, "Searching the web")
 IMAGE_MILESTONE = (65, "Processing images")
 EXTRACTION_MILESTONE = (80, "Extracting specifications")
+EMBEDDING_MILESTONE = (90, "Generating embeddings")
 
 # The fetch stage spreads its candidates over this band; the message counts
 # them as `Fetching sources (n/m)`.
@@ -182,6 +184,7 @@ class _Run:
 
         await self._image_stage(image)
         await self._extraction_stage()
+        await self._embedding_stage()
         await self._complete()
 
     async def _discard_previous_run(self) -> None:
@@ -361,6 +364,24 @@ class _Run:
 
         outcome = await spec_extraction_service.extract_draft_spec(self.session, self.motorbike)
         if isinstance(outcome, spec_extraction_service.ExtractionFailure):
+            self._warn(outcome.detail)
+
+    async def _embedding_stage(self) -> None:
+        """Chunk the stored documents and embed them; a failure is a warning.
+
+        Same policy as the extraction stage, and for the same reason: review may
+        proceed without a knowledge base, and `app embeddings rebuild` backfills
+        what this stage could not produce. Transient gateway failures are
+        retried inside `embedding_service` (retrying the *job* would re-fetch
+        every source), a missing key is a warning, and only a configured
+        dimension that does not match the `chunks.embedding` column escapes as
+        an exception — that is a deployment mistake, not a source that was
+        unavailable.
+        """
+        await self._advance(*EMBEDDING_MILESTONE)
+
+        outcome = await embedding_service.rebuild_motorbike(self.session, self.motorbike.id)
+        if isinstance(outcome, embedding_service.EmbeddingFailure):
             self._warn(outcome.detail)
 
     async def _nothing_ingested(self) -> None:

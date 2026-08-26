@@ -1202,3 +1202,66 @@ depend on. 1–3 bullets per step, no prose.
   their heading-less `content_markdown` — `heading_path` only appears after a
   re-ingest (re-chunking alone cannot invent headings, it reads the stored
   Markdown).
+
+### Step 2.19 (embeddings & re-embed CLI)
+
+- **`app/llm/embeddings.py`:** `get_embeddings(model=None) -> OpenAIEmbeddings`
+  exactly as pinned (`base_url=OPENROUTER_API_BASE` =
+  `openrouter.SERVERS[SERVER_PRODUCTION]` = `https://openrouter.ai/api/v1`,
+  `check_embedding_ctx_length=False`, no `dimensions` parameter), empty key →
+  `models.MissingApiKeyError`. The HTTPX fallback was **not** needed — the
+  wrapper constructs and wires correctly on the pinned versions. Dependency
+  `langchain-openai~=1.0` (resolved 1.6.0, pulls `openai`, `tiktoken`, `jiter`,
+  `tqdm`); chat still goes through `ChatOpenRouter` only.
+  `app llm embeddings-smoke` now reads `EMBEDDING_MODEL`/`EMBEDDING_DIMENSIONS`
+  from config (the 2.16 module constants are deleted) and stays a thin HTTPX
+  call on purpose — it must not depend on the wrapper it diagnoses.
+- **`embedding_service` contract (Phase 3 retrieval builds on this):**
+  `require_matching_dimensions()` (guard), `column_dimensions()` (reads
+  `Chunk.__table__.c.embedding.type.dim` — the mapped column, which *is*
+  `chunk.EMBEDDING_DIMENSIONS`; no DB round trip), `count_documents(session)`,
+  `embed_chunks(session, chunks, *, embeddings=None, model=None) -> int`
+  (batches `BATCH_SIZE=64`, **one commit per batch**, writes
+  `embedding`/`embedding_model`/`embedding_dimensions` per row) and
+  `rebuild_motorbike(session, motorbike_id, *, model=None, on_document=None) ->
+  EmbeddingResult | EmbeddingFailure(reason ∈ missing_api_key|model_error,
+  warning-ready `detail`, already logged once, plus `documents`/`chunks`)`.
+  `REBUILD_OPERATION_TYPE = "embeddings.rebuild"` lives here. Every vector is
+  measured against `settings.embedding_dimensions` **before** the write
+  (`UnexpectedVectorSizeError`, nothing stored). One transient embeddings call
+  is retried in-process (`TRANSIENT_ATTEMPTS=3`,
+  `TRANSIENT_RETRY_DELAY_SECONDS=2.0`, delay×attempt) and *then* degrades to the
+  typed failure — deliberately **not** `TransientJobError`, because retrying the
+  ingestion job would re-fetch every source over a gateway hiccup.
+- **Two deliberate asymmetries.** (1) `rebuild_motorbike` always finishes
+  chunking even when the gateway/key is unusable (chunks are cheap, correct
+  without a gateway and rewritten wholesale anyway) — so "chunked, unembedded"
+  is a normal state and retrieval must keep filtering on non-null `embedding`.
+  (2) The same missing key is a **warning** in the ingestion 90 % stage
+  (`EMBEDDING_MILESTONE = (90, "Generating embeddings")`, bike still reaches
+  `in_review`, `error` NULL) and a **failed operation** in `embeddings.rebuild`
+  (there is nothing else that job could accomplish). `DimensionMismatchError` is
+  the only embedding failure that escapes both as an exception: it aborts before
+  the first row is touched and its message names the files + the
+  `alembic revision --autogenerate` / `alembic upgrade head` sequence.
+- **`embeddings.rebuild(operation_id)`** (`app/jobs/embeddings.py`, added to
+  `app-worker`'s module list): ids only, own session, `operation_service`
+  lifecycle; progress = **documents processed catalogue-wide**
+  (`count_documents` first, then `min(n*100//total, 99)` with
+  `"Generating embeddings (n/total)"`; `0` = `"Rebuilding the knowledge base"`,
+  empty catalogue → succeeded with `EMPTY_MESSAGE`), stops at the first typed
+  failure. `app embeddings rebuild` creates the (entity-less) operation row,
+  commits, then `.kiq(operation_id)` — the guard is **only** in the job, so the
+  CLI always prints an operation id to follow. No CLI test file (precedent of
+  `app ingest run`/`probe`/`fetch-image`: DB-touching commands are verified
+  live). Job tests live in the new `backend/tests/jobs/` package, whose
+  `WorkerSession(FakeAsyncSession)` adds the no-op `rollback` a worker needs.
+- **Live embedding verification is BLOCKED — `OPENROUTER_API_KEY` is not set**
+  (as in 2.16/2.17): no vector has ever been produced, so batch behaviour
+  against the real route and the 1536-dimension assertion remain unproven. What
+  *is* live verified with no key: `app ingest run "Yamaha MT-07"` → `succeeded`
+  at 100 % with **three** warnings (search, extraction, embeddings), bike
+  `in_review`, `error` NULL, 5 chunks written with NULL embeddings; and
+  `app embeddings rebuild` → operation `failed`, progress 50,
+  `error = "Embedding skipped: OPENROUTER_API_KEY is not configured."`. The
+  throwaway model, its files and both operation rows were deleted afterwards.

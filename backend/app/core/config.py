@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     chat_model: str = "openai/gpt-4.1-mini"
 
+    # Embeddings: the model the knowledge base is vectorised with and the width
+    # of the vectors it returns. `embedding_dimensions` must match the `vector`
+    # column of `chunks` — a mismatch is a loud failure, never a truncation.
+    embedding_model: str = "openai/text-embedding-3-small"
+    embedding_dimensions: int = 1536
+
     # Specification extraction: the character-based input budget (no tokenizer
     # dependency) one extraction call may spend on source documents.
     extraction_max_input_chars: int = 60_000

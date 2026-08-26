@@ -14,7 +14,10 @@ Failure policy, matching the pinned retry contract:
 * Any other exception is a bug or a deterministic failure: the operation is
   marked `failed`, the motorbike goes back to `backlog` and the exception is
   re-raised for the worker log. The middleware's type filter means it is never
-  retried.
+  retried. This is also how the embedding stage's dimension guard surfaces:
+  `embedding_service.DimensionMismatchError` deliberately escapes the stage, so
+  the operation `error` an admin reads is the message naming the migration that
+  has to happen before the knowledge base can be embedded.
 """
 
 import logging

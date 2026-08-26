@@ -28,6 +28,10 @@ dependencies = [
     # LLM access: LangChain is the abstraction, OpenRouter the only gateway.
     "langchain~=1.0",
     "langchain-openrouter>=0.2.8,<0.3",
+    # Embeddings only: langchain-openrouter ships no embeddings class, so the
+    # OpenAI-compatible wrapper is pointed at OpenRouter's own /embeddings
+    # route. Chat never goes through this package.
+    "langchain-openai~=1.0",
     # Prompt templates (Markdown + Jinja files under app/llm/prompts/).
     "jinja2~=3.1",
     # Structural chunking of source documents (headings, then characters).

@@ -7,10 +7,12 @@ dependency of this suite — that is what `app ingest fetch-url` and
 `app ingest probe` are for.
 
 The same holds for OpenRouter: an ingestion run reaches the specification
-extraction stage (step 2.17), so the autouse `extracted_specs` fixture replaces
-the one LLM call for **every** test in this package — the extraction service
-itself still runs. A test that wants a failing extraction re-patches
-`app.llm.extraction.extract_spec` itself.
+extraction stage (step 2.17) and the embedding stage (step 2.19), so the autouse
+`extracted_specs` and `fake_embeddings` fixtures replace those two LLM calls for
+**every** test in this package — the extraction, chunking and embedding services
+themselves still run. A test that wants a failing extraction or a failing
+embeddings gateway re-patches `app.llm.extraction.extract_spec` /
+`app.llm.embeddings.get_embeddings` itself.
 """
 
 import json
@@ -21,6 +23,7 @@ from typing import Any
 import pytest
 
 from app.core.config import get_settings
+from app.llm import embeddings as llm_embeddings
 from app.llm import extraction
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -43,6 +46,30 @@ def extracted_specs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     monkeypatch.setattr(extraction, "extract_spec", extract_spec)
     return asked
+
+
+class FakeEmbeddings:
+    """Answers the embedding stage with correctly sized zero vectors."""
+
+    def __init__(self) -> None:
+        self.batches: list[list[str]] = []
+
+    @property
+    def texts(self) -> list[str]:
+        """Every text this client was asked to embed, in order."""
+        return [text for batch in self.batches for text in batch]
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.batches.append(list(texts))
+        return [[0.0] * get_settings().embedding_dimensions for _ in texts]
+
+
+@pytest.fixture(autouse=True)
+def fake_embeddings(monkeypatch: pytest.MonkeyPatch) -> FakeEmbeddings:
+    """Answer the embedding stage's gateway calls without a key or a socket."""
+    client = FakeEmbeddings()
+    monkeypatch.setattr(llm_embeddings, "get_embeddings", lambda model=None: client)
+    return client
 
 
 @pytest.fixture

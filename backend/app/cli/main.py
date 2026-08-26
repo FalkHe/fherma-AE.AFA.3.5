@@ -3,7 +3,7 @@
 import typer
 
 from app import __version__
-from app.cli import chunks, ingest, jobs, llm, openapi, operations, users
+from app.cli import chunks, embeddings, ingest, jobs, llm, openapi, operations, users
 
 app = typer.Typer(
     name="app",
@@ -13,6 +13,7 @@ app = typer.Typer(
 )
 
 app.add_typer(chunks.app, name="chunks")
+app.add_typer(embeddings.app, name="embeddings")
 app.add_typer(ingest.app, name="ingest")
 app.add_typer(jobs.app, name="jobs")
 app.add_typer(llm.app, name="llm")

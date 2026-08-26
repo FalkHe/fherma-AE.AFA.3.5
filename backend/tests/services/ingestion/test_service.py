@@ -23,16 +23,20 @@ from typing import Any
 
 import pytest
 
+from app.core.config import get_settings
+from app.db.models.chunk import Chunk
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus, MotorbikeImage
 from app.db.models.motorbike_spec import MotorbikeSpec, SpecKind
 from app.db.models.operation import Operation, OperationStatus
 from app.db.models.source_document import SourceDocument, SourceType
 from app.jobs import TransientJobError
+from app.llm import embeddings as llm_embeddings
 from app.llm import extraction
 from app.llm.models import MissingApiKeyError
 from app.services import (
     document_service,
+    embedding_service,
     image_service,
     operation_service,
     product_service,
@@ -40,6 +44,7 @@ from app.services import (
 )
 from app.services.ingestion import extract, fetch, search, service, storage, wikipedia
 from tests.services.conftest import FakeAsyncSession
+from tests.services.ingestion.conftest import FakeEmbeddings
 
 # The service only passes the client on to the (stubbed) adapters.
 CLIENT: Any = object()
@@ -232,6 +237,7 @@ def test_successful_run_walks_the_pinned_milestones(
         (40, "Fetching sources (2/2)"),
         (65, "Processing images"),
         (80, "Extracting specifications"),
+        (90, "Generating embeddings"),
     ]
     assert operation.status is OperationStatus.SUCCEEDED
     assert operation.progress == 100
@@ -405,6 +411,7 @@ def test_a_missing_search_key_leaves_a_wikipedia_only_run(
         (15, "Searching the web"),
         (65, f"Processing images — {warning}"),
         (80, f"Extracting specifications — {warning}"),
+        (90, f"Generating embeddings — {warning}"),
         (100, service.WARNING_SUMMARY_PREFIX + warning),
     ]
     assert operation.status is OperationStatus.SUCCEEDED
@@ -490,6 +497,111 @@ def test_a_failing_extraction_is_a_warning_not_a_failure(
     assert motorbike.status is MotorbikeStatus.IN_REVIEW
     assert operation.message is not None
     assert "OpenRouter answered 502" in operation.message
+
+
+# --- the embedding stage (step 2.19) ------------------------------------------
+
+
+def test_the_embedding_stage_chunks_and_embeds_every_document(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    fake_embeddings: FakeEmbeddings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 90 % stage turns the documents this run stored into embedded chunks."""
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(monkeypatch, search.SearchResults())
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    chunks = fake_session.rows(Chunk)
+    assert chunks
+    assert fake_embeddings.texts == [chunk.text for chunk in chunks]
+    assert all(chunk.motorbike_id == motorbike.id for chunk in chunks)
+    assert all(chunk.embedding is not None for chunk in chunks)
+    assert all(chunk.embedding_model == get_settings().embedding_model for chunk in chunks)
+    assert all(
+        chunk.embedding_dimensions == get_settings().embedding_dimensions for chunk in chunks
+    )
+    assert operation.status is OperationStatus.SUCCEEDED
+
+
+def test_a_missing_embeddings_key_is_a_warning_and_the_model_still_reaches_review(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deterministic configuration failure: chunks are still written, no vectors.
+
+    `app embeddings rebuild` backfills them, so nothing this run fetched may be
+    thrown away over a missing key.
+    """
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(monkeypatch, search.SearchResults())
+
+    def raise_missing_key(model: str | None = None) -> Any:
+        raise MissingApiKeyError
+
+    monkeypatch.setattr(llm_embeddings, "get_embeddings", raise_missing_key)
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    assert operation.status is OperationStatus.SUCCEEDED
+    assert motorbike.status is MotorbikeStatus.IN_REVIEW
+    assert operation.error is None
+    assert operation.message is not None
+    assert embedding_service.MISSING_KEY_DETAIL in operation.message
+    # Chunked, not embedded: the retrievable text exists and waits for vectors.
+    assert fake_session.rows(Chunk)
+    assert all(chunk.embedding is None for chunk in fake_session.rows(Chunk))
+
+
+def test_a_failing_embeddings_gateway_is_a_warning_not_a_failure(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(monkeypatch, search.SearchResults())
+    monkeypatch.setattr(embedding_service, "TRANSIENT_RETRY_DELAY_SECONDS", 0)
+
+    class _Broken:
+        async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("OpenRouter answered 502")
+
+    monkeypatch.setattr(llm_embeddings, "get_embeddings", lambda model=None: _Broken())
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    assert operation.status is OperationStatus.SUCCEEDED
+    assert motorbike.status is MotorbikeStatus.IN_REVIEW
+    assert operation.message is not None
+    assert "OpenRouter answered 502" in operation.message
+    assert all(chunk.embedding is None for chunk in fake_session.rows(Chunk))
+
+
+def test_a_dimension_mismatch_fails_the_run_loudly(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    settings_override: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one embedding failure that is not a warning: a deployment mistake."""
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(monkeypatch, search.SearchResults())
+    settings_override(EMBEDDING_DIMENSIONS=768)
+
+    with pytest.raises(embedding_service.DimensionMismatchError) as raised:
+        asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    assert "alembic" in str(raised.value)
+    # Not swallowed into the operation message: the job marks it failed.
+    assert operation.message is not None
+    assert operation.message == "Generating embeddings"
 
 
 # --- the failure paths --------------------------------------------------------

@@ -38,6 +38,7 @@ services:
         "app.jobs.broker:broker",
         "app.jobs.demo",
         "app.jobs.ingestion",
+        "app.jobs.embeddings",
       ]
     depends_on:
       postgres:
