@@ -23,7 +23,8 @@ def test_export_writes_the_schema_to_the_requested_file(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     schema = json.loads(target.read_text(encoding="utf-8"))
     assert schema["openapi"].startswith("3.")
-    assert set(schema["paths"]) == {"/health", "/ready"}
+    # A subset check, so mounting a further router does not fail this test.
+    assert {"/health", "/ready"} <= set(schema["paths"])
 
 
 def test_export_fails_with_a_message_when_the_target_is_unwritable(tmp_path: Path) -> None:

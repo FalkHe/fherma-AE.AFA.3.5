@@ -4,7 +4,8 @@
     "tagline": "Advice from a curated catalogue, not from marketing copy."
   },
   "nav": {
-    "home": "Home"
+    "home": "Home",
+    "admin": "Admin"
   },
   "common": {
     "loading": "Loading"
@@ -37,6 +38,21 @@
       "passwordTooShort": "Password must be at least 8 characters.",
       "passwordMismatch": "Passwords do not match.",
       "serverError": "Something went wrong. Please try again."
+    }
+  },
+  "account": {
+    "menuLabel": "Account",
+    "signedInAs": "Signed in as {{username}}",
+    "signOut": "Sign out"
+  },
+  "admin": {
+    "title": "Admin",
+    "tabs": {
+      "backlog": "Backlog"
+    },
+    "backlog": {
+      "emptyTitle": "Backlog — coming soon",
+      "emptyBody": "Catalogue-gap reports from consultations will appear here for review in a later release."
     }
   },
   "themeMode": {

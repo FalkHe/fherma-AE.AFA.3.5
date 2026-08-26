@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api.endpoints import health
+from app.api.endpoints import auth, health
 from app.core.config import Settings, get_settings
 
 # The Vite dev server origin; credentials are allowed because the SPA
@@ -46,5 +46,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
+    # Authentication is plain JSON and exempt from JSON:API, hence no /api.
+    app.include_router(auth.router, prefix="/auth")
 
     return app

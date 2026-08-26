@@ -281,3 +281,44 @@ depend on. 1–3 bullets per step, no prose.
   on `LoginRoute` (register has refs for first-invalid-field focus). Per
   ui-spec §1 login does **no** client-side validation beyond `required`; only
   `RegisterRoute` mirrors the pinned username/password rules (on submit only).
+
+### Step 1.3 (auth endpoints, cookies & CSRF)
+
+- `app/api/deps.py` exports `current_user`, `current_admin`, `csrf_protect` plus
+  `SESSION_COOKIE_NAME` / `CSRF_COOKIE_NAME` / `CSRF_HEADER_NAME`; the session
+  cookie and the CSRF header are read from `Request`, **not** declared as
+  `Cookie`/`Header` params, so they never appear in the OpenAPI schema (no
+  cookie/header args in the generated client). Later routers: `Depends(current_user)`
+  (or `current_admin`) plus `Depends(csrf_protect)` on every write.
+- Cookie attributes live in `app/api/endpoints/auth.py` (`COOKIE_PATH`,
+  `COOKIE_SAMESITE="Lax"`, `REMEMBER_ME_MAX_AGE` derived from
+  `session_service.REMEMBER_ME_TTL`); `_set_auth_cookies` / `_clear_auth_cookies`
+  are the only places that touch them. Verified wire form in development:
+  `session=…; HttpOnly; Max-Age=2592000; Path=/; SameSite=Lax` (no `Max-Age`
+  without `rememberMe`, no `Secure` outside production).
+- Validation lives in `app/api/schemas/auth.py` on a private `_CredentialsRequest`
+  base (`@field_validator`, so 422s carry `loc: ["body","username"|"password"]`);
+  the username validator normalises (`strip().lower()`) before checking, so
+  `payload.username` reaching the service is already normalised. `_CredentialsRequest`
+  is not exported in OpenAPI — only `RegisterRequest`, `LoginRequest`, `UserResponse`.
+  `api/schemas/__init__.py` and `api/endpoints/__init__.py` stay pure package
+  markers (no re-exports, as with `health`).
+
+### Step 1.4 (route guards & admin shell, UI-only)
+
+- The ui-spec §3 spinner lives in **one** exported component,
+  `GuardSpinner` in `routes/RequireAuth.tsx`, imported by `RequireAdmin` — every
+  later guarded route reuses it, never its own loading UI. Both guards branch on
+  `useAuth().isLoading` only (first fetch, no cached data), so 1.6 must not
+  surface `isFetching` through that field or background refetches will blank
+  guarded pages.
+- `AppLayout` sign-out currently only calls `logout.mutate()` + closes the menu
+  (deliberate no-op per the step's out-of-scope list). Step 1.6 adds
+  `queryClient.clear()` + `navigate("/login", { replace: true })` on settle at
+  the marked comment in `handleSignOut`; nav/account blocks already render on
+  `user !== null`, so nothing else in the layout changes.
+- Icons follow the landed Material Symbols convention (`<Icon>ligature</Icon>`,
+  as in `ThemeModeToggle`) — `@mui/icons-material` is **not** a dependency; use
+  `account_circle` / `arrow_drop_down` / `logout` / `pending_actions`.
+  `AdminLayout` derives the selected tab from the `tabValueByPath` map (`false`
+  when unmatched); Phase 2 adds `"/admin/review": "review"` there.
