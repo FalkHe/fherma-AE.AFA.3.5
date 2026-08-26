@@ -1,6 +1,6 @@
 import CssBaseline from "@mui/material/CssBaseline";
 import { ThemeProvider } from "@mui/material/styles";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { I18nextProvider } from "react-i18next";
@@ -11,17 +11,8 @@ import "material-symbols/outlined.css";
 
 import App from "./App";
 import { i18n } from "./i18n";
+import { queryClient } from "./queryClient";
 import { theme } from "./theme";
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      // Server state is refetched on SSE notifications (see architecture.md),
-      // not on every window focus.
-      refetchOnWindowFocus: false,
-    },
-  },
-});
 
 const rootElement = document.getElementById("root");
 

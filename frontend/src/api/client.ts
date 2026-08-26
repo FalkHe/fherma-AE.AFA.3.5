@@ -1,5 +1,6 @@
 import createClient from "openapi-fetch";
 
+import { queryClient } from "../queryClient";
 import type { paths } from "./schema";
 
 /**
@@ -27,14 +28,62 @@ export const apiClient = createClient<paths>({
   credentials: "include",
 });
 
+/** Methods that never change state, and therefore need no CSRF token. */
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+const CSRF_COOKIE_NAME = "csrf_token";
+const CSRF_HEADER_NAME = "X-CSRF-Token";
+
+/**
+ * Reads the CSRF cookie the backend sets at login. It is deliberately not
+ * `HttpOnly` (see shared-knowledge *Cookies & CSRF*) precisely so this can be
+ * echoed back in a header: the double-submit comparison is what a cross-site
+ * form post cannot reproduce.
+ */
+function readCsrfCookie(): string | null {
+  const prefix = `${CSRF_COOKIE_NAME}=`;
+
+  for (const entry of document.cookie.split("; ")) {
+    if (entry.startsWith(prefix)) {
+      return decodeURIComponent(entry.slice(prefix.length));
+    }
+  }
+
+  return null;
+}
+
 apiClient.use({
-  onRequest() {
-    // Phase 1 slot: read the CSRF cookie and set the matching request header
-    // on unsafe methods here, e.g.
-    //   if (!SAFE_METHODS.has(request.method)) {
-    //     request.headers.set("X-CSRF-Token", readCsrfCookie());
-    //   }
-    //   return request;
-    // Returning nothing leaves the request untouched.
+  onRequest({ request }) {
+    if (SAFE_METHODS.has(request.method)) {
+      return undefined;
+    }
+
+    const csrfToken = readCsrfCookie();
+
+    if (csrfToken === null) {
+      // No cookie means no session to protect; let the request go and let the
+      // backend answer 401/403 rather than inventing a client-side failure.
+      return undefined;
+    }
+
+    request.headers.set(CSRF_HEADER_NAME, csrfToken);
+
+    return request;
+  },
+
+  onResponse({ request, response }) {
+    // A 401 anywhere else means the session died behind our back (expired,
+    // signed out in another tab, revoked by a demotion). Dropping the cached
+    // identity makes `RequireAuth` redirect on the next render, so no screen
+    // keeps rendering as if somebody were signed in.
+    //
+    // `/auth/*` is excluded on purpose: a rejected login must not be read as
+    // "your session ended", which would fight the login screen for control of
+    // the route.
+    if (response.status === 401 && !new URL(request.url).pathname.startsWith("/auth/")) {
+      queryClient.setQueryData(["auth", "me"], null);
+    }
+
+    return undefined;
   },
 });

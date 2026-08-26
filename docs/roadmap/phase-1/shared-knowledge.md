@@ -341,3 +341,32 @@ depend on. 1–3 bullets per step, no prose.
 - CLI commands do **not** re-validate input (no password length check):
   validation stays at the API boundary and normalisation in the service, so the
   raw username string is passed through unchanged.
+
+### Step 1.6 (frontend auth wiring)
+
+- `hooks/useAuth.ts` now aliases the generated types (`AuthUser`/`LoginInput`/
+  `RegisterInput` = `components["schemas"]["UserResponse"|"LoginRequest"|"RegisterRequest"]`)
+  and adds one export, `AuthError` (`status`, plus `validationFields` parsed from
+  a 422 body). Screens branch on `error instanceof AuthError && error.status === …`
+  — never on the `detail` sentence; that is the pattern for every future
+  status-code mapping.
+- `src/queryClient.ts` holds the single `QueryClient`; it is imported **only** by
+  `api/client.ts` (middleware runs outside React) — hooks and components use
+  `useQueryClient()`. The middleware sets `X-CSRF-Token` on every method outside
+  `{GET, HEAD, OPTIONS}` and writes `null` into `["auth","me"]` on a 401 from any
+  non-`/auth/` path, so no call site handles CSRF or session expiry itself.
+- `useLogout` treats 401 as success and clears the cache in `onSuccess`; the
+  caller navigates from its own mutate-level `onSuccess` (`AppLayout`), so a
+  403/5xx leaves the user in place. On both auth screens the
+  authenticated-redirect is gated `user !== null && !mutation.isSuccess` —
+  without that gate the cache write from a fresh login re-renders the screen and
+  its `<Navigate to="/">` beats the redirect-preserving `navigate(from)`. Reuse
+  the gate for any future public-only route.
+- **Disabled-while-pending focus trap** (applies to every form that disables its
+  inputs during a mutation): a mutation's `onError` runs *before* React commits
+  the error render, so the field is still `disabled` and browsers silently ignore
+  `focus()` on it. Programmatic refocus therefore belongs in a `useEffect` keyed
+  on **both** the error state and `!isPending` — never in the mutation callback.
+  `routes/LoginRoute.test.tsx` is the landed guard; note it must opt out of
+  `act()` (`IS_REACT_ACT_ENVIRONMENT = false`), delay the stubbed response and
+  make jsdom's `focus()` respect `disabled`, or it passes against the bug.

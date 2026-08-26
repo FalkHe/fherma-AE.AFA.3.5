@@ -12,7 +12,7 @@ import Toolbar from "@mui/material/Toolbar";
 import Typography from "@mui/material/Typography";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link as RouterLink, Outlet } from "react-router";
+import { Link as RouterLink, Outlet, useNavigate } from "react-router";
 
 import { useAuth, useLogout } from "../hooks/useAuth";
 import { ThemeModeToggle } from "./ThemeModeToggle";
@@ -28,15 +28,21 @@ import { ThemeModeToggle } from "./ThemeModeToggle";
  */
 export function AppLayout() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const logout = useLogout();
   const [accountAnchorEl, setAccountAnchorEl] = useState<HTMLElement | null>(null);
 
   function handleSignOut() {
-    // Step 1.6 replaces the stub mutation with the real `POST /auth/logout` and
-    // adds `queryClient.clear()` + `navigate("/login", { replace: true })` on
-    // settle (success or 401), per ui-spec §4. Until then this is a no-op.
-    logout.mutate();
+    // `useLogout` clears the query cache and counts a 401 as success (the
+    // session is gone either way), so this callback is exactly the "settle"
+    // condition of ui-spec §4. Any other failure — a stale CSRF cookie, a 5xx —
+    // leaves the user where they are, still signed in as far as we know.
+    logout.mutate(undefined, {
+      onSuccess: () => {
+        navigate("/login", { replace: true });
+      },
+    });
     setAccountAnchorEl(null);
   }
 

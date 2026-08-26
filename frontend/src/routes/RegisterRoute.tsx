@@ -9,16 +9,17 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Link as RouterLink } from "react-router";
+import { Link as RouterLink, Navigate, useLocation, useNavigate } from "react-router";
 
-import { useRegister } from "../hooks/useAuth";
+import { AuthError, useAuth, useRegister } from "../hooks/useAuth";
 
-/** General errors this screen can show; the status-code mapping lands in 1.6. */
+/** General errors this screen can show, keyed by the status code that caused them. */
 type GeneralErrorKey = "auth.errors.serverError";
 
-/** Field-level errors the client can detect on its own. */
+/** Field-level errors, whether the client or the server detected them. */
 type FieldErrorKey =
   | "auth.errors.usernameInvalid"
+  | "auth.errors.usernameTaken"
   | "auth.errors.passwordTooShort"
   | "auth.errors.passwordMismatch";
 
@@ -49,6 +50,9 @@ function isUsernameValid(value: string): boolean {
  */
 export function RegisterRoute() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { user } = useAuth();
   const register = useRegister();
 
   const [username, setUsername] = useState("");
@@ -66,6 +70,52 @@ export function RegisterRoute() {
   const confirmPasswordRef = useRef<HTMLInputElement>(null);
 
   const isPending = register.isPending;
+
+  // A registration can also be reached through the `RequireAuth` gate, so honour
+  // the same remembered destination the login screen does.
+  const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname;
+
+  // Already signed in: creating a second account from an authenticated session
+  // is not a flow this app has. The chained login of this very form is excluded,
+  // or it would race the success navigation below and lose the destination.
+  if (user !== null && !register.isSuccess) {
+    return <Navigate to="/" replace />;
+  }
+
+  /**
+   * Server-side rejections, by status code — never by the `detail` sentence,
+   * which is English prose from FastAPI rather than a stable contract.
+   */
+  function handleServerError(error: Error) {
+    if (error instanceof AuthError && error.status === 409) {
+      setUsernameError("auth.errors.usernameTaken");
+      usernameRef.current?.focus();
+      return;
+    }
+
+    if (error instanceof AuthError && error.status === 422) {
+      // The client checks already mirror the pinned rules, so a 422 means they
+      // disagree with the server. Show it on the field the server named; if it
+      // named nothing we can map, fall back to the general slot rather than
+      // silently swallowing it.
+      const showsUsername = error.validationFields.includes("username");
+      const showsPassword = error.validationFields.includes("password");
+
+      if (showsUsername) {
+        setUsernameError("auth.errors.usernameInvalid");
+      }
+      if (showsPassword) {
+        setPasswordError("auth.errors.passwordTooShort");
+      }
+
+      if (showsUsername || showsPassword) {
+        (showsUsername ? usernameRef : passwordRef).current?.focus();
+        return;
+      }
+    }
+
+    setGeneralError("auth.errors.serverError");
+  }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -96,7 +146,17 @@ export function RegisterRoute() {
       return;
     }
 
-    register.mutate({ username, password });
+    register.mutate(
+      { username, password },
+      {
+        // `useRegister` already chained the login, so success here means signed
+        // in — no "now please log in" detour.
+        onSuccess: () => {
+          navigate(from ?? "/", { replace: true });
+        },
+        onError: handleServerError,
+      },
+    );
   }
 
   return (
