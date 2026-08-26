@@ -53,6 +53,29 @@ export type ProductImage = {
 } & components["schemas"]["ProductImageAttributes"];
 
 /**
+ * The API computes server-relative `/media/…` variant URLs. In development the
+ * SPA and the API live on different origins (`VITE_API_URL`), so a relative URL
+ * would resolve against Vite and answer the SPA fallback instead of the image.
+ * Same convention as `api/client.ts` and `useServerEvents`; production
+ * (`VITE_API_URL` unset) keeps the URLs byte-identical.
+ */
+const mediaBase: string = import.meta.env.VITE_API_URL ?? "";
+
+function withAbsoluteVariants(image: ProductImage): ProductImage {
+  if (mediaBase === "") {
+    return image;
+  }
+  return {
+    ...image,
+    variants: {
+      thumb: mediaBase + image.variants.thumb,
+      card: mediaBase + image.variants.card,
+      detail: mediaBase + image.variants.detail,
+    },
+  };
+}
+
+/**
  * A failed draft-spec save.
  *
  * Same shape and rationale as Phase-1's `AuthError`: the backend's `detail` is
@@ -164,9 +187,10 @@ async function getNewestImage(productId: string): Promise<ProductImage | null> {
     throw new ProductError(response.status, errorCode(error));
   }
 
-  return newestImage(
+  const newest = newestImage(
     data.data.map((resource) => ({ id: resource.id, ...resource.attributes })),
   );
+  return newest === null ? null : withAbsoluteVariants(newest);
 }
 
 /**
@@ -231,7 +255,7 @@ async function patchImageStatus(
     throw new ProductError(response.status, errorCode(error));
   }
 
-  return { id: data.data.id, ...data.data.attributes };
+  return withAbsoluteVariants({ id: data.data.id, ...data.data.attributes });
 }
 
 /** The reviewed model itself. */
