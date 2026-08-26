@@ -17,6 +17,8 @@ dependencies = [
     "alembic~=1.19.0",
     # Identity
     "python-ulid~=4.0.0",
+    # Authentication
+    "pwdlib[argon2]~=0.2.1",
     # CLI
     "typer~=0.27.0",
 ]
