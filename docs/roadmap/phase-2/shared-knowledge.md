@@ -947,3 +947,43 @@ depend on. 1–3 bullets per step, no prose.
   transitively) caps `websockets<17`, so `uv lock` downgraded uvicorn's
   `websockets` 17.0.1 → 16.1.1. Verified harmless: uvicorn 0.52.4 boots the app in
   the rebuilt image and `/health` answers 200. Don't "fix" the downgrade.
+
+### Step 2.12 (image pipeline & `/media`)
+
+- **`image_service.ingest_image(session, motorbike_id, image_url,
+  attribution=None, *, client=None, gate=None, media_dir=None) -> ImageResult |
+  ImageFailure`** is what 2.14 calls **once per run**: it downloads, retains the
+  original, writes the three variants and **commits** the `pending` row (no
+  NOTIFY — image/document creation events are 2.14's). `ImageResult` carries
+  `image` (the row), `original_path` and `variant_paths` (variant name →
+  MEDIA_DIR-relative path); `ImageFailure(url, reason, detail)` with
+  `ImageFailureReason` `download_failed | unsupported_content_type |
+  unreadable_image` is **already logged once** — the job only appends `detail` to
+  the operation message, never raises. Path helpers (MEDIA_DIR-relative, mirroring
+  `storage.py`): `motorbike_directory`, `variant_path(motorbike_id, image_id,
+  variant)`, `original_path(…, suffix)`, `resolve(path, *, media_dir=None)`, plus
+  `VARIANT_WIDTHS = {"thumb": 320, "card": 640, "detail": 1280}` — the disk half
+  of the pinned formula, kept in sync with `app/api/schemas/images.py` by
+  `tests/services/test_image_service.py::test_variant_paths_are_the_paths_of_the_api_variant_urls`.
+- **The download half copies the fetch layer rather than extending it** (same
+  split as `wikipedia._get_json`): a private `_download`/`_stream` reusing
+  `fetch.ALLOWED_SCHEMES`, `fetch.build_client`, `fetch.politeness`,
+  `fetch.FetchFailure` and `INGESTION_MAX_FETCH_BYTES`, with a pinned
+  content-type allowlist `image/jpeg|png|webp|gif` (the declared type only names
+  the retained original's suffix — the decoder decides what the bytes are).
+  Pillow runs in `asyncio.to_thread`; EXIF orientation is applied once,
+  transparency preserved (`RGBA`) instead of flattened, and a variant is a **cap,
+  never an upscale** (a 200 px source yields three 200 px files, all three paths
+  always exist). Original is `{image_id}_original{.jpg|.png|.webp|.gif}` — never
+  served to the browser, but reachable under `/media` by construction.
+- **`/media` is `StaticFiles(directory=settings.media_dir, check_dir=False)` with
+  no `mkdir`:** `create_app()` must have zero filesystem side effects (an mkdir of
+  the container path `/app/var/media` made every host-side `create_app()` raise
+  `PermissionError` → 129 test errors); the directory appears when the first image
+  is stored, until then media URLs are 404. `main.py` also calls
+  `mimetypes.add_type("image/webp", ".webp")` — Python 3.12 + the slim image know
+  no `.webp` and would serve every variant as `application/octet-stream`. Config
+  `MEDIA_DIR=/app/var/media`, dependency `pillow~=12.3.0`; `main.py` deliberately
+  imports neither Pillow nor `image_service`, so app-web boots on an image without
+  Pillow. Dev command: `app ingest fetch-image <url> <bike-id> [--attribution]`
+  (unknown id → stderr + exit 1, no FK traceback).

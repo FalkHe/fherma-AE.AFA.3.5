@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     ingestion_fetch_timeout_seconds: float = 20
     ingestion_max_fetch_bytes: int = 5_242_880
 
+    # Images: where the downloaded originals and their generated variants live.
+    # Served read-only by the `/media` static mount.
+    media_dir: Path = Path("/app/var/media")
+
     # Ingestion: the web-search half. An empty key is a valid configuration —
     # ingestion then runs Wikipedia-only with a warning.
     search_provider: SearchProviderName = "tavily"

@@ -4,11 +4,13 @@ Started as `uvicorn app.main:create_app --factory`.
 """
 
 import logging
+import mimetypes
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.api.endpoints import auth, documents, events, health, images, operations, products
@@ -20,6 +22,14 @@ from app.services.notification_listener import NotificationListener
 # The Vite dev server origin; credentials are allowed because the SPA
 # authenticates with a session cookie.
 CORS_ALLOWED_ORIGINS = ["http://localhost:5173"]
+
+# Where the generated image variants are served from. Mirrors
+# `app.api.schemas.images.MEDIA_URL_PREFIX`, which builds the URLs.
+MEDIA_URL_PATH = "/media"
+
+# The one media type the mount serves (the pinned image variants).
+WEBP_MEDIA_TYPE = "image/webp"
+WEBP_SUFFIX = ".webp"
 
 
 def _configure_logging(settings: Settings) -> None:
@@ -82,4 +92,30 @@ def create_app() -> FastAPI:
     app.include_router(operations.router, prefix="/api")
     app.include_router(products.router, prefix="/api")
 
+    _mount_media(app, settings)
+
     return app
+
+
+def _mount_media(app: FastAPI, settings: Settings) -> None:
+    """Serve the generated image variants as public static files.
+
+    Product images are public per `docs/architecture.md`: no authentication, no
+    CSRF, no JSON:API envelope — a browser must be able to put the URL in an
+    `<img src>`.
+
+    `check_dir=False` and no `mkdir`: building the application must have no
+    filesystem side effects (it happens in tests and in `app openapi export`,
+    where MEDIA_DIR is a container path that may not exist). The directory is
+    created by `image_service` when the first image is stored; until then every
+    media URL simply answers 404.
+    """
+    # Python 3.12's `mimetypes` has no `.webp` entry and the slim image ships no
+    # /etc/mime.types, so every variant would be served as
+    # application/octet-stream. The variants are WebP by contract.
+    mimetypes.add_type(WEBP_MEDIA_TYPE, WEBP_SUFFIX)
+    app.mount(
+        MEDIA_URL_PATH,
+        StaticFiles(directory=settings.media_dir, check_dir=False),
+        name="media",
+    )

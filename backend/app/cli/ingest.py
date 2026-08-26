@@ -1,15 +1,19 @@
 """`app ingest` — drive the ingestion building blocks from a terminal.
 
-Both commands are manual smoke tools: they run the real integrations against the
-real internet — the one thing the test suite deliberately never does.
+Every command here is a manual smoke tool: they run the real integrations against
+the real internet — the one thing the test suite deliberately never does.
 
 - `app ingest fetch-url` (step 2.10) fetches and extracts one page and leaves the
   retained payload on disk so the storage layout can be inspected.
 - `app ingest probe` (step 2.11) shows what ingestion *would* use for a model
   name: the Wikipedia article it matched (the disambiguation guard), its lead
   image, and the labelled search candidates.
+- `app ingest fetch-image` (step 2.12) downloads one image for an existing
+  catalogue entry and writes the variant set, so the `/media` mount and the
+  pinned paths can be inspected against a real photo.
 
-Neither touches the database or enqueues a job.
+Only `fetch-image` touches the database (it creates the `pending` image row);
+none of them enqueues a job.
 
 Follows the CLI async pattern of `app.cli.users`: the Typer command body stays
 synchronous and calls `asyncio.run(...)`.
@@ -22,6 +26,8 @@ import httpx2
 import typer
 
 from app.db.models.base import new_ulid
+from app.db.session import get_sessionmaker
+from app.services import image_service, product_service
 from app.services.ingestion import extract, fetch, search, storage, wikipedia
 
 app = typer.Typer(
@@ -122,6 +128,48 @@ async def _probe_search(name: str, client: httpx2.AsyncClient) -> None:
     for candidate in results.candidates:
         typer.echo(f"  [{candidate.source_type.value}] {candidate.title}")
         typer.echo(f"             {candidate.url}")
+
+
+@app.command("fetch-image")
+def fetch_image(
+    url: Annotated[str, typer.Argument(help="Absolute http(s) URL of an image.")],
+    motorbike_id: Annotated[
+        str,
+        typer.Argument(metavar="BIKE_ID", help="Id of an existing catalogue entry."),
+    ],
+    attribution: Annotated[
+        str | None,
+        typer.Option("--attribution", help="Credit line to store with the image."),
+    ] = None,
+) -> None:
+    """Download one image for a catalogue entry and write its variant set.
+
+    Creates the `pending` `motorbike_images` row and prints every path it wrote,
+    relative to MEDIA_DIR — those are exactly the paths `/media` serves.
+    """
+    outcome = asyncio.run(_fetch_image(url, motorbike_id, attribution))
+    if isinstance(outcome, image_service.ImageFailure):
+        _fail(f"Image ingestion failed ({outcome.reason.value}): {outcome.detail}")
+
+    typer.echo(f"Image {outcome.image.id} stored as {outcome.image.status.value}.", err=True)
+    typer.echo(f"  original:  {outcome.original_path}")
+    for variant, path in outcome.variant_paths.items():
+        typer.echo(f"  {variant + ':':10} {path}")
+
+
+async def _fetch_image(
+    url: str, motorbike_id: str, attribution: str | None
+) -> image_service.ImageOutcome:
+    """Async half of `fetch-image`: one session, one service call.
+
+    The catalogue entry is looked up first so an unknown id reports itself
+    instead of surfacing as a foreign-key violation.
+    """
+    async with get_sessionmaker()() as session:
+        motorbike = await product_service.get_motorbike(session, motorbike_id)
+        if motorbike is None:
+            _fail(f"No catalogue entry with id {motorbike_id!r}.")
+        return await image_service.ingest_image(session, motorbike.id, url, attribution)
 
 
 def _fail(message: str) -> NoReturn:

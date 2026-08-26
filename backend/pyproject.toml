@@ -30,6 +30,8 @@ dependencies = [
     "langchain-openrouter>=0.2.8,<0.3",
     # Prompt templates (Markdown + Jinja files under app/llm/prompts/).
     "jinja2~=3.1",
+    # Image variants generated at ingest time and served as static files.
+    "pillow~=12.3.0",
     # CLI
     "typer~=0.27.0",
     # Background jobs
