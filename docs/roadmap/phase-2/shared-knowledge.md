@@ -987,3 +987,50 @@ depend on. 1–3 bullets per step, no prose.
   imports neither Pillow nor `image_service`, so app-web boots on an image without
   Pillow. Dev command: `app ingest fetch-image <url> <bike-id> [--attribution]`
   (unknown id → stderr + exit 1, no FK traceback).
+
+### Step 2.13 (review screen, UI-only)
+
+- **`useProductReview.ts` stub contract 2.20 must preserve verbatim:**
+  `useProduct(id) -> UseQueryResult<Product>` (`Product` imported from
+  `useProducts.ts`, key `products.detail(id)`), `useProductDocuments(id) ->
+  SourceDocument[]`, `useProductImage(id) -> ProductImage | null` (null = no image
+  row), `useSaveDraftSpec(id).mutate({ values: Partial<DraftSpec> })` (the hook
+  merges with the last-fetched draft and invalidates **only**
+  `products.detail(id)`), `useRejectImage().mutate({ imageId, productId })`. Types
+  `DraftSpec = components["schemas"]["SpecAttributes"]`, hand-written
+  `SourceDocument`/`ProductImage`/`SourceType`/`ImageStatus` (documents & images are
+  not in the schema this step generated against), plus
+  `SaveDraftSpecError(status, validationFields)` — the `AuthError` shape; the specs
+  form maps `validationFields` onto its fields and falls back to a general Alert, so
+  2.20 must fill it from the 422 `loc` tails.
+- **Component contracts (written to survive the 2.20 stub deletion):**
+  `ConfirmDialog({title, body, warning?, confirmLabel, confirmColor?, isPending?,
+  hasError?, onConfirm, onClose})` takes *already translated* strings (only
+  `admin.review.actions.actionError` is its own) and is rendered conditionally with
+  `<Dialog open>` like `AddModelDialog`. All three panels take `product: Product`
+  and own their own query (loading/error are page-level, so a panel renders `null`
+  until data is there); `ModelSpecsPanel` additionally takes
+  `onDirtyChange(isDirty)` — the route owns the dirty flag for the approve dialog's
+  `unsavedWarning`, and the panel reports `false` on unmount, i.e. switching tabs
+  drops the form buffer by design. Markdown goes through `react-markdown` +
+  `remark-gfm` with an `ExternalLink` renderer for `a`; raw HTML stays off (never
+  add `rehype-raw`).
+- **Deliberate choices/omissions:** the read-only `extra` table renders in *both*
+  draft and verified mode (§8's extra block is not status-scoped); the fixture set
+  is a superset of the pinned minimum — a second (magazine) document exists so the
+  `?doc=` selection contract is exercisable; the Zod schema stays module-private
+  (exporting it would trip `react-refresh/only-export-components`) and is tested
+  through the rendered form with a doubled save mutation; `i18n`
+  `priceBandValues`/`categoryValues` are now filled from the pinned vocabularies.
+  Ordering consequence of 2.15 landing first: approve/reject `PATCH` hit the real
+  API while the review data is fixture, so after a successful approve the chip does
+  **not** flip until 2.20 makes `useProduct` real — gates are reached by editing
+  `FIXTURE_PRODUCT.status`.
+- **Dependency-change mechanics for frontend steps (node-cli's `node_modules` is an
+  anonymous volume from the *image*):** `docker compose run --rm node-cli pnpm
+  install` does not reach the running dev server, and pnpm refuses to install into
+  the bind-mounted `/app` (store-location clash). Working sequence used here:
+  `pnpm add --save-exact …` on the host (pnpm 11.17.0 / Node 24 match the image, so
+  the lockfile stays valid) → `docker compose build frontend node-cli` →
+  `docker compose up -d --force-recreate --renew-anon-volumes frontend`. No
+  `make rebuild` needed, and other services stay untouched.

@@ -154,8 +154,25 @@
           "kg": "kg",
           "mm": "mm"
         },
-        "priceBandValues": {},
-        "categoryValues": {},
+        "priceBandValues": {
+          "budget": "Budget (under €5,000)",
+          "mid": "Mid (€5,000–10,000)",
+          "upper": "Upper (€10,000–15,000)",
+          "premium": "Premium (over €15,000)"
+        },
+        "categoryValues": {
+          "naked": "Naked",
+          "sport": "Sport",
+          "sport_touring": "Sport touring",
+          "touring": "Touring",
+          "adventure": "Adventure",
+          "cruiser": "Cruiser",
+          "classic": "Classic",
+          "scrambler": "Scrambler",
+          "enduro": "Enduro",
+          "supermoto": "Supermoto",
+          "scooter": "Scooter"
+        },
         "errors": {
           "numberInvalid": "Enter a positive number."
         }
