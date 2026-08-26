@@ -1,0 +1,26 @@
+{
+  "app": {
+    "name": "Motorcycle Buying Advisor",
+    "tagline": "Advice from a curated catalogue, not from marketing copy."
+  },
+  "nav": {
+    "home": "Home"
+  },
+  "themeMode": {
+    "menuLabel": "Colour theme",
+    "buttonLabel": "Change colour theme",
+    "system": "System",
+    "light": "Light",
+    "dark": "Dark"
+  },
+  "home": {
+    "heading": "Welcome",
+    "body": "The consultation experience is not built yet. This is the application shell."
+  },
+  "health": {
+    "checking": "Checking backend…",
+    "ok": "Backend: OK",
+    "unreachable": "Backend: unreachable",
+    "unreachableHint": "The API did not answer. Check that the backend is running."
+  }
+}

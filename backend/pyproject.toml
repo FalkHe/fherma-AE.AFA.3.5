@@ -1,0 +1,45 @@
+[project]
+name = "app"
+description = "Motorcycle Buying Advisor backend (FastAPI + Typer)"
+requires-python = ">=3.12,<3.13"
+dynamic = ["version"]
+dependencies = [
+    # HTTP / API
+    "fastapi~=0.141.0",
+    "uvicorn[standard]~=0.52.0",
+    "sse-starlette~=3.4.0",
+    # Models / validation / configuration
+    "pydantic~=2.13.0",
+    "pydantic-settings~=2.15.0",
+    # Database
+    "sqlalchemy[asyncio]~=2.0.52",
+    "psycopg[binary]~=3.3.0",
+    "alembic~=1.19.0",
+    # Identity
+    "python-ulid~=4.0.0",
+    # CLI
+    "typer~=0.27.0",
+]
+
+[project.scripts]
+app = "app.cli.main:app"
+
+[dependency-groups]
+dev = ["ruff~=0.15.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "app/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
