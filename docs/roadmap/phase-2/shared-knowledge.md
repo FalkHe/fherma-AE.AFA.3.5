@@ -563,3 +563,22 @@ components written against a stub must survive its replacement unchanged):
 
 Appended by implementing agents when a step finishes — decisions later steps
 depend on. 1–3 bullets per step, no prose.
+
+### Step 2.4 (SSE client hook & query keys)
+
+- `frontend/src/queryKeys.ts` exports one `queryKeys` object; every query uses
+  its builders (`products.list(status?)`, `products.detail(id)`,
+  `operations.list()`, `documents.byProduct(id)`,
+  `productImages.byProduct(id)`) and every invalidation targets the sibling
+  prefix (`queryKeys.<resource>.all`) — never a hand-typed array.
+- `useServerEvents()` invalidates through `useQueryClient()` (the provider's
+  shared client, per the Phase-1 hook convention) and is mounted by the local
+  `ServerEventsConnection` component inside `AppLayout`, gated on
+  `useAuth().user`; `useServerEventsStatus()` reads module state and reports
+  `{connected: false}` before the first `open` and whenever nothing is mounted,
+  so 2.8's warning Alert needs its 5 s grace timer to cover initial connect.
+- Stream URL is `${import.meta.env.VITE_API_URL ?? ""}/api/events` with
+  `{ withCredentials: true }`, mirroring `api/client.ts`'s baseUrl (dev is
+  cross-origin :5173 → :8000; production same-origin resolves to the pinned
+  `/api/events`) — 2.7 must therefore keep the endpoint inside the
+  credentials-allowing CORS config.

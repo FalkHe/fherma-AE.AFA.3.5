@@ -15,7 +15,23 @@ import { useTranslation } from "react-i18next";
 import { Link as RouterLink, Outlet, useNavigate } from "react-router";
 
 import { useAuth, useLogout } from "../hooks/useAuth";
+import { useServerEvents } from "../hooks/useServerEvents";
 import { ThemeModeToggle } from "./ThemeModeToggle";
+
+/**
+ * Holds the single server-event stream for as long as somebody is signed in.
+ *
+ * It exists as a component rather than a call in `AppLayout` because the stream
+ * must be tied to the session: rendering it conditionally is what closes the
+ * connection the moment the identity cache goes empty, so a sign-out never
+ * leaves an authenticated stream open behind the login screen. `/api/events`
+ * requires a session anyway.
+ */
+function ServerEventsConnection() {
+  useServerEvents();
+
+  return null;
+}
 
 /**
  * Chrome shared by every route: the top bar and the main content container.
@@ -48,6 +64,7 @@ export function AppLayout() {
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", minHeight: "100dvh" }}>
+      {user !== null && <ServerEventsConnection />}
       <AppBar position="static">
         <Toolbar>
           <Typography
