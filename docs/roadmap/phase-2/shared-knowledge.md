@@ -668,3 +668,43 @@ depend on. 1–3 bullets per step, no prose.
   transition mutation (ui-spec defines none), and `admin.review.*` i18n keys
   landed verbatim from ui-spec §10 with `priceBandValues`/`categoryValues`
   still empty for 2.13 to fill.
+
+### Step 2.3 (JSON:API layer & `/api/products`)
+
+- **`app/api/jsonapi.py` is what 2.6/2.9 reuse verbatim:** `Resource[Attrs]`,
+  `Document[Res]`, `ListDocument[Res]` (PEP 695 generics — subclass them per
+  resource, e.g. `class ProductDocument(Document[ProductResource])`, so OpenAPI
+  gets clean component names), `Meta(total_count)`, `jsonapi.PaginationDep`
+  (`page[number]`/`page[size]`, `.limit`/`.offset`), `parse_filter(raw) ->
+  list[str] | None`, `JsonApiError(status_code, code, detail)`,
+  `error_responses(*codes)` for the `responses=` OpenAPI docs. Request
+  envelopes are **not** generic — each resource spells out
+  `…CreateRequest`/`…PatchRequest` with `extra="forbid"` at every level and
+  `type: Literal["<resource>"]` defaulted (that `extra="forbid"` is what turns
+  `verifiedSpec` in a PATCH body into a 422).
+- **Error-shape split (follow it, the SPA branches on it):** domain failures
+  render as the JSON:API `errors[]` document via `JsonApiError` (handler
+  registered once in `main.py`) — `404 not-found`, `409 duplicate-model`,
+  `422 invalid-transition`, `400 invalid-filter` (unknown `filter[status]`
+  member); request/body validation keeps FastAPI's default
+  `422 {"detail":[{"loc":…}]}` (ui-spec §8 maps `loc` to fields) and
+  `current_admin`/`csrf_protect` keep their `{"detail": "…"}` 401/403. Routers:
+  `APIRouter(prefix="/products", tags=[…], dependencies=[Depends(current_admin)])`
+  plus `Depends(csrf_protect)` per write, included in `main.py` with
+  `prefix="/api"`; `api/endpoints/__init__.py` and `api/schemas/__init__.py`
+  stay pure package markers (Phase-1 convention).
+- **New `product_service` read functions — reuse, don't re-query:**
+  `get_motorbike(session, id)`, `list_motorbikes(session, *, statuses=None,
+  limit, offset) -> (rows, total)` (order `created_at DESC, id DESC`),
+  `get_specs(session, ids) -> {motorbike_id: {SpecKind: row}}`. **After any
+  write a route must `await session.refresh(row)` before rendering**:
+  `motorbikes.updated_at` has a server-side `onupdate`, so the flush expires the
+  attribute and rendering it is implicit IO → `MissingGreenlet` 500. The
+  fake-session tests cannot reproduce this — prove writes with real-DB curl.
+- Spec payload split: `SpecAttributes` (read; `float` for the Numeric columns so
+  JSON carries numbers, `SpecCategory`/`PriceBand` enums) vs `DraftSpecRequest`
+  (write; `gt=0` plus column ceilings, all 16 frozen fields accepted so the
+  SPA's merge-and-replace survives). `DraftSpecRequest.model_dump()` *is* the
+  service's full-object mapping. PATCH applies `draftSpec` before `status`, so
+  one request that saves and approves promotes the values it just sent. No
+  enqueue on create (2.14), no relationships/includes.

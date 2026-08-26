@@ -13,11 +13,11 @@ Two rules are enforced here and nowhere else:
 """
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
@@ -66,6 +66,58 @@ def slugify(name: str) -> str:
     `"suzuki-gsr-600"`.
     """
     return _NON_SLUG_CHARACTERS.sub("-", name.lower()).strip("-")
+
+
+async def get_motorbike(session: AsyncSession, motorbike_id: str) -> Motorbike | None:
+    """Return one catalogue entry, or `None` when the id is unknown."""
+    result = await session.execute(select(Motorbike).where(Motorbike.id == motorbike_id))
+    return result.scalar_one_or_none()
+
+
+async def list_motorbikes(
+    session: AsyncSession,
+    *,
+    statuses: Sequence[MotorbikeStatus] | None = None,
+    limit: int,
+    offset: int,
+) -> tuple[list[Motorbike], int]:
+    """Return one page of catalogue entries plus the unpaginated total.
+
+    Newest first (`created_at` descending, id as tiebreaker so paging is stable
+    for rows created in the same instant). `statuses` is the `filter[status]`
+    set; `None` means unfiltered.
+    """
+    conditions = [] if not statuses else [Motorbike.status.in_(list(statuses))]
+
+    total = await session.execute(select(func.count()).select_from(Motorbike).where(*conditions))
+    page = await session.execute(
+        select(Motorbike)
+        .where(*conditions)
+        .order_by(Motorbike.created_at.desc(), Motorbike.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(page.scalars().all()), total.scalar_one()
+
+
+async def get_specs(
+    session: AsyncSession, motorbike_ids: Sequence[str]
+) -> dict[str, dict[SpecKind, MotorbikeSpec]]:
+    """Return the specification rows of several motorbikes, grouped by id and kind.
+
+    One query for a whole page of the catalogue: a motorbike without any
+    specification is simply absent from the result.
+    """
+    if not motorbike_ids:
+        return {}
+
+    result = await session.execute(
+        select(MotorbikeSpec).where(MotorbikeSpec.motorbike_id.in_(list(motorbike_ids)))
+    )
+    grouped: dict[str, dict[SpecKind, MotorbikeSpec]] = {}
+    for spec in result.scalars().all():
+        grouped.setdefault(spec.motorbike_id, {})[spec.kind] = spec
+    return grouped
 
 
 async def create_backlog(session: AsyncSession, name: str) -> Motorbike:

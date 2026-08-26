@@ -9,7 +9,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api.endpoints import auth, health
+from app.api.endpoints import auth, health, products
+from app.api.jsonapi import JsonApiError, json_api_error_handler
 from app.core.config import Settings, get_settings
 
 # The Vite dev server origin; credentials are allowed because the SPA
@@ -45,8 +46,13 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Domain failures of the JSON:API resources render as an error document;
+    # request validation and the auth dependencies keep FastAPI's own bodies.
+    app.add_exception_handler(JsonApiError, json_api_error_handler)
+
     app.include_router(health.router)
     # Authentication is plain JSON and exempt from JSON:API, hence no /api.
     app.include_router(auth.router, prefix="/auth")
+    app.include_router(products.router, prefix="/api")
 
     return app

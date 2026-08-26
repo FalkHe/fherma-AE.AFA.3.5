@@ -9,28 +9,39 @@ opening a real database connection or event loop of its own — everything here
 is plain `async def` called from the test's own `asyncio.run()`.
 
 Supported: `select`/`delete`/`update` against a single mapped entity, `where`
-clauses built from `==`/`!=` comparisons of a column against a literal combined
-with `AND`, and `order_by` over the same kind of expressions. Anything else
-raises `NotImplementedError` loudly rather than silently matching nothing, so a
-future service change this fixture cannot interpret fails fast instead of
-pretending to pass.
+clauses built from `==`/`!=`/`IN` comparisons of a column against a literal
+combined with `AND`, `order_by` over the same kind of expressions, `limit` /
+`offset`, and `select(func.count())` over one table. Anything else raises
+`NotImplementedError` loudly rather than silently matching nothing, so a future
+service change this fixture cannot interpret fails fast instead of pretending to
+pass.
+
+Server defaults are simulated for **timestamp columns only** (`created_at` /
+`updated_at` are stamped on `add`, because endpoint responses carry them);
+everything else — enum and JSONB defaults — is set by the services in Python.
 """
 
 import operator
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import BinaryExpression, Delete, Select, Update
+from sqlalchemy import BinaryExpression, DateTime, Delete, Select, Update
 from sqlalchemy.sql.elements import BindParameter, BooleanClauseList, ColumnClause, UnaryExpression
-from sqlalchemy.sql.operators import and_, eq, ne
+from sqlalchemy.sql.functions import Function
+from sqlalchemy.sql.operators import and_, eq, in_op, ne
 
 from app.db.models.base import Base, new_ulid
 from app.db.models.session import Session
 from app.db.models.user import User
 
-_COMPARISONS = {eq: operator.eq, ne: operator.ne}
+_COMPARISONS = {
+    eq: operator.eq,
+    ne: operator.ne,
+    in_op: lambda left, right: left in right,
+}
 
 
 @dataclass
@@ -49,6 +60,10 @@ class _FakeResult:
         if not self.rows:
             return None
         assert len(self.rows) == 1, "fake store matched more than one row"
+        return self.rows[0]
+
+    def scalar_one(self) -> Any:
+        assert len(self.rows) == 1, "fake store did not match exactly one row"
         return self.rows[0]
 
     def scalars(self) -> _FakeScalars:
@@ -80,15 +95,31 @@ class FakeAsyncSession:
         return list(self.store(entity).values())
 
     def add(self, obj: Any) -> None:
-        """Mimic ORM flush-time PK assignment, then insert into the store."""
+        """Mimic ORM flush-time PK assignment and timestamps, then insert."""
         if not isinstance(obj, Base):  # pragma: no cover - defensive
             raise TypeError(f"FakeAsyncSession.add: unsupported type {type(obj)!r}")
         if getattr(obj, "id", None) is None:
             obj.id = new_ulid()
+        self._stamp_timestamps(obj)
         self.store(type(obj))[obj.id] = obj
+
+    @staticmethod
+    def _stamp_timestamps(obj: Any) -> None:
+        """Fill server-defaulted timestamp columns, as the database would."""
+        now = datetime.now(UTC)
+        for column in obj.__table__.columns:
+            if (
+                column.server_default is not None
+                and isinstance(column.type, DateTime)
+                and getattr(obj, column.key, None) is None
+            ):
+                setattr(obj, column.key, now)
 
     async def commit(self) -> None:
         self.commit_count += 1
+
+    async def refresh(self, obj: Any) -> None:
+        """No-op: the store hands out live objects, nothing ever expires."""
 
     async def delete(self, obj: Any) -> None:
         self.deleted_objects.append(obj)
@@ -104,11 +135,34 @@ class FakeAsyncSession:
         raise NotImplementedError(f"FakeAsyncSession.execute: unsupported statement {statement!r}")
 
     def _execute_select(self, statement: Select) -> _FakeResult:
-        entity = statement.column_descriptions[0]["entity"]
-        rows = self._filter(self.rows(entity), statement.whereclause)
+        description = statement.column_descriptions[0]
+        if description["entity"] is None:
+            return self._execute_count(statement, description["expr"])
+
+        rows = self._filter(self.rows(description["entity"]), statement.whereclause)
         for clause in reversed(statement._order_by_clauses):
             rows = self._sorted(rows, clause)
-        return _FakeResult(rows)
+        return _FakeResult(self._paginated(rows, statement))
+
+    def _execute_count(self, statement: Select, expression: object) -> _FakeResult:
+        if not (isinstance(expression, Function) and expression.name == "count"):
+            raise NotImplementedError(f"FakeAsyncSession: unsupported projection {expression!r}")
+        entity = self._entity_of(statement.get_final_froms()[0].name)
+        return _FakeResult([len(self._filter(self.rows(entity), statement.whereclause))])
+
+    @classmethod
+    def _paginated(cls, rows: list[Any], statement: Select) -> list[Any]:
+        offset = cls._bound_value(statement._offset_clause)
+        limit = cls._bound_value(statement._limit_clause)
+        if offset is not None:
+            rows = rows[offset:]
+        if limit is not None:
+            rows = rows[:limit]
+        return rows
+
+    @classmethod
+    def _bound_value(cls, clause: object) -> Any | None:
+        return None if clause is None else cls._value(clause, None)
 
     def _execute_delete(self, statement: Delete) -> _FakeResult:
         store = self.store(self._entity_of(statement.table.name))
