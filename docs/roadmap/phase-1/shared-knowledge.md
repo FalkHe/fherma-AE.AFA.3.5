@@ -321,4 +321,23 @@ depend on. 1–3 bullets per step, no prose.
   as in `ThemeModeToggle`) — `@mui/icons-material` is **not** a dependency; use
   `account_circle` / `arrow_drop_down` / `logout` / `pending_actions`.
   `AdminLayout` derives the selected tab from the `tabValueByPath` map (`false`
-  when unmatched); Phase 2 adds `"/admin/review": "review"` there.
+  when unmatched). ~~Phase 2 adds `"/admin/review": "review"` there.~~
+  *Superseded by the Phase-2 ui-spec: no second admin tab — review is a
+  drill-down at `/admin/models/:id`; the derivation loosens to
+  `startsWith("/admin") → "backlog"` (Phase-2 step 2.8).*
+
+### Step 1.5 (CLI user commands & bootstrap docs)
+
+- `app/cli/users.py` is the landed reference for the CLI async pattern: sync
+  Typer body → `asyncio.run(_impl(...))`, one `async with get_sessionmaker()()`
+  per `_impl`, service call inside (the service commits). No engine `dispose()`
+  is needed — verified: no loop/connection warnings on exit; don't add one.
+- CLI error convention: service exceptions are caught in the **sync** body and
+  funnelled through a `-> NoReturn` helper that writes the message to stderr
+  (`typer.echo(..., err=True)`) and raises `typer.Exit(code=1)`; success
+  messages go to stdout. Enum arguments use the ORM enum directly (`UserRole`,
+  a `StrEnum`) — Typer renders `<user|admin>` and rejects other values itself
+  (exit 2).
+- CLI commands do **not** re-validate input (no password length check):
+  validation stays at the API boundary and normalisation in the service, so the
+  raw username string is passed through unchanged.

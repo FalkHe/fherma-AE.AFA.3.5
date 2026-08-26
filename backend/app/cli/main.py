@@ -3,7 +3,7 @@
 import typer
 
 from app import __version__
-from app.cli import openapi
+from app.cli import openapi, users
 
 app = typer.Typer(
     name="app",
@@ -13,6 +13,7 @@ app = typer.Typer(
 )
 
 app.add_typer(openapi.app, name="openapi")
+app.add_typer(users.app, name="users")
 
 
 @app.callback()

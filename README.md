@@ -78,6 +78,26 @@ running the apps or their checks directly on the host.
    docker compose logs -f frontend
    ```
 
+## Creating the first admin
+
+No HTTP endpoint grants the admin role — registration always creates a plain
+user. Register an account through the UI (or `POST /auth/register`), then
+promote it from the CLI:
+
+```bash
+docker compose exec app-web app users set-role <name> admin
+```
+
+Re-running it is a no-op. The reverse (`... set-role <name> user`) revokes
+that account's sessions, as does resetting a password:
+
+```bash
+docker compose exec app-web app users reset-password <name>
+```
+
+The new password is prompted for twice and hidden — never pass it as an
+argument.
+
 ## Running the backend locally with uv
 
 The backend's own settings (`backend/app/core/config.py`) fall back to a
