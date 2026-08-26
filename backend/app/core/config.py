@@ -12,6 +12,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 Environment = Literal["development", "production"]
 LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
 
+# Web search backends behind `app.services.ingestion.search.SearchProvider`.
+SearchProviderName = Literal["tavily"]
+
 
 class Settings(BaseSettings):
     """Application configuration.
@@ -37,6 +40,17 @@ class Settings(BaseSettings):
     data_dir: Path = Path("/app/var/data")
     ingestion_fetch_timeout_seconds: float = 20
     ingestion_max_fetch_bytes: int = 5_242_880
+
+    # Ingestion: the web-search half. An empty key is a valid configuration —
+    # ingestion then runs Wikipedia-only with a warning.
+    search_provider: SearchProviderName = "tavily"
+    tavily_api_key: str = ""
+    ingestion_max_web_documents: int = 6
+
+    # LLM access: OpenRouter is the only gateway. An empty key is a valid
+    # configuration (the app starts, model calls report the missing key).
+    openrouter_api_key: str = ""
+    chat_model: str = "openai/gpt-4.1-mini"
 
 
 @lru_cache

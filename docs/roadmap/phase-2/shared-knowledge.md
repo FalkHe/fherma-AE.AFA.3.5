@@ -861,3 +861,89 @@ depend on. 1–3 bullets per step, no prose.
   Deliberate omissions: no `title` from extraction (search/Wikipedia supply
   `source_title`), no CLI test file (`app ingest fetch-url` is the manual smoke
   tool; it writes under `sources/cli/`), no in-page link following.
+
+### Step 2.11 (Wikipedia + web search adapters)
+
+- **`wikipedia.py` contract 2.14 builds on** (all `*, client=None, gate=None`,
+  reuse one `fetch.build_client()` per run): `lookup(name) -> WikipediaResult |
+  WikipediaFailure` runs the whole chain, or compose it —
+  `find_page(name) -> WikipediaPage | WikipediaFailure`,
+  `fetch_article(page) -> WikipediaArticle | WikipediaFailure`,
+  `find_image(page) -> WikipediaImage | None`. `WikipediaPage` = `key` (REST path
+  segment) + `title` (**`matched_title or title` of the best hit — store as
+  `source_documents.source_title`**) + `url` (`…/wiki/{key}`, the human page, →
+  `source_url`, never the REST endpoint we fetched); `WikipediaResult` =
+  `page, content` (raw bytes → `storage.save_raw_document`), `markdown` →
+  `content_markdown`, `image`. Typed reasons: `no_match` (deterministic — the
+  admin's name matched nothing) vs `search_failed` / `article_fetch_failed` /
+  `extraction_failed`. A missing image or missing licence data is never a
+  failure: `None` image, or an image with `attribution=None`.
+- **`search.py` contract:** `get_search_provider() -> SearchProvider` (protocol,
+  one method `search(name, *, client=None, gate=None) -> SearchResults`);
+  `SearchResults(candidates: tuple[SearchCandidate, ...], warnings:
+  tuple[str, ...])` where `SearchCandidate` is `url, title` (falls back to the
+  URL — `source_title` is NOT NULL) and `source_type` **taken from the query
+  template**, and `warnings` are the strings the job appends to the operation
+  message (missing `TAVILY_API_KEY`, a failed query) — a provider never raises
+  for an expected outcome. Candidates are deduped by URL keeping the first
+  (product) label and capped at `INGESTION_MAX_WEB_DOCUMENTS`; the cap also stops
+  further queries, so credits are not spent past it. Config keys landed:
+  `SEARCH_PROVIDER` (typed `config.SearchProviderName = Literal["tavily"]`),
+  `TAVILY_API_KEY`, `INGESTION_MAX_WEB_DOCUMENTS`.
+- **JSON endpoints bypass `fetch_html`** (it is `text/html`-only): each module has
+  its own thin helper (`wikipedia._get_json`, `TavilySearchProvider._post`) that
+  reuses the passed client — hence the pinned User-Agent — and the same
+  `fetch.politeness` gate (Tavily's host included), and returns `None` after one
+  logged warning for timeout/network/≥400/non-JSON. One live-verified caveat for
+  2.14/QA: the pinned "best hit = `pages[0]`" is Wikipedia's ranking, and for
+  `"Suzuki GSR 600"` (with the space) it ranks the manufacturer article *Suzuki*
+  first, while `"Suzuki GSR600"` matches the model — the recorded `source_title`
+  is exactly the disambiguation guard for that. Deliberate omissions: `Credit` /
+  `UsageTerms` are requested per the pinned extmetadata filter but are not part
+  of the composed attribution string; no CLI test file (`app ingest probe` is the
+  manual smoke tool, DB-free).
+
+### Step 2.16 (LLM foundation)
+
+- **`app/llm/models.py` is the only place a chat model is built:**
+  `get_chat_model(model: str | None = None) -> ChatOpenRouter` (signature exactly
+  as pinned — bind extra kwargs on the returned model, don't widen it) passing
+  `model=model or settings.chat_model`, `api_key=settings.openrouter_api_key`,
+  `app_url=APP_URL` / `app_title=APP_TITLE` (module constants: repo URL +
+  "Motorcycle Buying Advisor", deliberately not config — attribution is
+  environment-independent), and `callbacks=observability_callbacks(settings) or
+  None`. `observability_callbacks(settings) -> list[BaseCallbackHandler]` is the
+  **Langfuse slot**: it returns `[]` today; Phase 5 adds the `LANGFUSE_*` gate
+  inside it and every existing call site is traced unchanged. An empty
+  `OPENROUTER_API_KEY` raises `models.MissingApiKeyError` (message
+  `"OPENROUTER_API_KEY is not configured."`) instead of a pydantic
+  ValidationError — jobs/CLI catch that type to report configuration, not bugs.
+- **Prompts:** `app/llm/prompts.py` exposes `render_prompt(name, /, **variables)`
+  (positional-only name, `.md` suffix optional) over an `lru_cache`d Jinja
+  `Environment` (`StrictUndefined`, `autoescape=False` — Markdown to a model, not
+  HTML to a browser, `trim_blocks`/`lstrip_blocks` on) rooted at
+  `prompts.PROMPTS_DIR` = `app/llm/prompts/`. Missing variable →
+  `jinja2.UndefinedError`, unknown name → `jinja2.TemplateNotFound`; both are
+  treated as programming errors, never caught for user input. The module
+  `prompts.py` and the sibling directory `prompts/` coexist on purpose (the
+  module wins the import); 2.17's `spec_extraction.md` just drops into the
+  directory. `ping.md` is the trivial prompt used by `app llm ping` and the tests.
+- **CLI `app llm`** (`app/cli/llm.py`, registered in `cli/main.py`): `ping
+  [--model]` (renders `ping.md`, one `ainvoke`, prints model on stderr + reply on
+  stdout) and `embeddings-smoke [--model]` (thin `httpx2` POST to
+  `openrouter.SERVERS[openrouter.SERVER_PRODUCTION]` + `/embeddings`, asserts
+  `len(vector) == 1536`). Both fail fast with a one-line stderr message + exit 1
+  for a missing key; `ping` also maps `openrouter.errors.OpenRouterError` to one
+  line. The smoke command carries `EMBEDDING_MODEL`/`EMBEDDING_DIMENSIONS` as
+  module constants — **2.19 must move them to config and delete the constants.**
+- **Embeddings smoke result: BLOCKED — `OPENROUTER_API_KEY` is not set in the
+  root `.env`, so neither the live `ping` nor the 1536-dimension assertion has
+  run.** What *is* verified: the route exists and is OpenAI-shaped (`POST
+  https://openrouter.ai/api/v1/embeddings` answered `401 {"error":{"message":
+  "Missing Authentication header"}}` for a bogus key, identical to curl) and the
+  chat path reaches OpenRouter (SDK `UnauthorizedResponseError`). Re-run both
+  commands as the first action of any step that needs a real completion.
+- **Lock side effect of `langchain~=1.0`:** `langgraph-sdk` (pulled in
+  transitively) caps `websockets<17`, so `uv lock` downgraded uvicorn's
+  `websockets` 17.0.1 → 16.1.1. Verified harmless: uvicorn 0.52.4 boots the app in
+  the rebuilt image and `/health` answers 200. Don't "fix" the downgrade.
