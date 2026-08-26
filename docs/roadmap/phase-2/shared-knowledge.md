@@ -744,3 +744,32 @@ depend on. 1–3 bullets per step, no prose.
   exposed attribute. `app operations demo [--bike <slug>]` walks
   queued→running→6 pinned ingestion milestones→succeeded at
   `STEP_SECONDS = 1.0` (unknown slug → stderr + exit 1).
+
+### Step 2.7 (SSE endpoint & LISTEN fan-out)
+
+- **`app/services/notification_listener.py` owns the only consumer of
+  `app_events`:** `NotificationListener(connect=None, *, channel=EVENT_CHANNEL)`
+  with `start()` (sync — spawns the task, never waits for the database, so a
+  down PostgreSQL cannot delay or fail startup), `await stop()` (cancel + drop
+  subscribers, idempotent), `subscribe() -> asyncio.Queue[Event]`,
+  `unsubscribe(queue)` (idempotent), `subscriber_count`. `Event` is
+  `(name, data)` = payload `event` member + the payload JSON verbatim; the
+  listener parses once and drops unusable payloads with a warning. Reconnect is
+  exponential 1 s → 30 s, re-issuing `LISTEN`; the dedicated connection comes
+  from `psycopg.AsyncConnection.connect(<database_url minus +psycopg>,
+  autocommit=True)` — never a pooled session. Per-subscriber queue holds 100
+  events and drops its **oldest** when a client stops reading (ids only, clients
+  refetch). Injectable `connect` factory is how tests drive it without a DB.
+- **The listener lives on `app.state`:** `main.lifespan` creates it and parks it
+  under `app/api/endpoints/events.py:LISTENER_STATE_ATTRIBUTE`
+  (`"notification_listener"`); the endpoint reads it from `request.app.state` and
+  answers `503 {"detail": "Event stream unavailable."}` if it is absent (only a
+  process without lifespan — a *reconnecting* listener keeps the stream open and
+  pinging). `/health` and `/ready` are untouched by listener state; `/ready`
+  keeps its existing PostgreSQL-only contract.
+- `GET /api/events` = `APIRouter(prefix="/events", tags=["events"],
+  dependencies=[Depends(current_user)])` mounted with `prefix="/api"` (inside the
+  credentials-allowing CORS config, per 2.4), `EventSourceResponse(..., ping=15)`,
+  `ServerSentEvent(event=<name>, data=<payload JSON>)`, subscriber queue removed
+  in the generator's `finally`. `sse-starlette~=3.4.0` was already a dependency —
+  nothing added to `pyproject.toml`/`uv.lock`, no `make build` needed.
