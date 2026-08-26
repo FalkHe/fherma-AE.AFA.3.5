@@ -1,0 +1,565 @@
+# Phase 2 — Shared Knowledge (binding contract)
+
+This document is the **single source of truth** for every Phase-2 step. Every
+agent working on a Phase-2 step must read it fully before writing code. When a
+step file and this document disagree, this document wins. Do not deviate from
+anything pinned here — if a deviation seems necessary, stop and report it
+instead of improvising, because a parallel agent is building against the same
+contract.
+
+UI layout/state details live in [`ui-spec.md`](ui-spec.md) (binding for
+frontend steps). Phase-1 conventions
+([`../phase-1/shared-knowledge.md`](../phase-1/shared-knowledge.md), including
+its Landed decisions) continue to apply.
+
+---
+
+## Parallel-run rule
+
+Two tracks run **concurrently**. Backend agents never touch `frontend/`;
+frontend agents never touch `backend/`.
+
+```text
+backend-dev:  2.1 ─► 2.3 ─► 2.5 ─► 2.6 ─► 2.7 ─► 2.9 ─► 2.10 ─► 2.11 ─► 2.12
+              ─► 2.14 ─► 2.16 ─► 2.17 ─► 2.18 ─► 2.19
+
+frontend-dev: 2.2✓ ─► 2.4 ─► 2.8 ─► ║S1║ 2.15 ─► 2.13 ─► ║S2║ 2.20
+
+qa:           2.21 (after 2.19 + 2.20)
+```
+
+**Cross-track sync points (the only two):**
+
+- **S1** — step 2.15 starts only after backend **2.7** is merged (2.7 implies
+  2.3 + 2.6 are in the OpenAPI schema). First action: `pnpm generate:api`
+  (requires `app-web` up).
+- **S2** — step 2.20 starts only after backend **2.17 and 2.9** are merged
+  (2.17 implies 2.14; 2.9 provides the documents/images endpoints 2.20 wires).
+  First action: regenerate types again.
+
+Frontend runs 2.15 before 2.13 when S1 is already open (the default with the
+milestone schedule below) — the dependency graph allows either order.
+
+Frontend steps 2.2/2.4/2.8/2.13 need **zero backend code** (stub rules below).
+
+**Within-track parallelism (optional second backend session):** 2.5,
+2.10→2.11, and 2.16 are independent of the 2.1→2.3→2.6→2.7→2.9 mainline. Only
+merge-friction files: `backend/pyproject.toml`/`uv.lock`, `compose.yaml`,
+`backend/app/core/config.py`, `backend/app/cli/main.py`. **Never parallelize
+two migration-bearing steps — 2.1, 2.6, 2.18 must land in that order (single
+Alembic head).**
+
+---
+
+## Milestones (commit & tag points)
+
+**Commit rule:** one commit per finished step (its verification green — lint,
+types, tests). **Milestone rule:** a milestone is reached when all its steps
+are merged on both tracks and its demo criterion passes; tag it
+(`phase-2-m<N>`). Milestones are the points where frontend and backend
+converge into something demoable — do not start a later milestone's sync step
+before the earlier milestone's demo passes.
+
+| Milestone | Steps (backend ∥ frontend) | Demo criterion (both tracks together) |
+|---|---|---|
+| **M1 — Plumbing & shells** | 2.1, 2.3, 2.5, 2.6, 2.7 ∥ 2.2✓, 2.4, 2.8 | Products API works via curl (create/filter/transition incl. 422s); `app operations demo` streams over `curl -N /api/events`; backlog UI renders stub rows with all states; S1 is open. |
+| **M2 — Live backlog** | — ∥ 2.15 | First real FE+BE convergence: add a model in the UI → row persists without reload; `app operations demo` drives the progress cell live over SSE; filter/retry work against the real API. |
+| **M3 — Real ingestion** | 2.9, 2.10, 2.11, 2.12, 2.14, 2.16, 2.17 ∥ 2.13 | `app ingest run "Suzuki GSR 600"` (worker up) → documents + image + draft spec, **live progress visible in the browser backlog**, row flips to `in_review`; review screen renders complete on stub data; S2 is open. |
+| **M4 — Review live & knowledge base** | 2.18, 2.19 ∥ 2.20 | Full review flow in the browser against the really-ingested model: documents render, spec edit + save, image reject, approve → verified specs; chunks embedded with recorded model/dimensions. |
+| **M5 — Phase acceptance** | 2.21 | The roadmap done-criterion end-to-end with evidence; tag `phase-2-done`. |
+
+Backend continues 2.10/2.11/2.16 in parallel while frontend lands M2 — the
+milestone gates only its own steps plus the demo.
+
+---
+
+## DB schema — final
+
+ULID string PKs via the existing `ULIDPrimaryKeyMixin`; all timestamps
+`TIMESTAMPTZ`, UTC; constraint/index names from the existing naming convention
+on `Base.metadata`; native PG enums use `values_callable` so lowercase values
+are stored (Phase-1 landed decision). ORM models define **no relationships**.
+
+**`motorbikes`** (step 2.1)
+
+| Column | Type / constraint |
+|---|---|
+| `id` | `String(26)` PK |
+| `name` | `String(160) NOT NULL` — display name as entered ("Suzuki GSR 600") |
+| `slug` | `String(160) NOT NULL`, unique `uq_motorbikes_slug` — service-side slugify: lowercase, `[^a-z0-9]+` → `-`, trimmed; no slugify dependency |
+| `manufacturer` | `String(64) NULL` (filled by extraction/admin) |
+| `model_name` | `String(128) NULL` |
+| `year_from`, `year_to` | `SmallInteger NULL` |
+| `status` | native enum `motorbike_status('backlog','ingesting','in_review','approved','rejected') NOT NULL`, server default `'backlog'`, index `ix_motorbikes_status` |
+| `created_at`, `updated_at` | as `users` |
+
+**Legal transition matrix** — enforced in `product_service.transition`;
+anything else → 422 error code `invalid-transition`:
+
+```text
+backlog   → ingesting    (admin add auto-starts [from 2.14]; retry/start)
+ingesting → in_review    (job success)
+ingesting → backlog      (job failure — automatic)
+in_review → approved     (side effects, ONE transaction: draft spec upserted
+                          to verified; all pending images → approved)
+in_review → rejected
+rejected  → ingesting    (re-queue = fresh ingestion)
+```
+
+**`rejected` semantics (pinned): not terminal.** Row, draft spec, documents
+and images are retained; the model is excluded from everything customer-facing
+(Phase 3 filters `status = 'approved'` only); an admin re-queues via PATCH
+status → `ingesting`. Approval **only ever** promotes the draft — no API path
+writes `verified` rows directly.
+
+**`source_documents`** (step 2.1)
+
+| Column | Type / constraint |
+|---|---|
+| `id` | PK |
+| `motorbike_id` | `String(26) NOT NULL` FK → motorbikes ON DELETE CASCADE, `ix_source_documents_motorbike_id` |
+| `source_type` | native enum `source_type('wikipedia','product','technical','magazine','upload') NOT NULL` |
+| `source_url` | `String(2048) NULL` (uploads have none) |
+| `source_title` | `String(512) NOT NULL` |
+| `raw_path` | `String(512) NOT NULL` — relative to `DATA_DIR` |
+| `content_markdown` | `Text NOT NULL` |
+| `fetched_at` | `TIMESTAMPTZ NOT NULL` |
+| `created_at` | server default `now()` |
+
+**`motorbike_specs`** (step 2.1) — one row per (motorbike, kind); `kind`
+native enum `spec_kind('draft','verified')`; unique
+`uq_motorbike_specs_motorbike_id_kind`.
+
+**Core spec column set — FROZEN. Phase-3 tools filter on exactly these**
+(API camelCase in parentheses):
+
+| Column | Type | Unit / values |
+|---|---|---|
+| `category` | `String(32) NULL` | pinned vocabulary: `naked, sport, sport_touring, touring, adventure, cruiser, classic, scrambler, enduro, supermoto, scooter` |
+| `engine_cc` (`engineCc`) | `Integer NULL` | cm³ |
+| `cylinders` | `SmallInteger NULL` | count |
+| `power_kw` (`powerKw`) | `Numeric(5,1) NULL` | kW |
+| `torque_nm` (`torqueNm`) | `Numeric(5,1) NULL` | Nm |
+| `wet_weight_kg` (`wetWeightKg`) | `Numeric(5,1) NULL` | kg (wet/kerb preferred; prompt normalizes) |
+| `seat_height_mm` (`seatHeightMm`) | `SmallInteger NULL` | mm |
+| `tank_capacity_l` (`tankCapacityL`) | `Numeric(4,1) NULL` | litres |
+| `top_speed_kmh` (`topSpeedKmh`) | `SmallInteger NULL` | km/h |
+| `abs` | `Boolean NULL` | |
+| `a2_eligible` (`a2Eligible`) | `Boolean NULL` | derived on write **only when the incoming value is null** and both inputs are known: `power_kw <= 35 AND power_kw / wet_weight_kg <= 0.2`; an explicit (admin-set) value always wins |
+| `price_band` (`priceBand`) | `String(16) NULL` | `budget` (<5 k€), `mid` (5–10 k€), `upper` (10–15 k€), `premium` (>15 k€) |
+| `msrp_eur` (`msrpEur`) | `Integer NULL` | EUR |
+| `extra` | `JSONB NOT NULL DEFAULT '{}'` | long tail; never filtered on |
+| `source_hints` | `JSONB NULL` | per-field LLM provenance notes |
+| `extracted_at` | `TIMESTAMPTZ NULL` | |
+
+**Unit conventions project-wide: mm, kg, kW, Nm, cm³, litres, km/h, EUR.**
+Phase-3 steps reuse these verbatim.
+
+**`motorbike_images`** (step 2.1)
+
+| Column | Type / constraint |
+|---|---|
+| `id` | PK |
+| `motorbike_id` | FK CASCADE, `ix_motorbike_images_motorbike_id` |
+| `source_url` | `String(2048) NOT NULL` |
+| `attribution` | `Text NULL` (licence/author, from Wikipedia) |
+| `status` | native enum `image_status('pending','approved','rejected') NOT NULL` default `'pending'` |
+| `original_path` | `String(512) NOT NULL` — relative to `MEDIA_DIR` |
+| `created_at` | |
+
+Variant paths are **deterministic, never stored**:
+`MEDIA_DIR/motorbikes/{motorbike_id}/{image_id}_{variant}.webp`. Ingestion
+creates **at most one image row per run**; the UI renders the newest.
+
+**`operations`** (step 2.6)
+
+| Column | Type / constraint |
+|---|---|
+| `id` | PK |
+| `type` | `String(64) NOT NULL` — `'ingestion'`, `'embeddings.rebuild'`, `'demo'` |
+| `status` | native enum `operation_status('queued','running','succeeded','failed') NOT NULL` default `'queued'` |
+| `progress` | `SmallInteger NOT NULL DEFAULT 0` (0–100) |
+| `message` | `String(512) NULL` — current human-readable step (English, rendered verbatim in the admin UI, exempt from i18n) |
+| `error` | `String(2048) NULL` |
+| `entity_type`, `entity_id` | `String(32) NULL` / `String(26) NULL`, composite index `ix_operations_entity_type_entity_id` |
+| `created_at`, `started_at NULL`, `finished_at NULL`, `updated_at` | |
+
+**`chunks`** (step 2.18; pgvector extension already enabled in the baseline
+migration)
+
+| Column | Type / constraint |
+|---|---|
+| `id` | PK |
+| `source_document_id` | FK CASCADE, `ix_chunks_source_document_id`; unique `uq_chunks_source_document_id_sequence` with `sequence` |
+| `motorbike_id` | `String(26) NOT NULL` denormalized, `ix_chunks_motorbike_id` |
+| `sequence` | `Integer NOT NULL` |
+| `text` | `Text NOT NULL` |
+| `heading_path` | `String(512) NULL` (`"Suzuki GSR600 > Design"`) |
+| `page_number` | `SmallInteger NULL` (PDF-only; NULL in Phase 2) |
+| `embedding` | `vector(1536) NULL` — nullable: 2.18 writes chunks, 2.19 fills; retrieval filters non-null |
+| `embedding_model` | `String(128) NULL` |
+| `embedding_dimensions` | `Integer NULL` |
+| `text_tsv` | generated always as `to_tsvector('english', text)` stored; GIN index `ix_chunks_text_tsv` |
+| — | HNSW index `ix_chunks_embedding` using `vector_cosine_ops` (m=16, ef_construction=64) |
+
+Note: Phase-3 step 3.1's "migration adds tsvector + GIN + HNSW" is
+**superseded** — those land here. Trim 3.1 when Phase 3 is sliced.
+
+---
+
+## JSON:API conventions — final
+
+The small internal layer lives in `backend/app/api/jsonapi.py` (step 2.3).
+
+- **Media type: plain `application/json`** carrying JSON:API 1.1 document
+  structure (`data/attributes/relationships/included/meta/errors`) — no
+  content negotiation. Deliberate simplification; simpler for openapi-fetch.
+- Pagination `page[number]` / `page[size]` (default 100, max 100);
+  `meta: {"totalCount": n}`. Default sort `-createdAt` on all lists.
+- Errors: `{"errors": [{"status": "422", "code": "invalid-transition",
+  "detail": "…"}]}`. The frontend branches on **status + `code`**, never on
+  detail text.
+- All Phase-2 endpoints (reads included — this is an admin-only surface):
+  `Depends(current_admin)`; writes additionally `Depends(csrf_protect)`.
+- Resource type names: `products`, `documents`, `product-images`,
+  `operations`. Attributes camelCase; enum values as stored (lowercase
+  snake, e.g. `in_review`).
+
+**`products`** — attributes: `name, slug, manufacturer, modelName, yearFrom,
+yearTo, status, draftSpec, verifiedSpec, createdAt, updatedAt` (spec objects
+use the camelCase spec shape above; `null` when absent). **No relationships /
+includes in Phase 2** — operation state reaches the UI via `/api/operations`
+(one small cached query serves every row; ui-spec §3.2), so the JSON:API
+layer defers include machinery until a resource needs it.
+Filter: `filter[status]` (comma-separated). Endpoints:
+
+- `GET /api/products`
+- `GET /api/products/{id}`
+- `POST /api/products` — body attribute `{name}` → 201 `backlog` row
+  (duplicate slug → 409, code `duplicate-model`). From step 2.14 on, the
+  service auto-transitions the new row to `ingesting` and enqueues the job
+  **after commit**; before 2.14 the row simply stays in `backlog`.
+- `PATCH /api/products/{id}` — `status` (transition per matrix; transition to
+  `ingesting` re-enqueues ingestion server-side, from 2.14) and/or
+  `draftSpec` (full-object replace; upsert semantics — a missing draft row is
+  created). Never accepts `verifiedSpec`.
+
+**`documents`** — read-only; attributes: `sourceType, sourceUrl, sourceTitle,
+contentMarkdown, fetchedAt, createdAt`; `filter[product]` **required** on
+list; list ordering: Wikipedia first, then `createdAt`.
+
+**`product-images`** — attributes: `sourceUrl, attribution, status,
+variants: {thumb, card, detail}` (computed URLs), `createdAt`;
+`filter[product]`; `PATCH` of `status` only — legal: `pending→approved`,
+`pending→rejected`, `approved→rejected` (the UI uses only
+`pending→rejected` this phase; the other two are deliberate
+API-completeness, e.g. approval promotion and later un-publishing).
+
+**`operations`** — read-only; attributes: `type, status, progress, message,
+error, entityType, entityId, createdAt, startedAt, finishedAt`; filters
+`filter[entityType]`, `filter[entityId]`, `filter[status]` (deliberate
+API-completeness — the Phase-2 UI fetches the unfiltered list).
+
+**Plain (non-JSON:API):** `/auth/*`, `GET /api/events` (SSE), `/media/*`
+(static), `/health`, `/ready`.
+
+---
+
+## SSE / LISTEN-NOTIFY — final
+
+- **One PostgreSQL channel: `app_events`.** Payload = JSON ≤ 1 KB, **ids
+  only, never content** (8 KB NOTIFY limit); clients refetch via the API.
+- Payload shapes:
+  - `{"event": "operation.updated", "operationId": …, "entityType": …, "entityId": …}`
+  - `{"event": "product.updated", "productId": …}`
+  - `{"event": "document.updated", "productId": …, "documentId": …}`
+  - (`chat.message.created` reserved for Phase 3.)
+- **Commit first, then `pg_notify`.** Same ordering for task enqueue: commit,
+  then `.kiq()`.
+- **Emitters (pinned — an event without an assigned emitter is a bug):**
+  - `operation.updated` — every `operation_service` state change (2.6).
+  - `product.updated` — every `product_service.transition` status change,
+    product creation, and `draftSpec` PATCH (emission wired in 2.6 once the
+    NOTIFY helper exists; the ingestion job's transitions flow through the
+    same service from 2.14). The backlog chip flipping `ingesting →
+    in_review` live — the phase's demo moment — rides on this event.
+  - `document.updated` — source-document row creation/replacement (2.14).
+  - The image PATCH (2.9) emits `product.updated`; a second admin session's
+    `["productImages"]` cache may go stale until refetch — accepted for a
+    single-admin reality.
+- `GET /api/events` (step 2.7): sse-starlette `EventSourceResponse`,
+  `Depends(current_user)` via session cookie (the reason `SameSite=Lax` was
+  frozen in Phase 1), SSE `event:` = event name, `data:` = payload JSON,
+  ping every 15 s. The LISTEN loop uses a dedicated long-lived
+  auto-reconnecting psycopg connection started in the FastAPI lifespan —
+  never a pooled session.
+- Frontend (`useServerEvents`, step 2.4) invalidation map:
+  - `operation.updated` → invalidate `["operations"]` only (progress ticks
+    must not refetch the products list; status flips arrive as
+    `product.updated`)
+  - `product.updated` → `["products"]`
+  - `document.updated` → `["documents"]` + `["products"]`
+- Additional binding requirements on the hook (ui-spec §3.3): export
+  `useServerEventsStatus(): {connected: boolean}` via module state +
+  `useSyncExternalStore`; on reconnect (`open` after `error`) invalidate
+  `["products"]` + `["operations"]` (gap events are lost); native
+  `EventSource` retry only — no custom backoff, **no polling anywhere**.
+
+---
+
+## Operation lifecycle & progress messages — final
+
+`queued` (row created before enqueue) → `running` (task start, sets
+`started_at`) → `succeeded` | `failed` (sets `finished_at`; failed sets
+`error`). Ingestion progress milestones (pinned English messages):
+
+| % | `message` |
+|---|---|
+| 5 | `Looking up Wikipedia` |
+| 15 | `Searching the web` |
+| 20–60 | `Fetching sources (n/m)` |
+| 65 | `Processing images` |
+| 80 | `Extracting specifications` |
+| 90 | `Generating embeddings` |
+| 100 | — (succeeded) |
+
+Partial source failures append a warning to `message` and never fail the job;
+**zero usable documents = deterministic failure** (no retry), motorbike back
+to `backlog`.
+
+---
+
+## Taskiq wiring — final
+
+- Broker: `backend/app/jobs/broker.py` —
+  `taskiq_redis.ListQueueBroker(url=settings.redis_url)`; **no result
+  backend** (PostgreSQL operations are the state).
+- Task names: `demo.ping`, `ingestion.run`, `embeddings.rebuild`; one module
+  per job family under `backend/app/jobs/`.
+- Compose `app-worker`: same image/env/bind-mount as `app-web`,
+  `entrypoint: []`, command
+  `taskiq worker app.jobs.broker:broker app.jobs.demo app.jobs.ingestion app.jobs.embeddings`
+  (module list grows per step), `depends_on: postgres (healthy), redis
+  (started)`; **never runs migrations**.
+- Retry policy — **pinned, verified against taskiq 0.12.5**: transient
+  failures (network/5xx/LLM timeouts) raise the custom `TransientJobError`;
+  the broker attaches
+  `taskiq.middlewares.SmartRetryMiddleware(default_retry_count=3,
+  default_delay=5, use_jitter=True, use_delay_exponent=True,
+  max_delay_exponent=60, types_of_exceptions=[TransientJobError])` via
+  `.with_middlewares(...)`, and retryable tasks carry the
+  `retry_on_error=True` label on their `@broker.task` decorator. Exceptions
+  not instances of `TransientJobError` are never retried (built-in type
+  filter). Note: the backoff is delay×attempt capped at `max_delay_exponent`
+  (+0–1 s jitter) — multiplicative, good enough; do not hand-roll a 2^n
+  variant. Deterministic failures mark the operation `failed` and do not
+  retry. No scheduler, no cancellation.
+
+---
+
+## Ingestion decisions — final
+
+- Source order: (1) Wikipedia, (2) web search. **No in-page link following in
+  Phase 2.** PDFs are skipped with a warning; Docling deferred.
+- **Search provider default: Tavily** (`POST https://api.tavily.com/search`
+  via HTTPX — no SDK dependency) behind a `SearchProvider` protocol;
+  `SEARCH_PROVIDER=tavily`. Missing `TAVILY_API_KEY` → Wikipedia-only
+  ingestion with a warning, not a failure. **Verified call shape
+  (2026-08-26):** auth `Authorization: Bearer <TAVILY_API_KEY>` header (the
+  legacy body-key form is deprecated — don't use it); JSON body
+  `{"query": …, "max_results": 2, "search_depth": "basic"}`; response
+  `results[]` with `title`, `url`, `content`, `score` — we consume `url` +
+  `title` only and **never** set `include_raw_content` (pages are fetched
+  ourselves for provenance + raw retention). Free tier: 1 000 credits/month,
+  basic search = 1 credit.
+- Query templates (template → `source_type` of its results):
+  - product: `"{name}" motorcycle official specifications`
+  - technical: `"{name}" technical data specifications`
+  - magazine: `"{name}" review test`
+  Top 2 per template, ≤ `INGESTION_MAX_WEB_DOCUMENTS` (6) total.
+- Fetch limits: timeout 20 s, max 5 MiB, accepted content-type `text/html`
+  only, follow redirects, 1 s per-domain politeness delay, User-Agent
+  `MotorcycleBuyingAdvisor/0.1 (educational project)`.
+- Wikipedia lookup (record the matched title in `source_title` so the admin
+  sees what was matched; endpoints live-verified 2026-08-26):
+  - search: `GET https://en.wikipedia.org/w/rest.php/v1/search/page?q={name}&limit=3`
+    → best hit (`pages[].key`, `matched_title`)
+  - article: `GET https://en.wikipedia.org/api/rest_v1/page/html/{key}` → trafilatura
+  - image URL: `GET https://en.wikipedia.org/api/rest_v1/page/summary/{key}`
+    → `originalimage.source` (the summary carries **no** file title and **no**
+    licence data)
+  - image **file title**: `GET https://en.wikipedia.org/w/api.php?action=query&titles={title}&prop=pageimages&piprop=name&format=json&formatversion=2`
+    → `pages[0].pageimage` (prepend `File:`)
+  - image **attribution**: `GET https://commons.wikimedia.org/w/api.php?action=query&titles=File:{name}&prop=imageinfo&iiprop=extmetadata&iiextmetadatafilter=LicenseShortName|Artist|Credit|UsageTerms|LicenseUrl&format=json&formatversion=2`
+    → `pages[0].imageinfo[0].extmetadata`. **`Artist`/`Credit` values are
+    HTML — strip tags before storing.** Stored `attribution` text is composed
+    as `"{Artist stripped} · {LicenseShortName} · {LicenseUrl}"`; any missing
+    piece is omitted; if everything is missing, store `attribution = null`
+    (the UI renders its "unknown attribution" fallback and the admin judges
+    the image in review).
+- Data dirs (inside the existing `./backend:/app` bind mount — no compose
+  volume changes; `backend/var/` gitignored):
+  - raw sources: `DATA_DIR/sources/{motorbike_id}/{document_id}.html`
+  - media: `MEDIA_DIR/motorbikes/{motorbike_id}/…`
+- Image variants (WebP, quality 80, aspect preserved, width-capped):
+  `thumb` 320 px, `card` 640 px, `detail` 1280 px. Served by FastAPI
+  `StaticFiles` mounted at `/media`.
+
+---
+
+## LLM decisions — final
+
+- Factory: `backend/app/llm/models.py` —
+  `get_chat_model(model: str | None = None)` returning
+  `langchain_openrouter.ChatOpenRouter` (official langchain-ai package, pin
+  `langchain-openrouter>=0.2.8,<0.3`; supports `.with_structured_output()`
+  — use `method="json_schema"` — and tool calling; auth via
+  `OPENROUTER_API_KEY`; pass `app_url`/`app_title` instead of manual
+  `HTTP-Referer`/`X-Title` headers). **Never the OpenAI API directly.** If
+  OpenRouter cannot serve a needed capability, stop and report — do not wire
+  another provider. *(Verified 2026-08-26:
+  https://docs.langchain.com/oss/python/integrations/chat/openrouter)*
+- Embeddings go through **OpenRouter's own `POST /api/v1/embeddings`**
+  (OpenAI-shaped; verified 2026-08-26:
+  https://openrouter.ai/docs/api/reference/embeddings). `langchain-openrouter`
+  ships no embeddings class — `backend/app/llm/embeddings.py` wires
+  `langchain_openai.OpenAIEmbeddings(model=settings.embedding_model,
+  base_url="https://openrouter.ai/api/v1", api_key=<OPENROUTER_API_KEY>,
+  check_embedding_ctx_length=False)`. The `check_embedding_ctx_length=False`
+  flag is mandatory (LangChain otherwise pre-tokenizes input into token
+  arrays that OpenAI-compatible gateways reject — langchain issue #35204).
+  Fallback if the wrapper misbehaves on the pinned versions: a thin HTTPX
+  call to the same OpenRouter endpoint (still OpenRouter, still LangChain
+  `Embeddings`-shaped).
+- Defaults via `.env`: `CHAT_MODEL=openai/gpt-4.1-mini`,
+  `EMBEDDING_MODEL=openai/text-embedding-3-small` (served by OpenRouter,
+  1536-dim **native** — do not pass a `dimensions` parameter; pass-through is
+  undocumented and the native size already matches the column),
+  `EMBEDDING_DIMENSIONS=1536`. Every embedding call path asserts
+  `len(vector) == settings.embedding_dimensions` before writing.
+- Prompts: Markdown + Jinja under `backend/app/llm/prompts/`; loader
+  `backend/app/llm/prompts.py` with `StrictUndefined` (missing variable =
+  exception, never silent).
+- Extraction (step 2.17): Pydantic schema mirroring the frozen spec column
+  set 1:1, all fields optional, units normalized by validators (hp → kW,
+  etc.), via `with_structured_output`. Prompt `spec_extraction.md`: extract
+  only from provided text, unknown = null, fetched content is **untrusted
+  data** (baseline injection hygiene; full sweep in 5.1).
+- Token budget: character-based, no tokenizer dependency — Wikipedia document
+  first, each document head-truncated to 12 000 chars, total input capped at
+  `EXTRACTION_MAX_INPUT_CHARS` (60 000).
+- Langfuse: optional callback slot in the factory, config-gated; wired for
+  real in Phase 5.
+
+---
+
+## Chunking & embedding decisions — final
+
+- Chunking (2.18): `MarkdownHeaderTextSplitter` →
+  `RecursiveCharacterTextSplitter` (`langchain-text-splitters`);
+  `CHUNK_SIZE_CHARS=3200` (≈800 tokens), `CHUNK_OVERLAP_CHARS=400`;
+  `heading_path` from the header split. Structural only — no semantic/LLM
+  chunking.
+- Embeddings (2.19): batched 64 texts/request; model + dimensions stored per
+  chunk row. Guard at startup/rebuild: configured `EMBEDDING_DIMENSIONS` ≠
+  `vector` column dimension → **loud failure** naming the required migration;
+  never silent truncation. `app embeddings rebuild` = Taskiq job
+  `embeddings.rebuild` tracked as an operation.
+
+---
+
+## Config keys (added to `.env.dist` + `backend/app/core/config.py`)
+
+```text
+2.10: DATA_DIR=/app/var/data · INGESTION_FETCH_TIMEOUT_SECONDS=20 · INGESTION_MAX_FETCH_BYTES=5242880
+2.11: SEARCH_PROVIDER=tavily · TAVILY_API_KEY= · INGESTION_MAX_WEB_DOCUMENTS=6
+2.12: MEDIA_DIR=/app/var/media
+2.16: OPENROUTER_API_KEY= · CHAT_MODEL=openai/gpt-4.1-mini
+2.17: EXTRACTION_MAX_INPUT_CHARS=60000
+2.18: CHUNK_SIZE_CHARS=3200 · CHUNK_OVERLAP_CHARS=400
+2.19: EMBEDDING_MODEL=openai/text-embedding-3-small · EMBEDDING_DIMENSIONS=1536
+```
+
+---
+
+## New dependencies per step
+
+Backend (`backend/pyproject.toml` + `uv.lock`; run `make build` after):
+
+| Step | Adds |
+|---|---|
+| 2.5 | `taskiq`, `taskiq-redis` |
+| 2.10 | `httpx` (promote to runtime if dev-only), `trafilatura` |
+| 2.12 | `pillow` |
+| 2.16 | `langchain`, `langchain-openrouter>=0.2.8,<0.3`, `jinja2` |
+| 2.18 | `pgvector`, `langchain-text-splitters` |
+| 2.19 | `langchain-openai` (embeddings wrapper only — chat stays on `ChatOpenRouter`) |
+
+Frontend (`frontend/package.json`; run `make rebuild` for the node_modules
+volume):
+
+| Step | Adds |
+|---|---|
+| 2.13 | `react-markdown`, `remark-gfm`, `react-hook-form`, `zod`, `@hookform/resolvers` |
+
+---
+
+## Frontend conventions — final
+
+File placement follows the landed Phase-1 convention (routes in
+`frontend/src/routes/admin/*Route.tsx`, shared components flat in
+`frontend/src/components/`, hooks in `frontend/src/hooks/`). Full component
+inventory and layouts: [`ui-spec.md`](ui-spec.md).
+
+**Hook files (pinned — one file per replacement step so stubs die
+wholesale):**
+
+| File | Exports | Stubbed in | Made real in |
+|---|---|---|---|
+| `frontend/src/hooks/useServerEvents.ts` | `useServerEvents`, `useServerEventsStatus` | — (real from day one) | 2.4 |
+| `frontend/src/hooks/useProducts.ts` | `useProducts(statusFilter)`, `useCreateProduct()`, `useTransitionProduct()` + types `Product`, `ProductStatus`, `ProductFilters` | 2.8 | 2.15 (deleted wholesale) |
+| `frontend/src/hooks/useOperations.ts` | `useLatestOperationsByEntity()` + type `Operation` | 2.8 | 2.15 (deleted wholesale) |
+| `frontend/src/hooks/useProductReview.ts` | `useProduct(id)`, `useProductDocuments(id)`, `useProductImage(id)`, `useSaveDraftSpec(id)`, `useRejectImage()` + types `SourceDocument`, `ProductImage`, `DraftSpec` | 2.13 | 2.20 (deleted wholesale) |
+
+**Query keys** (pinned in `frontend/src/queryKeys.ts`, created in 2.4;
+invalidation always targets the prefix):
+
+| Key | Query |
+|---|---|
+| `["products", "list", {status}]` | `GET /api/products` (+ filter) |
+| `["products", "detail", id]` | `GET /api/products/{id}` |
+| `["operations", "list"]` | `GET /api/operations` |
+| `["documents", productId]` | `GET /api/documents?filter[product]=…` |
+| `["productImages", productId]` | `GET /api/product-images?filter[product]=…` |
+
+List hooks walk pages via `meta.totalCount` (page size 100, catalogue ceiling
+~150 rows) — row 101 must not silently disappear.
+
+`useSaveDraftSpec` **merges the last-fetched `draftSpec` with the form
+values** before the PATCH — the endpoint is full-object replace and the form
+edits only a subset of the frozen fields (ui-spec §8).
+
+**Stub rules** (Phase-1 `useAuth` pattern: real `useQuery`/`useMutation`
+results over fixture data, header comment naming the deleting step;
+components written against a stub must survive its replacement unchanged):
+
+- **2.4 — no stub.** `useServerEvents` is real; an unreachable `/api/events`
+  just makes `EventSource` retry silently. Tests mock `EventSource`.
+- **2.8 — `useProducts.ts` + `useOperations.ts` stubs.** Fixtures: one
+  product per status; the `useOperations` stub maps the `ingesting` bike's id
+  to `{status: "running", progress: 40, message: "Fetching sources (2/6)"}`
+  and one `backlog` bike's id to a `failed` operation (exercises the retry
+  affordance).
+- **2.13 — `useProductReview.ts` stub.** Fixtures: one Markdown document with
+  headings **and a GFM table** (proves the react-markdown config), a full
+  `draftSpec` with some nulls (proves the form's null handling), one
+  `pending` image with attribution.
+- Type regeneration command: `pnpm generate:api` (needs `app-web` up) —
+  first action of 2.15 and 2.20.
+
+---
+
+## Landed decisions
+
+Appended by implementing agents when a step finishes — decisions later steps
+depend on. 1–3 bullets per step, no prose.

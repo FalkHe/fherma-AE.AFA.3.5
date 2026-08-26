@@ -16,7 +16,7 @@ apply; deltas are marked):
   `<Icon>glyph_name</Icon>` (the `MuiIcon` default prop in `theme.ts` sets the
   font class), same as `ThemeModeToggle`.
 - All strings via react-i18next `t()` — full key list in §10, including
-  `aria-label`s. **One deliberate exemption:** operation `statusMessage`
+  `aria-label`s. **One deliberate exemption:** operation `message`
   values and failed-operation error text are server-generated display content
   (like document prose) and render verbatim, not through `t()`.
 - Forms: plain controlled inputs everywhere **except** the draft-spec review
@@ -86,20 +86,25 @@ shared components in `frontend/src/components/`, hooks in
 | `frontend/src/components/ModelDocumentsPanel.tsx` | §7. |
 | `frontend/src/components/ModelSpecsPanel.tsx` | §8. |
 | `frontend/src/components/ModelImagePanel.tsx` | §9. |
-| `frontend/src/hooks/useProducts.ts` | `useProducts(statusFilter)`, `useProduct(id)` (with `include=specs,documents,images`), `useCreateProduct()`, `useTransitionProduct()` (status `PATCH`), `useSaveDraftSpec()`, `useRejectImage()`. |
+| `frontend/src/hooks/useProducts.ts` | `useProducts(statusFilter)`, `useCreateProduct()`, `useTransitionProduct()` (status `PATCH`). |
 | `frontend/src/hooks/useOperations.ts` | `useLatestOperationsByEntity()` — see §3.2. |
+| `frontend/src/hooks/useProductReview.ts` | `useProduct(id)`, `useProductDocuments(id)`, `useProductImage(id)`, `useSaveDraftSpec(id)`, `useRejectImage()`. |
 | `frontend/src/hooks/useServerEvents.ts` | Owned by the job-infrastructure work; §3.3 adds binding requirements on it. |
 
 **Query keys** (invalidation always targets the prefix):
 
 | Key | Query |
 |---|---|
-| `["products", "list", { status }]` | `GET /api/products` (+ `filter[status]` when set) |
-| `["products", "detail", id]` | `GET /api/products/{id}?include=specs,documents,images` |
+| `["products", "list", { status }]` | `GET /api/products` (+ `filter[status]` when set; the hook walks pages via `meta.totalCount`) |
+| `["products", "detail", id]` | `GET /api/products/{id}` (specs travel as the product's `draftSpec`/`verifiedSpec` attributes; operation state comes from §3.2, not an include) |
 | `["operations", "list"]` | `GET /api/operations` |
+| `["documents", productId]` | `GET /api/documents?filter[product]=…` |
+| `["productImages", productId]` | `GET /api/product-images?filter[product]=…` |
 
 Mutations invalidate `["products"]` and `["operations"]` on success (blanket
-prefix — cheap at this scale, immune to key drift).
+prefix — cheap at this scale, immune to key drift); `useRejectImage`
+additionally invalidates `["productImages"]`; the spec save is the one
+exception — it invalidates only `["products", "detail", id]` (§8).
 
 ---
 
@@ -147,23 +152,22 @@ renders `<Alert severity="error">` above the body text
 This UI is the project's graded "progress indicator for long operations".
 The mechanism: ingestion runs as a background job whose operation row
 (`status: queued | running | succeeded | failed`, `progress` percent,
-`statusMessage`) is refetched whenever the SSE stream announces
+`message`) is refetched whenever the SSE stream announces
 `operation.updated`. **No polling** — SSE invalidation plus the reconnect
 rule below is the sole live mechanism.
 
 ### 3.1 `OperationProgress`
 
-Props: `operation` (`{ status, progress, statusMessage }`), `name` (model
+Props: `operation` (`{ status, progress, message }`), `name` (model
 display name, for the `aria-label`), `onRetry?`. Renders a `Stack
 spacing={0.5}` sized to its container (table cell or card):
 
 | Operation state | Rendering |
 |---|---|
 | `queued` | `<LinearProgress variant="indeterminate" />` + `<Typography variant="caption" color="text.secondary">` `admin.backlog.operationQueued`. |
-| `running`, `progress` numeric | `<LinearProgress variant="determinate" value={progress} />` + caption line: `t("admin.backlog.percentComplete", { value: progress })` + ` — ` + `statusMessage` (verbatim, see conventions). |
-| `running`, `progress` null | `<LinearProgress variant="indeterminate" />` + `statusMessage` caption. |
+| `running` | `<LinearProgress variant="determinate" value={progress} />` + caption line: `t("admin.backlog.percentComplete", { value: progress })` + ` — ` + `message` (verbatim, see conventions). `progress` is `NOT NULL DEFAULT 0` server-side — no null branch needed. |
 | `succeeded` | Renders nothing (the entity's status chip is the signal). |
-| `failed` | `<Typography variant="caption" color="error">` `admin.backlog.ingestionFailed` + ` — ` + `statusMessage` verbatim, plus the retry button when `onRetry` is given (see §4 row actions). No progress bar. |
+| `failed` | `<Typography variant="caption" color="error">` `admin.backlog.ingestionFailed` + ` — ` + `message` verbatim, plus the retry button when `onRetry` is given (see §4 row actions). No progress bar. |
 
 The `LinearProgress` gets
 `aria-label={t("admin.backlog.progressLabel", { name })}` (MUI supplies
@@ -184,8 +188,8 @@ contract) must additionally:
 
 - Map events to prefix invalidations: `operation.updated` →
   `["operations"]`; `product.updated` → `["products"]`;
-  `document.updated` → `["products"]` (documents are fetched via the product
-  detail include).
+  `document.updated` → `["documents"]` and `["products"]` (documents are
+  fetched via their own endpoint, see §1 query keys).
 - Export `useServerEventsStatus(): { connected: boolean }` backed by
   module-level state + `useSyncExternalStore`, so layouts can render
   connection warnings without owning the `EventSource`.
@@ -301,7 +305,8 @@ server-side).
 ## 6. AdminModelReviewRoute — `/admin/models/:motorbikeId`
 
 Renders inside `AdminLayout` (Backlog tab stays selected). Data:
-`useProduct(id)` (detail + includes) and, for the ingesting gate,
+`useProduct(id)` for the shell, `useProductDocuments(id)` /
+`useProductImage(id)` per tab, and, for the ingesting gate,
 `useLatestOperationsByEntity`.
 
 **Header** (always rendered once the product is loaded):
@@ -334,7 +339,7 @@ Backlog / Suzuki GSR 600                       ← Breadcrumbs
 | Action | Dialog | Mutation | On success |
 |---|---|---|---|
 | Approve | `approveConfirmTitle` / `approveConfirmBody`; confirm `confirmApprove`, `color="primary"` | `useTransitionProduct` → `PATCH` status `approved` (server promotes draft spec to verified + approves image in one transaction) | Close dialog, invalidate `["products"]` + `["operations"]`, **stay on the page**: chip flips to `approved`, action bar disappears, `approvedNotice` Alert appears (§ gates below). Seeing the published state is the feedback. |
-| Reject | `rejectConfirmTitle` / `rejectConfirmBody`; confirm `confirmReject`, `color="error"` | `useTransitionProduct` → `PATCH` status `rejected` (per the catalogue contract the model is re-queueable; draft and documents retained) | Close dialog, invalidate, `navigate("/admin")` — the backlog row (now `rejected` or `backlog`, whichever the server landed; both render correctly and both offer retry) is the feedback. |
+| Reject | `rejectConfirmTitle` / `rejectConfirmBody`; confirm `confirmReject`, `color="error"` | `useTransitionProduct` → `PATCH` status `rejected` (deterministic per the pinned matrix: `in_review → rejected`; the model is re-queueable, draft and documents retained) | Close dialog, invalidate, `navigate("/admin")` — the backlog row, now `rejected` with a retry action, is the feedback. |
 
 An unsaved-edits guard: if the Specs form is dirty, the approve dialog body
 appends `admin.review.actions.unsavedWarning` as a second
@@ -429,9 +434,10 @@ Fields in `<Grid container spacing={2}>`, each `size={{ xs: 12, sm: 6 }}`:
 | Price band | `TextField select`; options from the generated API enum plus an `common.unknown` (`null`) option; labels via `t(`admin.review.specs.priceBandValues.${value}`, { defaultValue: value })` |
 | Category | `TextField select`; same pattern, `categoryValues.*` |
 
-(If the generated schema types price band or category as free strings rather
-than enums, those two degrade to plain `TextField`s — recorded contingency,
-decided by the generated types, not at runtime.)
+(The price-band and category vocabularies are pinned in
+[`shared-knowledge.md`](shared-knowledge.md) — the selects render exactly
+those option lists, and the `priceBandValues.*` / `categoryValues.*` i18n
+values are filled from them.)
 
 Below the grid: `admin.review.specs.extraHeading`
 (`Typography variant="subtitle1"`) + the `extra` JSONB long tail rendered
@@ -453,7 +459,11 @@ Validation mode `onSubmit` (Phase-1 convention: no keystroke validation).
 
 **Save:** `useSaveDraftSpec` — the draft-spec `PATCH` from the generated
 client (upsert semantics server-side, so a missing draft row is not an error
-case for the form; it simply starts all-null).
+case for the form; it simply starts all-null). **The PATCH is a full-object
+replace and the form edits only a subset of the frozen spec fields — the hook
+must send the last-fetched `draftSpec` merged with the form values**, so
+extraction-filled fields the form doesn't show (`cylinders`, `tankCapacityL`,
+`topSpeedKmh`, `abs`, `msrpEur`, `extra`, `sourceHints`) survive a save.
 
 | State | Rendering |
 |---|---|
@@ -486,13 +496,16 @@ Layout, `<Stack spacing={3} sx={{ maxWidth: 720 }}>`:
    display is not optional):
    `<Typography variant="subtitle2">` `admin.review.image.attributionHeading`;
    `<Typography variant="body2" color="text.secondary">` — the stored
-   attribution/licence text verbatim;
+   attribution/licence text verbatim, or, when `attribution` is `null`
+   (licence metadata unavailable at ingest),
+   `admin.review.image.attributionUnknown` — the admin judges such an image
+   in review;
    `<Link href={imageSourceUrl} target="_blank" rel="noopener noreferrer" variant="body2">`
    `admin.review.image.sourceLink`.
 
 **Reject flow:** `ConfirmDialog` (§2.3) — `rejectConfirmTitle` /
 `rejectConfirmBody`, confirm `admin.review.image.reject`, `color="error"` →
-`useRejectImage` mutation. Success: invalidate `["products", "detail", id]`;
+`useRejectImage` mutation. Success: invalidate `["productImages", productId]`;
 the chip flips to `rejected`, the reject button disappears, and an
 `<Alert severity="info">` `admin.review.image.rejectedNotice` appears
 (replacement upload is explicitly a later feature). **Approving a model with
@@ -514,7 +527,8 @@ model approves a pending image server-side).
 Phase-1 blocks stay; `admin.backlog.emptyTitle`/`emptyBody` **values are
 replaced** (they were placeholders). `common` gains keys. The
 `priceBandValues` / `categoryValues` sub-blocks are filled at implementation
-time from the generated API enums (§8); `defaultValue` fallback covers gaps.
+time from the vocabularies pinned in `shared-knowledge.md` (§8);
+`defaultValue` fallback covers gaps.
 
 ```json
 {
@@ -647,6 +661,7 @@ time from the generated API enums (§8); `defaultValue` fallback covers gaps.
           "card": "Card"
         },
         "attributionHeading": "Attribution / licence",
+        "attributionUnknown": "No licence information could be retrieved for this image — verify before approving.",
         "sourceLink": "Image source",
         "reject": "Reject image",
         "rejectConfirmTitle": "Reject this image?",
@@ -662,7 +677,7 @@ time from the generated API enums (§8); `defaultValue` fallback covers gaps.
         "approveConfirmBody": "The draft specification becomes the verified specification, a pending image is approved, and the model goes live in the catalogue.",
         "confirmApprove": "Publish",
         "rejectConfirmTitle": "Reject this model?",
-        "rejectConfirmBody": "The model returns to the backlog. Its documents and draft specification are kept for the next attempt.",
+        "rejectConfirmBody": "The model is marked rejected. Its documents and draft specification are kept — you can restart ingestion from the backlog list.",
         "confirmReject": "Reject",
         "unsavedWarning": "You have unsaved spec edits — approval publishes the last saved draft, not your current changes.",
         "actionError": "The action failed. Please try again."

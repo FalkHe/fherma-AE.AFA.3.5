@@ -87,22 +87,40 @@ admin section becomes visible only for that account.
 **Goal: an admin can put a motorcycle name into the backlog and end up with an
 approved catalogue entry — documents, verified specs, image.**
 
-- **2.1 Catalogue domain model** — motorbikes with a backlog/lifecycle status
-   flag (backlog → ingesting → in review → approved), source documents with
-   provenance, draft vs verified specs.
-- **2.2 Background job infrastructure** — Taskiq + Redis, operation state in
-   PostgreSQL, SSE notification channel (LISTEN/NOTIFY → EventSource),
-   progress visible to the frontend.
-- **2.3 Ingestion pipeline** — Wikipedia first, then web search over product /
-   technical / magazine sources; fetch, main-text extraction, normalized
-   Markdown, provenance retained; image fetch + Pillow variants.
-- **2.4 Spec extraction** — structured LLM output over the fetched material
-   produces draft specs per model.
-- **2.5 Chunking & embeddings** — deliberate structural chunking, embeddings
-    via OpenRouter (model + dimensions recorded), CLI re-embed command.
-- **2.6 Admin backlog & review UI** — add a model to the backlog, watch
-    ingestion progress live, review documents + extracted specs + image,
-    edit/correct, approve or reject. Approval publishes the model.
+Two parallel tracks, 21 steps of effort ≤ 4, two cross-track sync points
+(S1: 2.15 needs 2.7; S2: 2.20 needs 2.17 + 2.9). The binding contract is
+`docs/roadmap/phase-2/shared-knowledge.md`; UI specs live in
+`docs/roadmap/phase-2/ui-spec.md`.
+
+Backend track (`backend-dev`):
+- **2.1 Catalogue domain models & services** — four tables, one migration,
+   transition matrix, approval promotion (draft→verified).
+- **2.3 JSON:API layer & `/api/products`** — the internal JSON:API layer +
+   the products resource (freezes the S1 OpenAPI surface with 2.6).
+- **2.5 Taskiq broker & worker service** · **2.6 Operations model/service/
+   NOTIFY/API** · **2.7 SSE endpoint & LISTEN fan-out** *(merging 2.7 = S1)*.
+- **2.9 Documents & images endpoints** — read-only provenance + image
+   approve/reject.
+- **2.10 Fetch & extract core** · **2.11 Wikipedia + web-search adapters** ·
+   **2.12 Image pipeline (Pillow variants, `/media`)** ·
+   **2.14 Ingestion orchestration job**.
+- **2.16 LLM foundation (OpenRouter via LangChain)** ·
+   **2.17 Spec extraction** *(merging 2.17 = S2)* ·
+   **2.18 Chunks table & chunking** · **2.19 Embeddings & re-embed CLI**.
+
+Frontend track (`frontend-dev`; 2.2/2.4/2.8/2.13 need zero backend code):
+- **2.2 Admin UI spec** *(ui-ux-designer — done)* · **2.4 SSE client hook** ·
+   **2.8 Backlog screen, UI-only** *(stubbed)* ·
+   **2.15 Wire backlog live** *(S1)* ·
+   **2.13 Review screen, UI-only** *(stubbed)* ·
+   **2.20 Wire review live** *(S2)*.
+
+- **2.21 Phase-2 acceptance run** *(qa)* — the done-criterion, end-to-end.
+
+Commit per finished step; tag at the five milestones pinned in
+`shared-knowledge.md` (M1 plumbing & shells → M2 live backlog → M3 real
+ingestion → M4 review live & knowledge base → M5 acceptance) — each a point
+where both tracks converge into something demoable.
 
 *Done when:* admin types "Suzuki GSR 600", watches ingestion run, reviews and
 approves it, and the model exists in the live catalogue with verified specs.

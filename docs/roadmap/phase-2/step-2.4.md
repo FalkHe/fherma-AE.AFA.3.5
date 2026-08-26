@@ -1,32 +1,59 @@
 ---
 phase: 2
 step: "2.4"
-title: Spec extraction
-summary: A LangChain + OpenRouter structured-output call over the fetched Markdown produces one draft spec row per motorbike, run as the final stage of the ingestion job.
-effort: 8
-dependencies: ["2.1", "2.3"]
+title: SSE client hook
+summary: useServerEvents over native EventSource mapping the pinned event names to TanStack Query invalidations, plus useServerEventsStatus and the pinned query-key module — real code, no stub; a dead /api/events just retries silently.
+effort: 2
+dependencies: ["1.6"]
+agent: frontend-dev
+track: frontend
 ---
 
-# Step 2.4 — Spec extraction
+# Step 2.4 — SSE client hook
 
-**Effort: 8** — one prompt, one Pydantic schema, one chain, but prompt iteration and token-budget handling take real time. This is the project's first LLM call.
+**Effort: 2** — one hook, one key module, one mount point; the backend
+endpoint (2.7) does not need to exist yet.
 
-## Architect's outline
+**Required reading before any code:**
+[`shared-knowledge.md`](shared-knowledge.md) — *SSE / LISTEN-NOTIFY* (event
+names, payload shapes, the invalidation map, the binding hook requirements)
+and *Frontend conventions* (query keys, `frontend/src/queryKeys.ts`).
+[`ui-spec.md`](ui-spec.md) §3.3. Phase-1 shared-knowledge for the
+`queryClient.ts` location. Zero deviations; stop and report if one seems
+necessary.
 
-- OpenRouter chat model factory in `backend/app/llm/` (langchain-openrouter, model via `.env`) — the project's canonical LLM client used by everything later; never the OpenAI API directly.
-- Pydantic extraction schema mirroring the step-2.1 core spec columns exactly (numbers with units normalized: kW, kg, mm, cc), each field optional with an optional per-field source hint; LangChain `with_structured_output`.
-- Prompt at `backend/app/llm/prompts/spec_extraction.md` (Jinja placeholders, versioned in git): extraction only from provided text, "leave unknown fields null", document content treated as untrusted data (baseline prompt-injection hygiene now; full sweep in step 5.1).
-- Input assembly: concatenate normalized Markdown ordered Wikipedia-first, truncated to a configurable token budget (simple head-truncation per document — sufficient for ~5 articles, simpler than map-reduce).
-- `spec_extraction_service.py`: runs the chain, validates/converts units, upserts the `draft` spec row; idempotent re-run replaces the draft, never touches `verified`.
-- Hooked into `jobs/ingestion.py` as the last stage with its own operation progress message; optional Langfuse callback slot left pluggable.
-- Dev CLI `app extract-specs <slug>` to re-run extraction standalone during prompt tuning.
-- Agent assignment: **backend-dev**.
+## Files
+
+- Create `frontend/src/hooks/useServerEvents.ts`
+- Create `frontend/src/hooks/useServerEvents.test.ts`
+- Create `frontend/src/queryKeys.ts` (the pinned key builders)
+- Modify `frontend/src/components/AppLayout.tsx` (mount once when
+  `useAuth().user` exists)
+
+## Implementation outline
+
+- Native `EventSource("/api/events")` (cookie auth is automatic; no
+  fetch-event-source). Listen for the three pinned event names; each →
+  prefix invalidation per the pinned map via the shared `queryClient`.
+- `useServerEventsStatus(): {connected: boolean}` — module-level state +
+  `useSyncExternalStore`, so layouts render connection warnings without
+  owning the `EventSource`.
+- On reconnect (`open` after any `error`): blanket-invalidate `["products"]`
+  + `["operations"]` (gap events are lost). Native retry only — **no custom
+  backoff, no polling**.
+- Mount exactly once in the authenticated shell (`AppLayout`, gated on
+  `user`); unmount closes the connection (logout must not leak a stream).
+
+## Out of scope
+
+- The disconnect warning Alert in `AdminLayout` (rendered in 2.8), the
+  backend endpoint (2.7).
 
 ## Verification
 
-- After `app ingest "Suzuki GSR 600"`, `GET /api/products/<id>?include=specs` shows a `draft` spec with plausible engine cc / power / weight / seat height; re-running `app extract-specs` overwrites the draft only.
+- `pnpm typecheck && pnpm test` green (tests mock `EventSource`: event →
+  correct invalidation; error→open → blanket invalidation; unmount closes).
+- With the backend down, the app renders normally — no console error loop.
 
-## Risks / notes
-
-- Structured-output support varies by OpenRouter model — pick a default model known to handle tool/JSON mode and pin it in `.env.example`.
-- Unit chaos in sources (hp vs kW, dry vs wet weight) — normalize in the schema/prompt now, or the Phase-3 comparison tool inherits garbage.
+**On finish:** append cross-step decisions to `shared-knowledge.md` →
+*Landed decisions*.

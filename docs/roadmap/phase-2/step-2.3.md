@@ -1,33 +1,66 @@
 ---
 phase: 2
 step: "2.3"
-title: Ingestion pipeline
-summary: A Taskiq job that, given a backlog motorbike, fetches Wikipedia then web-search results, extracts main text to normalized Markdown with provenance, fetches an image with Pillow variants, and moves the model to in_review.
-effort: 16
-dependencies: ["2.1", "2.2"]
+title: JSON:API layer & /api/products
+summary: The small internal JSON:API layer (document envelope, page-number pagination, filters, error objects — includes deferred) plus the products resource — list/get, POST create-backlog, PATCH status-transition/draftSpec — admin- and CSRF-guarded.
+effort: 4
+dependencies: ["2.1", "1.3"]
+agent: backend-dev
+track: backend
 ---
 
-# Step 2.3 — Ingestion pipeline
+# Step 2.3 — JSON:API layer & `/api/products`
 
-**Effort: 16** — multiple external integrations (Wikipedia, search provider, HTTPX fetching, trafilatura, Pillow) with real-world messiness, orchestrated inside the job/operation machinery.
+**Effort: 4** — the project's first JSON:API resource; the layer built here
+is reused verbatim by 2.6 and 2.9. **This step's OpenAPI output is consumed
+by frontend sync point S1 (step 2.15) — the pinned contract is the spec, not
+a suggestion.**
 
-## Architect's outline
+**Required reading before any code:**
+[`shared-knowledge.md`](shared-knowledge.md) — *JSON:API conventions* (media
+type, pagination, error objects, resource shapes) and *DB schema* (transition
+matrix; spec camelCase mapping). `docs/architecture.md` → *API Design*.
+Phase-1 `deps.py` provides `current_admin` and `csrf_protect` — use them,
+don't reinvent. Zero deviations; stop and report if one seems necessary.
 
-- `ingestion_service.py` orchestration — status backlog → ingesting; fixed source order: (1) Wikipedia REST API lookup by model name, (2) web search API (provider abstraction, key/provider via `.env`) with query templates biased to product/technical/magazine sources; fetch top ~5 results, optionally follow 1–3 in-page links; no crawling.
-- Fetch layer using HTTPX: timeouts, size caps, content-type checks, per-domain politeness delay; trafilatura for HTML main-text extraction; Docling only if a result is a PDF.
-- Markdown normalization producing the step-2.1 `source_document` rows with full provenance (`sourceUrl`, `sourceTitle`, `sourceType`, `fetchedAt`); original fetched payload retained permanently on disk (configurable data dir, e.g. `backend/var/data/sources/`).
-- Image acquisition: Wikipedia page image first (licence-friendly, attribution captured); Pillow generates the fixed variant set (thumb/card/detail) into a static media dir served by FastAPI static files; `motorbike_image` row in `pending` status.
-- `backend/app/jobs/ingestion.py`: Taskiq task per motorbike, updating the step-2.2 operation (progress per source: searching / fetching n of m / extracting / images) for live frontend progress; end state `in_review`, failure returns the motorbike to `backlog` with the operation marked failed.
-- Trigger: ingestion enqueued automatically on `POST /api/products` backlog creation (simpler than a separate trigger endpoint); also a dev CLI `app ingest <name>` for testing without the UI.
-- Config keys documented in `.env.example`: search provider, API key, fetch limits, media dir. *(docs-writer, small addendum)*
-- Agent assignment: **backend-dev**.
+## Files
+
+- Create `backend/app/api/jsonapi.py` (envelope/pagination/error helpers —
+  small and generic, no third-party framework)
+- Create `backend/app/api/schemas/products.py`
+- Create `backend/app/api/endpoints/products.py`
+- Create `backend/tests/api/test_products.py`
+- Modify `backend/app/main.py`, `backend/app/api/endpoints/__init__.py`,
+  `backend/app/api/schemas/__init__.py`
+
+## Implementation outline
+
+- Resource per the pinned contract: attributes `name, slug, manufacturer,
+  modelName, yearFrom, yearTo, status, draftSpec, verifiedSpec, createdAt,
+  updatedAt`. **No relationships/includes in Phase 2** — the jsonapi layer
+  covers envelope, pagination, filters and error objects only; include
+  machinery is deferred until a resource needs it.
+- `GET /api/products` (`filter[status]` comma-separated, pagination, default
+  sort `-createdAt`), `GET /api/products/{id}`.
+- `POST /api/products` `{name}` → 201 backlog row; duplicate slug → 409
+  `duplicate-model`. **No enqueue yet** — the auto-start side effect is 2.14's.
+- `PATCH /api/products/{id}`: `status` via `product_service.transition`
+  (illegal → 422 `invalid-transition`), `draftSpec` full-object replace
+  (upsert). Rejects `verifiedSpec` in the payload.
+- All routes `Depends(current_admin)`; writes + `Depends(csrf_protect)`.
+  Error responses use the pinned `errors[]` shape with stable `code`s.
+
+## Out of scope
+
+- Documents/images endpoints (2.9), operations endpoint (2.6), enqueue-on-
+  create (2.14).
 
 ## Verification
 
-- `app ingest "Suzuki GSR 600"` (worker running) produces ≥3 `source_document` rows with URLs/titles, a Wikipedia doc first, image variants on disk, motorbike status `in_review`; `GET /api/operations/<id>` shows `succeeded` with progress history messages.
+- `make backend-test` green. As admin via TestClient: POST →
+  201 JSON:API document; `GET ?filter[status]=backlog` returns it; PATCH
+  backlog→approved → 422 `invalid-transition`; PATCH draftSpec persists and
+  echoes camelCase; non-admin → 403; missing CSRF header on write → 403.
 
-## Risks / notes
-
-- Web search provider choice is open — pick one concrete default (e.g. Tavily or Brave) in this step and hide it behind the abstraction; don't build multi-provider support.
-- Bot-blocking or JS-heavy sites yield empty extractions — tolerate partial results (some sources failing is a warning, not a job failure).
-- Wikipedia disambiguation ("GSR 600" vs "GSR600") — use a search-endpoint lookup rather than exact title match, and record what was matched for the admin to see.
+**On finish:** append cross-step decisions (e.g. jsonapi.py helper API) to
+`shared-knowledge.md` → *Landed decisions*.
