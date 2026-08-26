@@ -243,3 +243,21 @@ retrofitting later invalidates all sessions.
   Consequence: the "already-authenticated users are redirected away from
   `/login`/`/register`" behavior is **implemented in step 1.6, not 1.2**
   (with the stub it would make the auth pages unreachable in dev).
+
+---
+
+## Landed decisions
+
+Appended by implementing agents when a step finishes — decisions later steps
+depend on. 1–3 bullets per step, no prose.
+
+### Step 1.1 (auth data model & services)
+
+- Services are **module-level functions** (no classes), taking `AsyncSession`
+  as the first parameter — imitate `app/services/user_service.py` /
+  `session_service.py`.
+- Transaction ownership: `revoke_all_for_user` **commits**;
+  `delete_all_for_user` deliberately **does not commit** — callers own the
+  transaction so demotion/reset stay single-transaction.
+- ORM models define **no relationships** (avoids async lazy-load traps); the
+  `UserRole` native enum uses `values_callable` so lowercase values are stored.
