@@ -9,15 +9,18 @@ Sprint 3 project: a domain-specialised RAG chatbot built with LangChain,
 advanced RAG techniques, tool calling, and a vector database (see `125.md`
 for the full brief and `docs/` for design decisions).
 
-**Current status:** Phase 0 (Foundations) is complete — both apps run in
-Docker Compose and the frontend renders live backend health. Accounts,
-catalogue ingestion, retrieval and the advisor agent are not implemented yet;
+**Current status:** Phases 0–2 are implemented. Accounts (register/login/
+roles) and catalogue ingestion (admin adds a model, live-tracked ingestion
+fetches sources, extracts specs and images, admin reviews and approves) work
+end-to-end — see `docs/ingestion.md`. Retrieval and the advisor agent
+(Phase 3) and the customer-facing chat UI (Phase 4) are not implemented yet;
 see `docs/roadmap.md`.
 
 ## Stack
 
 - Backend: Python, FastAPI, Typer, SQLAlchemy 2 (async), Alembic, PostgreSQL
-  (pgvector), Redis — see `docs/backend-stack.md`.
+  (pgvector), Redis, Taskiq (background jobs), LangChain + OpenRouter (LLM and
+  embeddings) — see `docs/backend-stack.md`.
 - Frontend: TypeScript, React, Vite, Material UI, TanStack Query, React
   Router, react-i18next — see `docs/frontend-stack.md`.
 - Architecture and conventions: `docs/architecture.md`.
@@ -46,10 +49,21 @@ running the apps or their checks directly on the host.
 
    **This step is manual and must stay manual.** No agent or tooling in this
    repo creates `.env` automatically — `.env.dist` documents every key with a
-   comment, and `.env` itself is git-ignored. Right now `.env` only holds
-   non-secret local values (`DATABASE_URL`, `REDIS_URL`, `ENVIRONMENT`,
-   `LOG_LEVEL`); a later phase adds the OpenRouter API key, which is exactly
-   why the "never auto-create `.env`" rule exists from day one.
+   comment, and `.env` itself is git-ignored.
+
+   Most keys have working defaults out of the box (`DATABASE_URL`,
+   `REDIS_URL`, `ENVIRONMENT`, `LOG_LEVEL`, chunking/embedding sizes, fetch
+   limits). Two are optional API keys that degrade gracefully when left
+   empty, at the cost of reduced functionality:
+
+   - `TAVILY_API_KEY` — without it, ingestion runs Wikipedia-only (no web
+     search) and appends a warning instead of failing.
+   - `OPENROUTER_API_KEY` — without it, the app still starts, but spec
+     extraction and embedding generation skip with a warning instead of
+     calling an LLM.
+
+   Set both to use ingestion and the LLM features fully — see
+   `docs/ingestion.md`.
 
 2. Start the stack:
 
@@ -59,11 +73,15 @@ running the apps or their checks directly on the host.
 
    A root `Makefile` wraps the common workflows — `make help` lists them all
    (`up`, `down`, `build`, `rebuild`, `logs`, `ps`, plus the test/lint
-   targets described below).
+   targets described below). This starts `app-web` (API), `app-worker`
+   (Taskiq background jobs — ingestion, chunking, embeddings), `frontend`,
+   `postgres`, and `redis`.
 
    The `app-web` container runs `alembic upgrade head` before starting
    Uvicorn, so Postgres must be healthy first — Compose's `depends_on:
-   condition: service_healthy` enforces that.
+   condition: service_healthy` enforces that. `app-worker` never runs
+   migrations; it depends on the same healthy Postgres plus Redis (the
+   Taskiq broker), but not on `app-web` itself.
 
 3. Open:
    - Frontend: <http://localhost:5173>
@@ -75,6 +93,7 @@ running the apps or their checks directly on the host.
 
    ```bash
    docker compose logs -f app-web
+   docker compose logs -f app-worker   # background jobs: ingestion, chunking, embeddings
    docker compose logs -f frontend
    ```
 
@@ -97,6 +116,13 @@ docker compose exec app-web app users reset-password <name>
 
 The new password is prompted for twice and hidden — never pass it as an
 argument.
+
+## Adding a motorcycle to the catalogue
+
+Once signed in as admin, open <http://localhost:5173/admin> to add a model by
+name, watch ingestion progress live, and review/approve the result. See
+`docs/ingestion.md` for the full flow, the ingestion CLI commands, and the
+re-chunk/re-embed commands.
 
 ## Running the backend locally with uv
 
@@ -206,6 +232,7 @@ convention that keeps it from drifting.
 
 - `docs/architecture.md` — binding architecture decisions
 - `docs/backend-stack.md`, `docs/frontend-stack.md` — stack choices and why
+- `docs/ingestion.md` — admin ingestion flow and CLI commands
 - `docs/roadmap.md` — phased implementation plan
 - `docs/core-requirements.md` — grading requirements
 - `docs/qa-checklist.md` — QA checklist and known rough edges
