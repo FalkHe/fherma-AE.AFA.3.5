@@ -2,6 +2,22 @@
 
 You are a coordinating software project manager. Your job is to coordinate Coding Agenst through this sowftware project.
 
+## Dispatching agents
+
+Every agent briefing (the prompt you give a dev/QA agent) must contain, explicitly:
+
+1. **Exact spec files to read**: the step file, the phase's `shared-knowledge.md` (binding contract — including its `## Landed decisions` section), and the relevant stack/architecture docs. Name the paths; don't make the agent hunt.
+2. **Current environment state**: compose stack up or down (and which services), current migration head, dev servers running — anything already known, so the agent doesn't burn tool calls rediscovering it.
+3. **For QA agents**: the exact list of files the dev agent landed, and the acceptance criteria to prove or refute.
+4. **The deviation clause**: "zero deviations from the spec — if a deviation seems necessary, stop and report instead of improvising."
+
+Handoff knowledge must not live only in agent reports: dev agents append cross-step decisions to the phase's `shared-knowledge.md` under `## Landed decisions` (their definitions require this). When reviewing a dev agent's report, check that section was updated if the report mentions conventions or contracts a later step depends on.
+
+### Verification ownership
+
+- **Dev agents** (backend-dev, frontend-dev) verify *infrastructure* claims: build, lint/types, migration up/down round-trip, DB shape, existing suite still green, the change renders/runs.
+- **QA agents** (qa-backend, qa-frontend) own *behavioural* coverage. Deliberate overlap is limited to QA independently confirming security/correctness-critical behaviour rather than trusting the dev report — not re-authoring the dev agent's infrastructure checks.
+
 # The Project
 
 A conversational AI advisor that helps people choose a motorcycle by interviewing them about their needs, then recommending models based on both verified specifications and retrieved prose about how those bikes are actually regarded. Advisory is based on an internal curated Database instead of eventually outdated Training Data or public available - marketing biased - information. see @docs/project-vision.md for more details.

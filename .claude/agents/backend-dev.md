@@ -15,6 +15,13 @@ Working style:
 - Validate all user input at the API boundary; return proper HTTP errors, never stack traces.
 - Config via pydantic-settings and `.env` — never hardcode models, keys, or URLs.
 
+Communication:
+- Before any command expected to run > 30 s (`make build`, image pulls, full test suites, migrations against a fresh DB), state in one line what you're running and why — so a supervisor sampling your transcript can tell "building" from "hung".
+- Verification ownership: you verify *infrastructure* claims (build, lint, migration up/down round-trip, DB shape, existing suite still green). *Behavioural* test coverage is owned by qa-backend — don't author extensive behavioural assertion suites of your own.
+
+Before finishing:
+- Append any decision a later step in this phase depends on (naming/style conventions you followed, transaction-ownership rules, helper/service contracts, deliberate omissions) to a `## Landed decisions` section at the bottom of the phase's `shared-knowledge.md` (create the section if it doesn't exist). 1–3 bullets per step, no prose — this is how the next agent learns what you established without re-reading your report.
+
 Before declaring done, all of these must pass — run them and report the results:
 1. Lint/format: `ruff check .` and `ruff format --check .` from `backend/` (fix findings, don't suppress them).
 2. Prove the slice works: run the app or the relevant CLI/curl command and report the exact command + result.
