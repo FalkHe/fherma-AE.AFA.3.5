@@ -13,6 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.db.models.operation import Operation, OperationStatus
 from app.db.models.user import UserRole
 from app.db.session import get_db_session
 from tests.services.conftest import FakeAsyncSession
@@ -111,7 +112,9 @@ def _patch(client: TestClient, product_id: str, attributes: dict):
 # --- POST /api/products -------------------------------------------------------
 
 
-def test_create_returns_201_json_api_document_for_a_backlog_row(admin_client: TestClient) -> None:
+def test_create_returns_201_json_api_document_for_an_ingesting_row(
+    admin_client: TestClient,
+) -> None:
     response = _create(admin_client)
 
     assert response.status_code == 201, response.text
@@ -123,10 +126,43 @@ def test_create_returns_201_json_api_document_for_a_backlog_row(admin_client: Te
     assert set(resource["attributes"]) == PRODUCT_ATTRIBUTES
     assert resource["attributes"]["name"] == "Suzuki GSR 600"
     assert resource["attributes"]["slug"] == "suzuki-gsr-600"
-    assert resource["attributes"]["status"] == "backlog"
+    # Adding a model auto-starts its ingestion (step 2.14).
+    assert resource["attributes"]["status"] == "ingesting"
     assert resource["attributes"]["draftSpec"] is None
     assert resource["attributes"]["verifiedSpec"] is None
     assert resource["attributes"]["createdAt"] is not None
+
+
+def test_create_enqueues_the_ingestion_job_for_a_queued_operation(
+    admin_client: TestClient,
+    fake_session: FakeAsyncSession,
+    recorded_enqueues: list[tuple[str, str]],
+) -> None:
+    product_id = _create(admin_client).json()["data"]["id"]
+
+    operations = fake_session.rows(Operation)
+    assert [
+        (operation.type, operation.status, operation.entity_id) for operation in operations
+    ] == [("ingestion", OperationStatus.QUEUED, product_id)]
+    # The task is enqueued after both commits, with ids only.
+    assert recorded_enqueues == [(product_id, operations[0].id)]
+
+
+def test_patch_to_ingesting_re_enqueues_the_job(
+    admin_client: TestClient, recorded_enqueues: list[tuple[str, str]]
+) -> None:
+    created = _create(admin_client).json()["data"]
+    for target in ("in_review", "rejected"):
+        assert _patch(admin_client, created["id"], {"status": target}).status_code == 200
+
+    response = _patch(admin_client, created["id"], {"status": "ingesting"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["attributes"]["status"] == "ingesting"
+    assert [motorbike_id for motorbike_id, _ in recorded_enqueues] == [
+        created["id"],
+        created["id"],
+    ]
 
 
 def test_create_duplicate_name_returns_409_duplicate_model(admin_client: TestClient) -> None:
@@ -172,7 +208,7 @@ def test_create_with_a_name_without_slug_characters_returns_422(admin_client: Te
 def test_list_returns_the_created_row_when_filtered_by_status(admin_client: TestClient) -> None:
     created = _create(admin_client).json()["data"]
 
-    response = admin_client.get("/api/products", params={"filter[status]": "backlog"})
+    response = admin_client.get("/api/products", params={"filter[status]": "ingesting"})
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -266,20 +302,20 @@ def test_patch_illegal_status_returns_422_invalid_transition(admin_client: TestC
     errors = response.json()["errors"]
     assert errors[0]["status"] == "422"
     assert errors[0]["code"] == "invalid-transition"
-    assert "backlog" in errors[0]["detail"]
+    assert "ingesting" in errors[0]["detail"]
 
     # The row is untouched.
     stored = admin_client.get(f"/api/products/{created['id']}").json()
-    assert stored["data"]["attributes"]["status"] == "backlog"
+    assert stored["data"]["attributes"]["status"] == "ingesting"
 
 
 def test_patch_legal_status_transitions_the_row(admin_client: TestClient) -> None:
     created = _create(admin_client).json()["data"]
 
-    response = _patch(admin_client, created["id"], {"status": "ingesting"})
+    response = _patch(admin_client, created["id"], {"status": "in_review"})
 
     assert response.status_code == 200, response.text
-    assert response.json()["data"]["attributes"]["status"] == "ingesting"
+    assert response.json()["data"]["attributes"]["status"] == "in_review"
 
 
 def test_patch_draft_spec_persists_and_echoes_camel_case(admin_client: TestClient) -> None:

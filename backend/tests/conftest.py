@@ -5,6 +5,11 @@ plain `uv run pytest`. Routes that depend on a session receive a stub via
 FastAPI's dependency overrides, so `app.db.session.get_engine()` is never
 called — which also side-steps the `lru_cache`'d-engine / event-loop pitfall
 described in `docs/qa-checklist.md`.
+
+The same holds for Redis: adding a product auto-starts its ingestion, so the
+`enqueue_ingestion` seam of `product_service` is replaced for **every** test by
+the autouse `recorded_enqueues` fixture. A test that wants to prove the enqueue
+happened simply requests that fixture and reads the recorded ids.
 """
 
 from collections.abc import Callable, Iterator
@@ -16,6 +21,7 @@ from fastapi.testclient import TestClient
 from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.main import create_app
+from app.services import product_service
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -32,6 +38,21 @@ def _settings_environment() -> Iterator[None]:
         get_settings.cache_clear()
         yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def recorded_enqueues(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    """Record `ingestion.run` enqueues instead of pushing them onto Redis.
+
+    Returns the `(motorbike_id, operation_id)` pairs, in order.
+    """
+    calls: list[tuple[str, str]] = []
+
+    async def record(motorbike_id: str, operation_id: str) -> None:
+        calls.append((motorbike_id, operation_id))
+
+    monkeypatch.setattr(product_service, "enqueue_ingestion", record)
+    return calls
 
 
 class StubSession:

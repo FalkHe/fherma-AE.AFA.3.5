@@ -136,12 +136,13 @@ def test_patch_without_a_session_returns_401(anon_client: TestClient) -> None:
 def test_admin_with_csrf_can_create_and_transition(admin_client: TestClient) -> None:
     """The success path of the matrix: admin + CSRF header succeeds end to end."""
     created = _create(admin_client).json()["data"]
-    assert created["attributes"]["status"] == "backlog"
+    # Creation auto-starts the ingestion (step 2.14).
+    assert created["attributes"]["status"] == "ingesting"
 
-    response = _patch(admin_client, created["id"], {"status": "ingesting"})
+    response = _patch(admin_client, created["id"], {"status": "in_review"})
 
     assert response.status_code == 200, response.text
-    assert response.json()["data"]["attributes"]["status"] == "ingesting"
+    assert response.json()["data"]["attributes"]["status"] == "in_review"
 
 
 # --- 2. `verifiedSpec` can never be written ------------------------------------
@@ -166,7 +167,6 @@ def test_draft_spec_patch_never_touches_an_already_promoted_verified_spec(
     product_id = created["id"]
 
     assert _patch(admin_client, product_id, {"draftSpec": {"engineCc": 599}}).status_code == 200
-    assert _patch(admin_client, product_id, {"status": "ingesting"}).status_code == 200
     assert _patch(admin_client, product_id, {"status": "in_review"}).status_code == 200
     approved = _patch(admin_client, product_id, {"status": "approved"}).json()["data"]
     assert approved["attributes"]["verifiedSpec"]["engineCc"] == 599
@@ -186,7 +186,6 @@ def test_draft_spec_patch_never_touches_an_already_promoted_verified_spec(
 def test_patch_illegal_transition_ingesting_to_approved(admin_client: TestClient) -> None:
     created = _create(admin_client).json()["data"]
     product_id = created["id"]
-    assert _patch(admin_client, product_id, {"status": "ingesting"}).status_code == 200
 
     response = _patch(admin_client, product_id, {"status": "approved"})
 
@@ -201,7 +200,6 @@ def test_patch_illegal_transition_ingesting_to_approved(admin_client: TestClient
 def test_patch_illegal_transition_in_review_to_backlog(admin_client: TestClient) -> None:
     created = _create(admin_client).json()["data"]
     product_id = created["id"]
-    assert _patch(admin_client, product_id, {"status": "ingesting"}).status_code == 200
     assert _patch(admin_client, product_id, {"status": "in_review"}).status_code == 200
 
     response = _patch(admin_client, product_id, {"status": "backlog"})
@@ -216,7 +214,7 @@ def test_patch_illegal_transition_in_review_to_backlog(admin_client: TestClient)
 def test_patch_illegal_transition_approved_has_no_legal_moves(admin_client: TestClient) -> None:
     created = _create(admin_client).json()["data"]
     product_id = created["id"]
-    for target in ("ingesting", "in_review", "approved"):
+    for target in ("in_review", "approved"):
         assert _patch(admin_client, product_id, {"status": target}).status_code == 200
 
     response = _patch(admin_client, product_id, {"status": "rejected"})
@@ -235,7 +233,7 @@ def test_duplicate_name_does_not_create_a_second_row(admin_client: TestClient) -
     assert _create(admin_client).status_code == 201
     assert _create(admin_client, name="SUZUKI gsr 600!!").status_code == 409
 
-    response = admin_client.get("/api/products", params={"filter[status]": "backlog"})
+    response = admin_client.get("/api/products", params={"filter[status]": "ingesting"})
 
     assert response.json()["meta"] == {"totalCount": 1}
 

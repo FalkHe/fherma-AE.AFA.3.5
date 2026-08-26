@@ -1034,3 +1034,52 @@ depend on. 1–3 bullets per step, no prose.
   the lockfile stays valid) → `docker compose build frontend node-cli` →
   `docker compose up -d --force-recreate --renew-anon-volumes frontend`. No
   `make rebuild` needed, and other services stay untouched.
+
+### Step 2.14 (ingestion orchestration job)
+
+- **Contracts 2.17/2.19 build on:** `app/services/ingestion/service.py` exposes
+  `ingest(session, motorbike, operation, *, client=None, gate=None)` (one
+  `fetch.build_client()` per run, reused by every adapter) and
+  `abandon(session, motorbike, operation, error)` (bike → `backlog` **only if
+  still `ingesting`**, then operation `failed`); a new stage goes between
+  `_Run._image_stage` and `_Run._complete`, reporting through
+  `_Run._advance(progress, message)` and `_Run._warn(detail)`. The task is
+  `ingestion.run(motorbike_id: str, operation_id: str)` — ids only, its own
+  session; it re-raises `TransientJobError` untouched and, for any other
+  exception, rolls back → `abandon` → re-raise. `operation_service.get(session,
+  id)` landed (2.6's placeholder), and `document_service.create_document` gained
+  `document_id=` because the retained payload is named after the row
+  (`storage.save_raw_document`), so the id is generated before the file is
+  written.
+- **Enqueue seam:** `product_service.start_ingestion(session, motorbike) ->
+  Operation` is the only way an ingestion starts — `transition` →
+  `operation_service.create("ingestion", entity_type="motorbike", entity_id=…)`
+  → `enqueue_ingestion(…)`, each committed before the next.
+  `product_service.enqueue_ingestion` imports `app.jobs.ingestion` **inside the
+  function** (a top-level import is circular and would drag Redis into every
+  importer) and is the stub seam: the autouse `recorded_enqueues` fixture in
+  `tests/conftest.py` replaces it for every test and records
+  `(motorbike_id, operation_id)`. `POST /api/products` therefore answers `201`
+  with status **`ingesting`**, and `PATCH status=ingesting` re-enqueues — the
+  existing product API tests were updated accordingly (create → `ingesting`,
+  "legal transition" now targets `in_review`).
+- **Message & failure policy (pinned wording, implemented in the constants of
+  `service.py`):** every milestone message carries the warnings collected so far
+  (`"<milestone> — <w1>; <w2>"`), a warned success ends as
+  `"Completed with warnings: …"` at 100 %, and `operation_service` truncation at
+  512 chars is accepted. Zero stored documents → `abandon` with
+  `"No usable source documents could be ingested. …"`, **except** when a
+  network reason caused it (`wikipedia` `search_failed`/`article_fetch_failed`,
+  `fetch` `timeout`/`network_error`) → `TransientJobError`, which deliberately
+  leaves the operation `running` and the bike `ingesting` for the retry.
+  Deliberate omission: exhausted retries are not reaped in Phase 2 (no
+  `ingesting → ingesting` transition exists), so a permanently unreachable
+  network leaves a row stuck in `ingesting` until an operator intervenes.
+- **Fresh-run semantics:** `_discard_previous_run` deletes the previous
+  `source_documents` and `motorbike_images` **rows and their files** (raw
+  payloads, original, all three variants) before the first new document, so a
+  retry never mixes two runs and `motorbike_images` keeps ≤1 row per model. No
+  event announces the deletion (there is no `documentId` to name) — the new rows
+  emit `document.updated` each. `app ingest run "<name>"` is create-or-find by
+  slug + `start_ingestion` inside `broker.startup()/shutdown()`; it has no test
+  file (same precedent as `probe`/`fetch-image`) and was verified live.

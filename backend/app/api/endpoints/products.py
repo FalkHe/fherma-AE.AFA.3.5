@@ -164,10 +164,11 @@ async def get_product(session: SessionDep, product_id: ProductIdDep) -> ProductD
     responses=jsonapi.error_responses(status.HTTP_409_CONFLICT),
 )
 async def create_product(session: SessionDep, payload: ProductCreateRequest) -> ProductDocument:
-    """Create a `backlog` entry from a display name.
+    """Create an entry from a display name and start ingesting it.
 
-    Ingestion is **not** started here yet; that side effect arrives with the
-    auto-start step, and until then a new row simply waits in `backlog`.
+    Adding a model auto-starts its ingestion: the row is created in `backlog`,
+    moved to `ingesting` and its job enqueued — every step committed before the
+    next — so the answer already carries the state the admin backlog shows.
     """
     try:
         motorbike = await product_service.create_backlog(session, payload.data.attributes.name)
@@ -178,6 +179,10 @@ async def create_product(session: SessionDep, payload: ProductCreateRequest) -> 
             detail=f"A product with slug '{error.args[0]}' already exists.",
         ) from error
 
+    await product_service.start_ingestion(session, motorbike)
+    # The status change flushed the row, expiring the server-side `updated_at`
+    # (see the PATCH handler): render from a fully loaded row.
+    await session.refresh(motorbike)
     return await _document(session, motorbike)
 
 
@@ -197,6 +202,8 @@ async def update_product(
 
     Both attributes are optional and applied in that order, so a request that
     saves a draft and approves in one go promotes the values it just sent.
+    A transition to `ingesting` is a retry: it re-enqueues the ingestion job
+    server-side, so the UI only ever asks for the status it wants.
     """
     motorbike = await _get_or_404(session, product_id)
     attributes = payload.data.attributes
@@ -208,7 +215,10 @@ async def update_product(
 
     if attributes.status is not None:
         try:
-            await product_service.transition(session, motorbike, attributes.status)
+            if attributes.status is MotorbikeStatus.INGESTING:
+                await product_service.start_ingestion(session, motorbike)
+            else:
+                await product_service.transition(session, motorbike, attributes.status)
         except product_service.InvalidTransitionError as error:
             raise jsonapi.JsonApiError(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

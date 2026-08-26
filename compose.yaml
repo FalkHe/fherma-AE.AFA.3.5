@@ -31,7 +31,14 @@ services:
     # neither. Schema migration belongs to app-web alone.
     entrypoint: []
     # The module list grows as job families are added.
-    command: ["taskiq", "worker", "app.jobs.broker:broker", "app.jobs.demo"]
+    command:
+      [
+        "taskiq",
+        "worker",
+        "app.jobs.broker:broker",
+        "app.jobs.demo",
+        "app.jobs.ingestion",
+      ]
     depends_on:
       postgres:
         # Jobs write operation state, so the database must accept connections.

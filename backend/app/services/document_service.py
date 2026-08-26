@@ -9,6 +9,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.models.base import new_ulid
 from app.db.models.source_document import SourceDocument, SourceType
 
 
@@ -22,13 +23,20 @@ async def create_document(
     content_markdown: str,
     fetched_at: datetime,
     source_url: str | None = None,
+    document_id: str | None = None,
 ) -> SourceDocument:
     """Store one fetched document for `motorbike_id` and return the row.
 
     The payload is keyword-only: at seven fields, positional call sites in the
     ingestion job would be unreadable and easy to transpose.
+
+    `document_id` lets the caller supply the id: the retained raw payload is
+    named after the row (`storage.save_raw_document`), so the ingestion job
+    generates the id before it writes the file and passes it in here. Omitted,
+    the usual ULID default applies.
     """
     document = SourceDocument(
+        id=document_id or new_ulid(),
         motorbike_id=motorbike_id,
         source_type=source_type,
         source_url=source_url,

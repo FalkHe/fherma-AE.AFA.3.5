@@ -11,9 +11,12 @@ the real internet — the one thing the test suite deliberately never does.
 - `app ingest fetch-image` (step 2.12) downloads one image for an existing
   catalogue entry and writes the variant set, so the `/media` mount and the
   pinned paths can be inspected against a real photo.
+- `app ingest run` (step 2.14) is the real thing: it creates or finds the
+  catalogue entry for a model name and enqueues its ingestion, exactly as
+  `POST /api/products` does. The work happens in the worker, so this command
+  prints the operation id and returns.
 
-Only `fetch-image` touches the database (it creates the `pending` image row);
-none of them enqueues a job.
+`fetch-image` and `run` touch the database; only `run` enqueues a job.
 
 Follows the CLI async pattern of `app.cli.users`: the Typer command body stays
 synchronous and calls `asyncio.run(...)`.
@@ -27,6 +30,7 @@ import typer
 
 from app.db.models.base import new_ulid
 from app.db.session import get_sessionmaker
+from app.jobs.broker import broker
 from app.services import image_service, product_service
 from app.services.ingestion import extract, fetch, search, storage, wikipedia
 
@@ -170,6 +174,48 @@ async def _fetch_image(
         if motorbike is None:
             _fail(f"No catalogue entry with id {motorbike_id!r}.")
         return await image_service.ingest_image(session, motorbike.id, url, attribution)
+
+
+@app.command("run")
+def run(
+    name: Annotated[str, typer.Argument(help='Model name, e.g. "Suzuki GSR600".')],
+) -> None:
+    """Enqueue a full ingestion for one model, creating its entry if needed.
+
+    The catalogue entry is looked up by its slug, so running this twice for the
+    same name re-ingests the existing model instead of adding a second one.
+    Nothing is waited for: the worker log and `GET /api/operations` are where
+    the run is followed.
+    """
+    if not product_service.slugify(name):
+        _fail(f"{name!r} contains no characters a slug can be built from.")
+
+    try:
+        motorbike_name, operation_id = asyncio.run(_run(name))
+    except product_service.InvalidTransitionError as error:
+        _fail(str(error))
+
+    typer.echo(f"Enqueued ingestion of {motorbike_name!r} as operation {operation_id}.")
+
+
+async def _run(name: str) -> tuple[str, str]:
+    """Async half of `run`: create-or-find, then the pinned enqueue sequence.
+
+    The broker connection is opened and closed around the enqueue, because a
+    one-off CLI process owns the Redis connection it opens (same contract as
+    `app jobs ping`).
+    """
+    await broker.startup()
+    try:
+        async with get_sessionmaker()() as session:
+            motorbike = await product_service.get_by_slug(session, product_service.slugify(name))
+            if motorbike is None:
+                motorbike = await product_service.create_backlog(session, name)
+                typer.echo(f"Created catalogue entry {motorbike.id}.", err=True)
+            operation = await product_service.start_ingestion(session, motorbike)
+            return motorbike.name, operation.id
+    finally:
+        await broker.shutdown()
 
 
 def _fail(message: str) -> NoReturn:

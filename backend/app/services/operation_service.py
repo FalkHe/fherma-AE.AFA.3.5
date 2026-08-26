@@ -80,6 +80,16 @@ async def create(
     return operation
 
 
+async def get(session: AsyncSession, operation_id: str) -> Operation | None:
+    """Return one operation, or `None` when the id is unknown.
+
+    The worker needs this: a task is enqueued with an operation id and reloads
+    the row in its own session before it starts reporting into it.
+    """
+    result = await session.execute(select(Operation).where(Operation.id == operation_id))
+    return result.scalar_one_or_none()
+
+
 async def start(session: AsyncSession, operation: Operation) -> Operation:
     """Mark `operation` as `running` and stamp `started_at`."""
     operation.status = OperationStatus.RUNNING

@@ -12,6 +12,10 @@ Two rules are enforced here and nowhere else:
   copies the draft row and flips pending images in the same transaction, so a
   model can never be publicly visible with a half-applied review.
 
+`start_ingestion` is the third rule: starting an ingestion is a status change,
+an operation row and a queued task — in that order, each committed before the
+next — so no caller can enqueue a job the admin UI cannot yet see.
+
 Every public write here also publishes the pinned `product.updated` event
 through `operation_service.notify` — **after** its commit, per the ordering rule
 documented there. That event is what flips a backlog chip in a browser without
@@ -29,7 +33,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus, MotorbikeImage
 from app.db.models.motorbike_spec import SPEC_FIELDS, MotorbikeSpec, SpecKind
+from app.db.models.operation import Operation
 from app.services import operation_service
+
+# `operations.type` of an ingestion run — the admin backlog reads its progress
+# cells from these rows.
+INGESTION_OPERATION_TYPE = "ingestion"
 
 # Which status may follow which. Anything absent from this map is rejected —
 # including a no-op change to the current status.
@@ -218,6 +227,44 @@ async def transition(
     await session.commit()
     await _announce(session, motorbike_id)
     return motorbike
+
+
+async def start_ingestion(session: AsyncSession, motorbike: Motorbike) -> Operation:
+    """Move `motorbike` into `ingesting`, track the run and enqueue the job.
+
+    The ordering is the pinned one and the reason this function exists: the
+    status change commits, the `queued` operation row commits — so the admin UI
+    shows the job the moment it is accepted — and only then is the task
+    enqueued. A worker can therefore never pick up a job whose state is not yet
+    visible.
+
+    Raises:
+        InvalidTransitionError: the row may not start an ingestion right now
+            (only `backlog` and `rejected` may).
+    """
+    await transition(session, motorbike, MotorbikeStatus.INGESTING)
+    operation = await operation_service.create(
+        session,
+        INGESTION_OPERATION_TYPE,
+        entity_type=operation_service.MOTORBIKE_ENTITY_TYPE,
+        entity_id=motorbike.id,
+    )
+    await enqueue_ingestion(motorbike.id, operation.id)
+    return operation
+
+
+async def enqueue_ingestion(motorbike_id: str, operation_id: str) -> None:
+    """Push `ingestion.run` onto the queue — ids only, after both commits.
+
+    The task module is imported here instead of at module import time on
+    purpose: it pulls in the broker and, through the orchestration service,
+    this module — a top-level import would be circular, and it would drag the
+    Redis wiring into every importer of the catalogue service. This is also the
+    seam the test suite replaces, so no test ever needs Redis.
+    """
+    from app.jobs.ingestion import run as ingestion_run
+
+    await ingestion_run.kiq(motorbike_id, operation_id)
 
 
 async def transition_image(
