@@ -172,9 +172,9 @@ def test_draft_spec_patch_never_touches_an_already_promoted_verified_spec(
     assert approved["attributes"]["verifiedSpec"]["engineCc"] == 599
 
     # A further draft edit must not reach the verified row.
-    after_draft_edit = _patch(
-        admin_client, product_id, {"draftSpec": {"engineCc": 750}}
-    ).json()["data"]
+    after_draft_edit = _patch(admin_client, product_id, {"draftSpec": {"engineCc": 750}}).json()[
+        "data"
+    ]
 
     assert after_draft_edit["attributes"]["draftSpec"]["engineCc"] == 750
     assert after_draft_edit["attributes"]["verifiedSpec"]["engineCc"] == 599
