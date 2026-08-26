@@ -10,6 +10,11 @@ Two rules are enforced here and nowhere else:
 * **`verified` specifications are only ever promotions of a draft.** Approval
   copies the draft row and flips pending images in the same transaction, so a
   model can never be publicly visible with a half-applied review.
+
+Every public write here also publishes the pinned `product.updated` event
+through `operation_service.notify` — **after** its commit, per the ordering rule
+documented there. That event is what flips a backlog chip in a browser without
+a reload, so a new write path that changes a row must announce it too.
 """
 
 import re
@@ -23,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus, MotorbikeImage
 from app.db.models.motorbike_spec import SPEC_FIELDS, MotorbikeSpec, SpecKind
+from app.services import operation_service
 
 # Which status may follow which. Anything absent from this map is rejected —
 # including a no-op change to the current status.
@@ -71,6 +77,12 @@ def slugify(name: str) -> str:
 async def get_motorbike(session: AsyncSession, motorbike_id: str) -> Motorbike | None:
     """Return one catalogue entry, or `None` when the id is unknown."""
     result = await session.execute(select(Motorbike).where(Motorbike.id == motorbike_id))
+    return result.scalar_one_or_none()
+
+
+async def get_by_slug(session: AsyncSession, slug: str) -> Motorbike | None:
+    """Return the catalogue entry with `slug`, or `None` when it is unknown."""
+    result = await session.execute(select(Motorbike).where(Motorbike.slug == slug))
     return result.scalar_one_or_none()
 
 
@@ -127,12 +139,13 @@ async def create_backlog(session: AsyncSession, name: str) -> Motorbike:
         DuplicateModelError: the derived slug is already in the catalogue.
     """
     slug = slugify(name)
-    if await _get_by_slug(session, slug) is not None:
+    if await get_by_slug(session, slug) is not None:
         raise DuplicateModelError(slug)
 
     motorbike = Motorbike(name=name.strip(), slug=slug, status=MotorbikeStatus.BACKLOG)
     session.add(motorbike)
     await session.commit()
+    await _announce(session, motorbike.id)
     return motorbike
 
 
@@ -151,10 +164,12 @@ async def transition(
     if new_status not in LEGAL_TRANSITIONS[motorbike.status]:
         raise InvalidTransitionError(motorbike.status, new_status)
 
+    motorbike_id = motorbike.id
     motorbike.status = new_status
     if new_status is MotorbikeStatus.APPROVED:
-        await _apply_approval(session, motorbike.id)
+        await _apply_approval(session, motorbike_id)
     await session.commit()
+    await _announce(session, motorbike_id)
     return motorbike
 
 
@@ -172,6 +187,7 @@ async def upsert_draft_spec(
     """
     spec = await _upsert_spec(session, motorbike_id, SpecKind.DRAFT, values)
     await session.commit()
+    await _announce(session, motorbike_id)
     return spec
 
 
@@ -249,9 +265,9 @@ def _spec_values(spec: MotorbikeSpec) -> dict[str, Any]:
     return {field: getattr(spec, field) for field in SPEC_FIELDS}
 
 
-async def _get_by_slug(session: AsyncSession, slug: str) -> Motorbike | None:
-    result = await session.execute(select(Motorbike).where(Motorbike.slug == slug))
-    return result.scalar_one_or_none()
+async def _announce(session: AsyncSession, motorbike_id: str) -> None:
+    """Publish the pinned `product.updated` payload — ids only, after commit."""
+    await operation_service.notify(session, {"event": "product.updated", "productId": motorbike_id})
 
 
 async def _get_spec(

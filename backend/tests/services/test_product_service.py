@@ -91,7 +91,9 @@ def test_create_backlog_stores_slug_and_backlog_status(fake_session: FakeAsyncSe
     assert motorbike.slug == "suzuki-gsr-600"
     assert motorbike.status is MotorbikeStatus.BACKLOG
     assert motorbike.id is not None
-    assert fake_session.commit_count == 1
+    # One commit for the row, one for the `product.updated` announcement that
+    # follows it (`operation_service.notify` commits its own `pg_notify`).
+    assert fake_session.commit_count == 2
 
 
 def test_create_backlog_duplicate_slug_raises(fake_session: FakeAsyncSession) -> None:
@@ -163,8 +165,10 @@ def test_approval_promotes_draft_and_flips_pending_images_in_one_commit(
     assert pending.status is ImageStatus.APPROVED
     assert already_rejected.status is ImageStatus.REJECTED
     assert other_pending.status is ImageStatus.PENDING
-    # Status change, promotion and image flip share a single transaction.
-    assert fake_session.commit_count == commits_before + 1
+    # Status change, promotion and image flip share a single transaction; the
+    # second commit is the `product.updated` announcement, which by contract
+    # only ever follows a committed change.
+    assert fake_session.commit_count == commits_before + 2
 
 
 def test_approval_without_draft_spec_writes_no_verified_row(

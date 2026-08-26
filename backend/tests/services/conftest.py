@@ -11,7 +11,9 @@ is plain `async def` called from the test's own `asyncio.run()`.
 Supported: `select`/`delete`/`update` against a single mapped entity, `where`
 clauses built from `==`/`!=`/`IN` comparisons of a column against a literal
 combined with `AND`, `order_by` over the same kind of expressions, `limit` /
-`offset`, and `select(func.count())` over one table. Anything else raises
+`offset`, `select(func.count())` over one table, and
+`select(func.pg_notify(channel, payload))` (recorded in `.notifications`, so the
+"commit first, then notify" ordering is observable). Anything else raises
 `NotImplementedError` loudly rather than silently matching nothing, so a future
 service change this fixture cannot interpret fails fast instead of pretending to
 pass.
@@ -77,6 +79,8 @@ class FakeAsyncSession:
         self.stores: dict[type[Any], dict[str, Any]] = {}
         self.commit_count = 0
         self.deleted_objects: list[Any] = []
+        # Every `pg_notify(channel, payload)` the services issued, in order.
+        self.notifications: list[tuple[str, str]] = []
 
     @property
     def users(self) -> dict[str, User]:
@@ -136,19 +140,28 @@ class FakeAsyncSession:
 
     def _execute_select(self, statement: Select) -> _FakeResult:
         description = statement.column_descriptions[0]
-        if description["entity"] is None:
-            return self._execute_count(statement, description["expr"])
+        # A projection that is not a mapped entity (a function) carries no
+        # `entity` key at all when it is not an ORM-enabled select.
+        if description.get("entity") is None:
+            return self._execute_function(statement, description["expr"])
 
         rows = self._filter(self.rows(description["entity"]), statement.whereclause)
         for clause in reversed(statement._order_by_clauses):
             rows = self._sorted(rows, clause)
         return _FakeResult(self._paginated(rows, statement))
 
-    def _execute_count(self, statement: Select, expression: object) -> _FakeResult:
-        if not (isinstance(expression, Function) and expression.name == "count"):
+    def _execute_function(self, statement: Select, expression: object) -> _FakeResult:
+        """Interpret the two function projections the services select."""
+        if not isinstance(expression, Function):
             raise NotImplementedError(f"FakeAsyncSession: unsupported projection {expression!r}")
-        entity = self._entity_of(statement.get_final_froms()[0].name)
-        return _FakeResult([len(self._filter(self.rows(entity), statement.whereclause))])
+        if expression.name == "count":
+            entity = self._entity_of(statement.get_final_froms()[0].name)
+            return _FakeResult([len(self._filter(self.rows(entity), statement.whereclause))])
+        if expression.name == "pg_notify":
+            channel, payload = (self._value(part, None) for part in expression.clauses)
+            self.notifications.append((channel, payload))
+            return _FakeResult([None])
+        raise NotImplementedError(f"FakeAsyncSession: unsupported function {expression!r}")
 
     @classmethod
     def _paginated(cls, rows: list[Any], statement: Select) -> list[Any]:

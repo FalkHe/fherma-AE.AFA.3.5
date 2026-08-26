@@ -8,6 +8,7 @@ from app.db.models.base import Base, ULIDPrimaryKeyMixin, new_ulid
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus, MotorbikeImage
 from app.db.models.motorbike_spec import MotorbikeSpec, SpecKind
+from app.db.models.operation import Operation, OperationStatus
 from app.db.models.session import Session
 from app.db.models.source_document import SourceDocument, SourceType
 from app.db.models.user import User, UserRole
@@ -19,6 +20,8 @@ __all__ = [
     "MotorbikeImage",
     "MotorbikeSpec",
     "MotorbikeStatus",
+    "Operation",
+    "OperationStatus",
     "Session",
     "SourceDocument",
     "SourceType",

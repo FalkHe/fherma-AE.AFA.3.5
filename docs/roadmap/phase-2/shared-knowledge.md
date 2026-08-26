@@ -708,3 +708,39 @@ depend on. 1–3 bullets per step, no prose.
   service's full-object mapping. PATCH applies `draftSpec` before `status`, so
   one request that saves and approves promotes the values it just sent. No
   enqueue on create (2.14), no relationships/includes.
+
+### Step 2.6 (operations, NOTIFY, `/api/operations`)
+
+- **`operation_service.notify(session, payload)` is the project's only writer to
+  `app_events`** — every future emitter (2.9 images, 2.14 documents, Phase 3)
+  calls it, never `pg_notify` directly; `EVENT_CHANNEL` and
+  `MOTORBIKE_ENTITY_TYPE = "motorbike"` are exported from there too (2.7's LISTEN
+  loop should import `EVENT_CHANNEL`). It `execute`s the `pg_notify` **and
+  commits it**, because a notification is only delivered when its own transaction
+  commits — so a state change costs two commits: the data one, then the
+  announcement (the pinned "commit first, then notify" ordering is exactly this).
+  Consequence for tests: `FakeAsyncSession.commit_count` counts both, and
+  `tests/services/conftest.py` now interprets `select(func.pg_notify(...))` into
+  `.notifications` (`[(channel, payload)]`) so ordering is observable.
+- **Lifecycle contract** (`operation_service`, `AsyncSession` first, all commit +
+  announce): `create(session, type, *, entity_type=None, entity_id=None)` →
+  `queued`/progress 0, `start` (→`running`, stamps `started_at`), `advance(…,
+  progress, message=None)` (progress only, status untouched; `ValueError` outside
+  0–100), `succeed` (progress 100 + `finished_at`), `fail(…, error)` (keeps the
+  progress reached, so how far a job got survives), plus
+  `list_operations(session, *, entity_types, entity_ids, statuses, limit, offset)`
+  ordered `created_at DESC, id DESC`. `message`/`error` are truncated to their
+  column widths. No status matrix (unlike products) and deliberately **no
+  `get(session, id)`** — 2.14 adds it when the worker needs to reload a row.
+- `product_service` now announces `{"event":"product.updated","productId":…}`
+  after every commit in `create_backlog`, `transition` and `upsert_draft_spec`
+  (private `_announce`, id captured *before* the commit); a PATCH that sends both
+  `draftSpec` and `status` therefore emits twice — invalidation is idempotent.
+  `_get_by_slug` became public `get_by_slug` for `app operations demo --bike`.
+- `GET /api/operations` is read-only (no POST/PATCH route at all → 405),
+  `Depends(current_admin)`, filters `filter[entityType]`/`filter[entityId]`/
+  `filter[status]` all comma-separated via `jsonapi.parse_filter` (unknown status
+  → 400 `invalid-filter`, like products); `updated_at` is deliberately **not** an
+  exposed attribute. `app operations demo [--bike <slug>]` walks
+  queued→running→6 pinned ingestion milestones→succeeded at
+  `STEP_SECONDS = 1.0` (unknown slug → stderr + exit 1).
