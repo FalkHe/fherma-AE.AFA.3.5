@@ -11,13 +11,13 @@ a FastAPI route, request/response model, or anything else that affects
 `app.openapi()`:
 
 ```bash
-cd frontend
-pnpm generate:api
-git diff --exit-code src/api/schema.d.ts
+make generate-api    # or, with host pnpm: cd frontend && pnpm generate:api
+git diff --exit-code frontend/src/api/schema.d.ts
 ```
 
-- `pnpm generate:api` requires the stack running (`docker compose up -d`) —
-  it execs into `app-web` to export the schema.
+- `make generate-api` requires the stack running (`make up`) — it exports the
+  schema from the `app-web` container, then runs `openapi-typescript` in a
+  one-off `node-cli` container (no host Node needed).
 - If `git diff --exit-code` reports a diff, the committed types were stale;
   commit the regenerated file.
 - If it reports no diff, the schema didn't actually change (or was already
@@ -55,5 +55,8 @@ When adding pytest fixtures for code that touches the database, either:
 - construct a dedicated engine/sessionmaker in the test fixture instead of
   going through `get_engine()`/`get_sessionmaker()`.
 
-No such fixtures exist yet (there is no backend test suite as of Phase 0);
-this is a note for whoever adds the first one.
+The current suite (`backend/tests/`) sidesteps this entirely: it is fully
+synchronous and stubs the DB session via a `get_db_session` dependency
+override, so no real engine is ever constructed. The note above applies the
+moment someone adds an async fixture that touches `get_engine()`/
+`get_sessionmaker()`.

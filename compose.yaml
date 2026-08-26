@@ -42,6 +42,35 @@ services:
       # --force-recreate --renew-anon-volumes frontend`.
       - /app/node_modules
 
+  # One-off CLI containers (profile `cli`: not started by `docker compose up`,
+  # invoked via `docker compose run --rm <service> <cmd>` — see the Makefile).
+  # They reuse the app build definitions, so `make build` keeps them fresh.
+  app-cli:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app
+    # The image's entrypoint runs migrations + uvicorn; the CLI runs whatever
+    # command is passed to `docker compose run` instead.
+    entrypoint: []
+    profiles:
+      - cli
+
+  node-cli:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      target: dev
+    volumes:
+      - ./frontend:/app
+      # Fresh anonymous node_modules from the image for each run.
+      - /app/node_modules
+    profiles:
+      - cli
+
   postgres:
     # pgvector ships the extension the RAG store needs; plain postgres:16 does not.
     image: pgvector/pgvector:pg16

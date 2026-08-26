@@ -38,6 +38,7 @@ Any implementation in this repo must satisfy these — they are the grading crit
 ## Environment
 - Docker compose Stack defined in compose.yml
   - use `docker compose` commands to controll it
+- A root `Makefile` wraps the common operations (`make help` lists all): `make up` / `make down` / `make build` / `make rebuild` for the stack, `make test` / `make backend-test` / `make frontend-test` / `make lint` for checks, `make generate-api` for the typed client. No host Python/Node toolchain is required: test/lint/generate targets run in one-off CLI containers (`app-cli`, `node-cli` — profile `cli` in compose.yaml, invoked via `docker compose run --rm`), so they work even when the stack is down. Run `make build` after dependency changes so those images stay fresh (`make rebuild` additionally recreates the running stack and renews the frontend's node_modules volume).
 - Web lives in http://localhost:5173/
 
 ### Linting and type checks
@@ -49,6 +50,11 @@ Any implementation in this repo must satisfy these — they are the grading crit
   - `pnpm typecheck` — TypeScript project-wide type check (`tsc -b --force`)
 
 ### Testing
-- No test suites exist yet in either app: the backend has no pytest dependency and the frontend has no test runner/script.
-- When tests are introduced, use pytest for the backend (see `docs/qa-checklist.md` for the async-engine/event-loop pitfall) and add a `test` script to `frontend/package.json` for the frontend — then update this section and the README.
-- Until then, verification is done via lint + typecheck plus the QA agents (qa-backend, qa-frontend). 
+- Backend (run from `backend/`, after `uv sync`):
+  - `uv run pytest` — pytest suite in `backend/tests/` (config in `[tool.pytest.ini_options]` of `backend/pyproject.toml`; warnings are errors).
+  - Tests never construct a real DB engine: `tests/conftest.py` overrides the `get_db_session` dependency with a stub session and pins env vars so the root `.env` can't leak in. Keep it that way — the `lru_cache`'d async-engine/event-loop pitfall is documented in `docs/qa-checklist.md`. All tests are synchronous (TestClient / Typer CliRunner); don't add pytest-asyncio unless genuinely needed.
+- Frontend (run from `frontend/`, after `pnpm install`):
+  - `pnpm test` — Vitest one-shot run (`pnpm test:watch` for watch mode). Config in `frontend/vitest.config.ts` (merges `vite.config.ts`; jsdom, no globals — import vitest APIs explicitly).
+  - Shared helpers live in `frontend/src/test/`: `render.tsx` (`renderWithProviders`), `network.ts` (fetch stubbing — the setup file installs one dispatcher at startup because openapi-fetch captures `fetch` at import time; unstubbed requests throw), `setup.ts` (jest-dom, `matchMedia` polyfill, per-test cleanup).
+- Preferred invocation is Docker-only: `make test` / `make backend-test` / `make frontend-test` run the suites in one-off CLI containers and need neither a host toolchain nor the stack up (`make build` after dependency changes). The host-side commands above remain a valid alternative when uv/pnpm are installed.
+- The QA agents (qa-backend, qa-frontend) remain the per-slice verification layer on top of lint + typecheck + tests. 

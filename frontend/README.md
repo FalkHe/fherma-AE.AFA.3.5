@@ -12,6 +12,8 @@ Architecture section of `docs/architecture.md` for the binding conventions.
 | `pnpm dev`           | Vite dev server on `http://localhost:5173`              |
 | `pnpm build`         | Type-check (`tsc -b`) and produce `dist/`               |
 | `pnpm typecheck`     | Type-check only                                         |
+| `pnpm test`          | Vitest one-shot run (jsdom, Testing Library; network is stubbed — no backend needed) |
+| `pnpm test:watch`    | Vitest watch mode                                       |
 | `pnpm lint`          | ESLint                                                  |
 | `pnpm preview`       | Serve the production build locally                      |
 | `pnpm generate:api`  | Regenerate `src/api/schema.d.ts` from the running backend's OpenAPI schema (stack must be up; see `docs/qa-checklist.md`) |

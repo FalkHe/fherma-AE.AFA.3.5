@@ -25,7 +25,13 @@ dependencies = [
 app = "app.cli.main:app"
 
 [dependency-groups]
-dev = ["ruff~=0.15.0"]
+dev = [
+    "ruff~=0.15.0",
+    # Tests
+    "pytest~=9.0.0",
+    # Required by fastapi.testclient; Starlette 1.x wants httpx2, not httpx 0.x.
+    "httpx2~=2.0.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -36,6 +42,11 @@ path = "app/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+filterwarnings = ["error"]
 
 [tool.ruff]
 target-version = "py312"

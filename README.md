@@ -30,8 +30,11 @@ see `docs/roadmap.md`.
   outside Docker (pnpm version is pinned via the `packageManager` field in
   `frontend/package.json`)
 
-Docker Compose is the only requirement for just running the stack; uv and
-pnpm are only needed for local (non-container) backend/frontend development.
+Docker Compose (plus `make` for the shortcuts) is the only requirement — the
+Makefile routes tests, lint, type checks, and API-client generation through
+one-off CLI containers (`app-cli`, `node-cli` in `compose.yaml`), so no host
+Python or Node toolchain is needed. uv and pnpm are only for optionally
+running the apps or their checks directly on the host.
 
 ## First-run setup
 
@@ -51,8 +54,12 @@ pnpm are only needed for local (non-container) backend/frontend development.
 2. Start the stack:
 
    ```bash
-   docker compose up -d
+   make up          # shorthand for: docker compose up -d
    ```
+
+   A root `Makefile` wraps the common workflows — `make help` lists them all
+   (`up`, `down`, `build`, `rebuild`, `logs`, `ps`, plus the test/lint
+   targets described below).
 
    The `app-web` container runs `alembic upgrade head` before starting
    Uvicorn, so Postgres must be healthy first — Compose's `depends_on:
@@ -116,9 +123,27 @@ Other scripts (see `frontend/package.json`): `pnpm build`, `pnpm typecheck`,
 
 ## Linting and testing
 
+The Makefile runs everything in one-off Docker containers (`app-cli` /
+`node-cli`) — no host toolchain needed, and the stack does not have to be up:
+
+```bash
+make test           # backend-test + frontend-test
+make backend-test   # docker compose run --rm app-cli pytest
+make frontend-test  # docker compose run --rm node-cli pnpm test
+make lint           # backend-lint + frontend-lint + frontend-typecheck
+```
+
+Run `make build` (or `make rebuild`, which also recreates the running stack
+and renews the frontend's `node_modules` volume) after dependency changes so
+the CLI images stay fresh. `make backend-cli` / `make frontend-cli` open a
+bash shell in a throwaway container for ad-hoc commands.
+
+The same checks also run directly on the host, no Docker needed:
+
 Backend (from `backend/`, after `uv sync`):
 
 ```bash
+uv run pytest                 # test suite (backend/tests/, config in pyproject.toml)
 uv run ruff check .           # lint — rules configured in backend/pyproject.toml
 uv run ruff format --check .  # formatting check (drop --check to apply)
 ```
@@ -126,14 +151,18 @@ uv run ruff format --check .  # formatting check (drop --check to apply)
 Frontend (from `frontend/`, after `pnpm install`):
 
 ```bash
+pnpm test       # Vitest, one-shot run (pnpm test:watch for watch mode)
 pnpm lint       # ESLint (frontend/eslint.config.js)
 pnpm typecheck  # TypeScript type check across all tsconfig projects
 ```
 
-There are **no automated test suites yet** — the backend has no pytest
-dependency and the frontend has no test runner. Lint and typecheck are the
-current CI-equivalent gates. When backend tests are added, note the
-`lru_cache`'d async-engine pitfall documented in `docs/qa-checklist.md`.
+Both test suites run entirely on the host with no infrastructure: backend
+tests stub the database session via FastAPI dependency overrides (never a
+real engine — see the `lru_cache`'d async-engine pitfall in
+`docs/qa-checklist.md`), and frontend tests run in jsdom against a stubbed
+`fetch`, so neither needs Docker Compose, Postgres, or the backend running.
+Frontend test setup lives in `frontend/vitest.config.ts` and
+`frontend/src/test/`.
 
 ## Regenerating the typed API client
 
@@ -143,14 +172,15 @@ git (`frontend/src/api/schema.d.ts`). Whenever a backend route or schema
 changes:
 
 ```bash
-cd frontend
-pnpm generate:api
+make generate-api
 ```
 
-This runs `docker compose exec -T app-web app openapi export > openapi.json`
-(so the stack must be up) and feeds that into `openapi-typescript`. Commit
-the regenerated `schema.d.ts`. See `docs/qa-checklist.md` for the convention
-that keeps it from drifting.
+This exports the schema from the running `app-web` container (so the stack
+must be up) and feeds it into `openapi-typescript` inside a one-off
+`node-cli` container — no host Node needed. (`cd frontend && pnpm
+generate:api` still works as a host-side alternative if you have pnpm.)
+Commit the regenerated `schema.d.ts`. See `docs/qa-checklist.md` for the
+convention that keeps it from drifting.
 
 ## Further reading
 
