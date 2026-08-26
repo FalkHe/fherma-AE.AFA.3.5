@@ -27,3 +27,13 @@ the same day via web-verified research and pinned into `shared-knowledge.md`:
   `imageinfo/extmetadata` chain (Artist/Credit are HTML, strip before
   storing; null attribution → UI fallback) — pinned in *Ingestion decisions*
   and ui-spec §9.
+
+---
+
+**Deferred hardening item for Phase 5.1** (found by QA on step 2.10/2.11,
+2026-08-26): `storage.save_raw_document` performs no path-traversal defense
+on `motorbike_id`/`document_id` (a `../`-bearing id escapes `DATA_DIR`).
+Unreachable today — both ids are server-minted ULIDs — but the module itself
+enforces nothing. Phase 5.1's validation sweep must add a resolve-and-verify
+guard (QA regression tests already exist in
+`backend/tests/services/ingestion/test_storage_qa.py`).
