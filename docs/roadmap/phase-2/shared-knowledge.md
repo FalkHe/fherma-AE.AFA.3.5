@@ -803,3 +803,61 @@ depend on. 1–3 bullets per step, no prose.
   per response, no disk access. 2.12 writes the matching
   `MEDIA_DIR/motorbikes/{motorbike_id}/{image_id}_{variant}.webp` files and must
   keep the two in sync (the API layer stays import-free for jobs).
+
+### Step 2.15 (backlog wired live)
+
+- **Envelope unwrapping happens in the hooks and nowhere else:** `Product` is
+  `{ id: string } & components["schemas"]["ProductAttributes"]` and `Operation` is
+  `{ id: string } & components["schemas"]["OperationAttributes"]` — no component
+  ever touches `.attributes` (so `draftSpec`/`verifiedSpec` already ride along on
+  `Product`). 2.20's `useProductReview` should flatten `documents` /
+  `product-images` the same way.
+- `ProductError` keeps `status` and gains `code: string | null` — `errors[0].code`
+  of a JSON:API error document, `null` for the shapes that carry none (FastAPI's
+  request-validation 422, auth/CSRF `{"detail": …}`); screens still branch on
+  `status`. `useOperations` deliberately exports **no** error type (plain `Error`
+  with the status in the message): no screen branches on why progress is missing.
+- **The page walk is copied inline into each list hook** (`PAGE_SIZE = 100`; loop
+  until `rows.length >= data.meta.totalCount` or an empty page arrives) — no
+  shared pagination helper module; repeat the loop in 2.20's list hooks.
+- `pnpm generate:api` shells `docker compose exec app-web`, which fails whenever
+  app-web's *image* predates a backend dependency (taskiq, here). Equivalent and
+  image-independent: `docker compose run --rm -T app-cli app openapi export >
+  frontend/openapi.json` then `docker compose run --rm -T node-cli pnpm exec
+  openapi-typescript openapi.json -o src/api/schema.d.ts` (verified byte-identical
+  to `GET /openapi.json`).
+- The 2.8 component/route tests now run against `stubFetch` JSON:API fixtures
+  instead of stub-hook fixtures — `AdminBacklogRoute.test.tsx` carries a tiny
+  in-memory products/operations API whose status `PATCH` really moves its row.
+  **No component source changed**, so the 2.8 stub contract held.
+
+### Step 2.10 (fetch & extract core)
+
+- **HTTPX is the `httpx2` distribution** (`import httpx2`): HTTPX 2.x ships under
+  that name and was already installed as fastapi.testclient's dependency, so
+  "promote httpx to runtime" landed as moving `httpx2~=2.0.0` from the dev group
+  into `[project].dependencies` — no second HTTP client was added. 2.11's Tavily
+  call must `import httpx2` and should reuse `fetch.build_client()`.
+- **Fetch/extract never raise for an expected outcome — they return a typed
+  failure**, so the caller picks the severity: `fetch.fetch_html(url, *,
+  client=None, gate=None) -> FetchResult | FetchFailure` (`FetchResult.url` is
+  the post-redirect URL, `.content` the retained bytes, `.text` the decoded
+  payload; `FetchFailure.reason` is `FetchFailureReason`
+  `invalid_url|timeout|network_error|http_error|unsupported_content_type|too_large`
+  plus a warning-ready `.detail` — a 4xx/5xx status is a failure, not a result)
+  and `extract.extract_markdown(html, *, url=None) -> ExtractResult |
+  ExtractFailure` (`ExtractFailureReason.EMPTY`). Every failure is logged once as
+  a `logger.warning` inside the module, so callers only need to decide, not log.
+  `fetch.build_client()` carries the pinned limits (reuse one client per
+  ingestion run); the process-wide `fetch.politeness` gate reserves a per-host
+  slot under a lock and sleeps outside it (clock + sleep injectable).
+- **Raw payloads:** `storage.save_raw_document(motorbike_id, document_id,
+  payload, *, data_dir=None) -> str` returns exactly the `source_documents.
+  raw_path` value (`sources/{motorbike_id}/{document_id}.html`, DATA_DIR-relative
+  — `storage.resolve(path)` maps it back); ids must therefore exist before the
+  payload is written, and `document_id` reuse overwrites in place.
+  `extract.normalize()` output is what 2.18 chunks: `#` ATX headings and GFM
+  tables preserved, CRLF/NBSP/trailing spaces removed, no run of >2 newlines.
+  Deliberate omissions: no `title` from extraction (search/Wikipedia supply
+  `source_title`), no CLI test file (`app ingest fetch-url` is the manual smoke
+  tool; it writes under `sources/cli/`), no in-page link following.

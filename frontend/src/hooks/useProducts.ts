@@ -6,43 +6,34 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+import { apiClient } from "../api/client";
+import type { components } from "../api/schema";
 import { queryKeys } from "../queryKeys";
 
 /**
- * STUB — the whole file is replaced wholesale in step 2.15, when the products
- * endpoints reach the generated API client. The exported names, the argument
- * shapes and the query keys are pinned by
- * `docs/roadmap/phase-2/shared-knowledge.md`; do not change them, and do not
- * import anything from here that 2.15 will not still export.
+ * The catalogue's `products` resource: the backlog list plus the two writes the
+ * admin UI performs on it.
  *
- * What is real here: the TanStack Query plumbing. The hooks return genuine
- * `useQuery`/`useMutation` results over an in-memory fixture table, keyed and
- * invalidated exactly as the live versions will be, so the components written
- * against them survive the replacement without edits. Only the functions that
- * talk to the "server" (below) go away in 2.15.
+ * Every request goes through the generated `openapi-fetch` client, so the JSON:API
+ * envelopes (`data`/`attributes`/`meta`) are typed from the backend's own schema.
+ * The envelope is unwrapped here and nowhere else — components see flat rows.
+ *
+ * Nothing here updates optimistically: transitions are validated server-side, so
+ * both mutations await the server and then invalidate, which means the screens
+ * always render refetched server truth (ui-spec conventions).
  */
 
-/** Motorbike lifecycle, per the pinned `motorbike_status` enum. */
-export type ProductStatus =
-  | "backlog"
-  | "ingesting"
-  | "in_review"
-  | "approved"
-  | "rejected";
+/** Motorbike lifecycle, from the generated `motorbike_status` enum. */
+export type ProductStatus = components["schemas"]["MotorbikeStatus"];
 
-/** A row of the catalogue, as the `products` resource will deliver it. */
-export interface Product {
-  id: string;
-  name: string;
-  slug: string;
-  manufacturer: string | null;
-  modelName: string | null;
-  yearFrom: number | null;
-  yearTo: number | null;
-  status: ProductStatus;
-  createdAt: string;
-  updatedAt: string;
-}
+/**
+ * A row of the catalogue: the resource id merged with its attributes.
+ *
+ * Flattening is deliberate — `id` is JSON:API structure, everything a screen
+ * renders is an attribute, and one shape means no component ever reaches into
+ * `.attributes`.
+ */
+export type Product = { id: string } & components["schemas"]["ProductAttributes"];
 
 /** Server-side filtering of the list query (`filter[status]`). */
 export interface ProductFilters {
@@ -50,175 +41,102 @@ export interface ProductFilters {
 }
 
 /**
- * A failed products call, carrying the status code the screens branch on.
+ * A failed products call, carrying what the screens branch on.
  *
  * Same shape and rationale as Phase-1's `AuthError`: the backend's JSON:API
- * error `detail` is English prose for developers, so the UI decides its own
- * message from the status code alone (409 duplicate, 422 validation, anything
- * else "server error"). 2.15 must keep this export.
+ * `detail` is English prose for developers, so the UI decides its own message
+ * from the status code (409 duplicate, 422 validation, anything else "server
+ * error"). `code` is the stable application code of a domain error
+ * (`duplicate-model`, `invalid-transition`, `not-found`, `invalid-filter`) and is
+ * `null` for the error shapes that carry none — FastAPI's request-validation 422
+ * and auth/CSRF `{"detail": …}` bodies. Never branch on `detail` text.
  */
 export class ProductError extends Error {
   readonly status: number;
+  readonly code: string | null;
 
-  constructor(status: number) {
+  constructor(status: number, code: string | null = null) {
     super(`Products request failed with status ${status}`);
     this.name = "ProductError";
     this.status = status;
+    this.code = code;
   }
 }
 
-// --- Stub server (deleted in 2.15) -----------------------------------------
+/** The two error bodies these endpoints can answer with (see shared-knowledge). */
+type ErrorBody =
+  | components["schemas"]["ErrorDocument"]
+  | components["schemas"]["HTTPValidationError"]
+  | undefined;
 
-/**
- * Fixture ids, 26 characters like the ULID primary keys they stand in for.
- * `useOperations.ts` repeats the two it references — the stubs stay independent
- * of each other so either can be deleted on its own.
- */
-const FIXTURE_IDS = {
-  backlog: "01STUBPRODUCTBACKLOG000001",
-  ingesting: "01STUBPRODUCTINGESTING0001",
-  inReview: "01STUBPRODUCTINREVIEW00001",
-  approved: "01STUBPRODUCTAPPROVED00001",
-  rejected: "01STUBPRODUCTREJECTED00001",
-} as const;
+function productError(status: number, body: ErrorBody): ProductError {
+  // Domain failures arrive as a JSON:API `errors[]` document; request-validation
+  // 422s keep FastAPI's `{"detail": [...]}` shape and therefore have no code.
+  const code =
+    body !== undefined && "errors" in body && body.errors.length > 0
+      ? body.errors[0].code
+      : null;
 
-/**
- * One model per status, so every chip colour, every progress state and both
- * row actions are reachable in the browser before any API exists. The backlog
- * entry deliberately has no manufacturer or model name: that is what a
- * just-added row looks like until extraction fills them in.
- */
-const FIXTURE_PRODUCTS: readonly Product[] = [
-  {
-    id: FIXTURE_IDS.backlog,
-    name: "Honda CB500F",
-    slug: "honda-cb500f",
-    manufacturer: null,
-    modelName: null,
-    yearFrom: null,
-    yearTo: null,
-    status: "backlog",
-    createdAt: "2026-08-24T08:12:00Z",
-    updatedAt: "2026-08-24T08:41:00Z",
-  },
-  {
-    id: FIXTURE_IDS.ingesting,
-    name: "Suzuki GSR 600",
-    slug: "suzuki-gsr-600",
-    manufacturer: "Suzuki",
-    modelName: "GSR 600",
-    yearFrom: 2006,
-    yearTo: 2011,
-    status: "ingesting",
-    createdAt: "2026-08-25T09:03:00Z",
-    updatedAt: "2026-08-25T09:14:00Z",
-  },
-  {
-    id: FIXTURE_IDS.inReview,
-    name: "Yamaha MT-07",
-    slug: "yamaha-mt-07",
-    manufacturer: "Yamaha",
-    modelName: "MT-07",
-    yearFrom: 2014,
-    yearTo: null,
-    status: "in_review",
-    createdAt: "2026-08-23T16:30:00Z",
-    updatedAt: "2026-08-24T11:05:00Z",
-  },
-  {
-    id: FIXTURE_IDS.approved,
-    name: "Kawasaki Z650",
-    slug: "kawasaki-z650",
-    manufacturer: "Kawasaki",
-    modelName: "Z650",
-    yearFrom: 2017,
-    yearTo: null,
-    status: "approved",
-    createdAt: "2026-08-20T10:00:00Z",
-    updatedAt: "2026-08-22T13:47:00Z",
-  },
-  {
-    id: FIXTURE_IDS.rejected,
-    name: "BMW G 310 R",
-    slug: "bmw-g-310-r",
-    manufacturer: "BMW",
-    modelName: "G 310 R",
-    yearFrom: 2016,
-    yearTo: null,
-    status: "rejected",
-    createdAt: "2026-08-18T07:22:00Z",
-    updatedAt: "2026-08-19T09:15:00Z",
-  },
-];
-
-/**
- * The stub's mutable table. Creating and transitioning write to it so the list
- * query refetches into visibly different data — without that, "add a model"
- * and "retry ingestion" would look broken to anyone clicking through the screen
- * before 2.15.
- */
-let stubProducts: Product[] = [...FIXTURE_PRODUCTS];
-
-/** Round trip long enough to make the pending states observable in the UI. */
-const STUB_LATENCY_MS = 400;
-
-function stubLatency(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, STUB_LATENCY_MS);
-  });
+  return new ProductError(status, code);
 }
 
-/** The service-side slug rule from shared-knowledge, for duplicate detection. */
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+/**
+ * Pinned page size — also the server's maximum. The catalogue's ceiling is a few
+ * hundred models, so the list hook walks the pages instead of paginating the UI;
+ * without the walk row 101 would silently disappear.
+ */
+const PAGE_SIZE = 100;
+
+function toProduct(resource: components["schemas"]["ProductResource"]): Product {
+  return { id: resource.id, ...resource.attributes };
 }
 
-function listProducts(filters: ProductFilters): Promise<Product[]> {
-  const { status } = filters;
-  const rows =
-    status === undefined
-      ? stubProducts
-      : stubProducts.filter((product) => product.status === status);
+/** `GET /api/products`, following `meta.totalCount` to the last page. */
+async function listProducts({ status }: ProductFilters): Promise<Product[]> {
+  const products: Product[] = [];
 
-  // Default sort of every list endpoint is `-createdAt`.
-  return Promise.resolve(
-    [...rows].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
-  );
+  for (let page = 1; ; page += 1) {
+    const { data, error, response } = await apiClient.GET("/api/products", {
+      params: {
+        query: {
+          // Omitted rather than sent empty: an absent filter is "all statuses".
+          ...(status === undefined ? {} : { "filter[status]": status }),
+          "page[number]": page,
+          "page[size]": PAGE_SIZE,
+        },
+      },
+    });
+
+    if (!response.ok || data === undefined) {
+      throw productError(response.status, error);
+    }
+
+    products.push(...data.data.map(toProduct));
+
+    // The empty-page guard is what keeps this loop finite if rows are deleted
+    // between two page requests and `totalCount` stays ahead of what is left.
+    if (products.length >= data.meta.totalCount || data.data.length === 0) {
+      return products;
+    }
+  }
 }
 
+/** `POST /api/products` — a new `backlog` row; ingestion starts server-side. */
 async function createProduct({ name }: { name: string }): Promise<Product> {
-  await stubLatency();
+  const { data, error, response } = await apiClient.POST("/api/products", {
+    body: { data: { type: "products", attributes: { name } } },
+  });
 
-  const slug = slugify(name);
-
-  if (stubProducts.some((product) => product.slug === slug)) {
-    // Mirrors the pinned 409 `duplicate-model` answer, so the dialog's
-    // duplicate branch is reachable before the API exists.
-    throw new ProductError(409);
+  if (!response.ok || data === undefined) {
+    // A duplicate slug answers 409 `duplicate-model`; the dialog maps it to a
+    // field error on the name.
+    throw productError(response.status, error);
   }
 
-  const now = new Date().toISOString();
-  const created: Product = {
-    id: `01STUBCREATED${Date.now()}`.padEnd(26, "0").slice(0, 26),
-    name: name.trim(),
-    slug,
-    manufacturer: null,
-    modelName: null,
-    yearFrom: null,
-    yearTo: null,
-    status: "backlog",
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  stubProducts = [created, ...stubProducts];
-
-  return created;
+  return toProduct(data.data);
 }
 
+/** `PATCH /api/products/{id}` with a status, i.e. one transition of the matrix. */
 async function transitionProduct({
   id,
   status,
@@ -226,28 +144,24 @@ async function transitionProduct({
   id: string;
   status: ProductStatus;
 }): Promise<Product> {
-  await stubLatency();
+  const { data, error, response } = await apiClient.PATCH("/api/products/{product_id}", {
+    params: { path: { product_id: id } },
+    body: { data: { type: "products", attributes: { status } } },
+  });
 
-  const current = stubProducts.find((product) => product.id === id);
-
-  if (current === undefined) {
-    throw new ProductError(404);
+  if (!response.ok || data === undefined) {
+    // An illegal transition answers 422 `invalid-transition`, a vanished row 404.
+    throw productError(response.status, error);
   }
 
-  const updated: Product = { ...current, status, updatedAt: new Date().toISOString() };
-
-  stubProducts = stubProducts.map((product) => (product.id === id ? updated : product));
-
-  return updated;
+  return toProduct(data.data);
 }
-
-// --- Hooks (contract; survives 2.15) ---------------------------------------
 
 /**
  * The backlog list, optionally narrowed to one status.
  *
  * The filter is part of the key rather than a client-side `select`, because the
- * live version filters server-side and each filter therefore has its own cache
+ * filtering happens server-side and each filter therefore has its own cache
  * entry.
  */
 export function useProducts(
@@ -261,11 +175,11 @@ export function useProducts(
 
 /**
  * Adds a model to the backlog (`POST /api/products`; ingestion auto-starts
- * server-side from step 2.14).
+ * server-side).
  *
  * Invalidation lives here, not at the call site: both caches are affected by
- * every write regardless of which screen triggered it. No optimistic update —
- * the admin UI always renders refetched server truth.
+ * every write regardless of which screen triggered it. Clearing the status
+ * filter after a successful create belongs to the route, which owns the URL.
  */
 export function useCreateProduct(): UseMutationResult<Product, Error, { name: string }> {
   const queryClient = useQueryClient();
@@ -281,7 +195,9 @@ export function useCreateProduct(): UseMutationResult<Product, Error, { name: st
 
 /**
  * Moves a model to another status (`PATCH /api/products/{id}`). The transition
- * matrix is enforced server-side; a rejected transition answers 422.
+ * matrix is enforced server-side; a rejected transition answers 422
+ * `invalid-transition`. A transition to `ingesting` re-enqueues ingestion
+ * server-side, which is why "start" and "retry" are the same call.
  */
 export function useTransitionProduct(): UseMutationResult<
   Product,

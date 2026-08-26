@@ -133,10 +133,172 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Subscribe to server-sent events
+         * @description Open the notification stream for the signed-in account.
+         */
+        get: operations["events_api_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List operations
+         * @description Return one page of operations, newest first.
+         */
+        get: operations["list_operations_api_operations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/products": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List products
+         * @description Return one page of the catalogue, newest first.
+         */
+        get: operations["list_products_api_products_get"];
+        put?: never;
+        /**
+         * Add a product to the backlog
+         * @description Create a `backlog` entry from a display name.
+         *
+         *     Ingestion is **not** started here yet; that side effect arrives with the
+         *     auto-start step, and until then a new row simply waits in `backlog`.
+         */
+        post: operations["create_product_api_products_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/products/{product_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a product
+         * @description Return one product with both of its specification revisions.
+         */
+        get: operations["get_product_api_products__product_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update a product's status or draft specification
+         * @description Replace the draft specification and/or move the product to a new status.
+         *
+         *     Both attributes are optional and applied in that order, so a request that
+         *     saves a draft and approves in one go promotes the values it just sent.
+         */
+        patch: operations["update_product_api_products__product_id__patch"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * DraftSpecRequest
+         * @description A full draft specification: every omitted field is reset.
+         *
+         *     Full-object replace is the pinned semantics — the SPA merges the last
+         *     fetched `draftSpec` with its form values before sending, so fields the form
+         *     does not show survive a save.
+         */
+        DraftSpecRequest: {
+            category?: components["schemas"]["SpecCategory"] | null;
+            /** Enginecc */
+            engineCc?: number | null;
+            /** Cylinders */
+            cylinders?: number | null;
+            /** Powerkw */
+            powerKw?: number | null;
+            /** Torquenm */
+            torqueNm?: number | null;
+            /** Wetweightkg */
+            wetWeightKg?: number | null;
+            /** Seatheightmm */
+            seatHeightMm?: number | null;
+            /** Tankcapacityl */
+            tankCapacityL?: number | null;
+            /** Topspeedkmh */
+            topSpeedKmh?: number | null;
+            /** Abs */
+            abs?: boolean | null;
+            /** A2Eligible */
+            a2Eligible?: boolean | null;
+            priceBand?: components["schemas"]["PriceBand"] | null;
+            /** Msrpeur */
+            msrpEur?: number | null;
+            /** Extra */
+            extra?: {
+                [key: string]: unknown;
+            } | null;
+            /** Sourcehints */
+            sourceHints?: {
+                [key: string]: unknown;
+            } | null;
+            /** Extractedat */
+            extractedAt?: string | null;
+        };
+        /**
+         * ErrorDocument
+         * @description The body of every failed request this layer produces.
+         */
+        ErrorDocument: {
+            /** Errors */
+            errors: components["schemas"]["ErrorObject"][];
+        };
+        /**
+         * ErrorObject
+         * @description One JSON:API error object.
+         *
+         *     `status` is the HTTP status as a string (JSON:API requires that), `code` is
+         *     the stable application code the frontend branches on, `detail` is an English
+         *     sentence for developers and log lines — never parsed.
+         */
+        ErrorObject: {
+            /** Status */
+            status: string;
+            /** Code */
+            code: string;
+            /** Detail */
+            detail: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -157,6 +319,10 @@ export interface components {
         /**
          * LoginRequest
          * @description Credentials for an existing account, plus the cookie lifetime choice.
+         *
+         *     Deliberately unvalidated beyond the username normalisation: a credential
+         *     that could not possibly match is rejected by `user_service.authenticate`
+         *     with a 401, on the same constant-time path as any other wrong password.
          */
         LoginRequest: {
             /** Username */
@@ -168,6 +334,214 @@ export interface components {
              * @default false
              */
             rememberMe: boolean;
+        };
+        /**
+         * Meta
+         * @description Top-level `meta` of a collection document.
+         */
+        Meta: {
+            /** Totalcount */
+            totalCount: number;
+        };
+        /**
+         * MotorbikeStatus
+         * @description Position of a catalogue entry in the curation workflow.
+         *
+         *     Legal transitions are enforced by `app.services.product_service.transition`;
+         *     `rejected` is deliberately **not** terminal (an admin re-queues ingestion).
+         * @enum {string}
+         */
+        MotorbikeStatus: "backlog" | "ingesting" | "in_review" | "approved" | "rejected";
+        /**
+         * OperationAttributes
+         * @description The pinned attribute set of an operation.
+         */
+        OperationAttributes: {
+            /** Type */
+            type: string;
+            status: components["schemas"]["OperationStatus"];
+            /** Progress */
+            progress: number;
+            /** Message */
+            message: string | null;
+            /** Error */
+            error: string | null;
+            /** Entitytype */
+            entityType: string | null;
+            /** Entityid */
+            entityId: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Startedat */
+            startedAt: string | null;
+            /** Finishedat */
+            finishedAt: string | null;
+        };
+        /**
+         * OperationListDocument
+         * @description Body of `GET /api/operations`.
+         */
+        OperationListDocument: {
+            /** Data */
+            data: components["schemas"]["OperationResource"][];
+            meta: components["schemas"]["Meta"];
+        };
+        /**
+         * OperationResource
+         * @description An operation resource object.
+         */
+        OperationResource: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default operations
+             * @constant
+             */
+            type: "operations";
+            attributes: components["schemas"]["OperationAttributes"];
+        };
+        /**
+         * OperationStatus
+         * @description Lifecycle position of an operation.
+         *
+         *     `queued` → `running` → `succeeded` | `failed`; the terminal states are
+         *     final. Progress and message are advisory, the status is authoritative.
+         * @enum {string}
+         */
+        OperationStatus: "queued" | "running" | "succeeded" | "failed";
+        /**
+         * PriceBand
+         * @enum {string}
+         */
+        PriceBand: "budget" | "mid" | "upper" | "premium";
+        /**
+         * ProductAttributes
+         * @description The pinned attribute set of a product.
+         */
+        ProductAttributes: {
+            /** Name */
+            name: string;
+            /** Slug */
+            slug: string;
+            /** Manufacturer */
+            manufacturer: string | null;
+            /** Modelname */
+            modelName: string | null;
+            /** Yearfrom */
+            yearFrom: number | null;
+            /** Yearto */
+            yearTo: number | null;
+            status: components["schemas"]["MotorbikeStatus"];
+            draftSpec: components["schemas"]["SpecAttributes"] | null;
+            verifiedSpec: components["schemas"]["SpecAttributes"] | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /**
+         * ProductCreateAttributes
+         * @description The single attribute a new catalogue entry is created from.
+         */
+        ProductCreateAttributes: {
+            /**
+             * Name
+             * @description Display name as entered, e.g. "Suzuki GSR 600".
+             */
+            name: string;
+        };
+        /**
+         * ProductCreateRequest
+         * @description Body of `POST /api/products`.
+         */
+        ProductCreateRequest: {
+            data: components["schemas"]["ProductCreateResource"];
+        };
+        /**
+         * ProductCreateResource
+         * @description The resource object of a create request.
+         */
+        ProductCreateResource: {
+            /**
+             * Type
+             * @default products
+             * @constant
+             */
+            type: "products";
+            attributes: components["schemas"]["ProductCreateAttributes"];
+        };
+        /**
+         * ProductDocument
+         * @description Body of `GET`/`POST`/`PATCH` on a single product.
+         */
+        ProductDocument: {
+            data: components["schemas"]["ProductResource"];
+        };
+        /**
+         * ProductListDocument
+         * @description Body of `GET /api/products`.
+         */
+        ProductListDocument: {
+            /** Data */
+            data: components["schemas"]["ProductResource"][];
+            meta: components["schemas"]["Meta"];
+        };
+        /**
+         * ProductPatchAttributes
+         * @description The writable attributes of an existing product.
+         *
+         *     Both are optional; `verifiedSpec` (and anything else) is rejected outright.
+         */
+        ProductPatchAttributes: {
+            /** @description Target status; must be legal for the current one. */
+            status?: components["schemas"]["MotorbikeStatus"] | null;
+            /** @description Full replacement of the draft specification. */
+            draftSpec?: components["schemas"]["DraftSpecRequest"] | null;
+        };
+        /**
+         * ProductPatchRequest
+         * @description Body of `PATCH /api/products/{id}`.
+         */
+        ProductPatchRequest: {
+            data: components["schemas"]["ProductPatchResource"];
+        };
+        /**
+         * ProductPatchResource
+         * @description The resource object of an update request.
+         */
+        ProductPatchResource: {
+            /**
+             * Type
+             * @default products
+             * @constant
+             */
+            type: "products";
+            attributes: components["schemas"]["ProductPatchAttributes"];
+        };
+        /**
+         * ProductResource
+         * @description A product resource object.
+         */
+        ProductResource: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default products
+             * @constant
+             */
+            type: "products";
+            attributes: components["schemas"]["ProductAttributes"];
         };
         /**
          * ReadinessResponse
@@ -190,7 +564,7 @@ export interface components {
         };
         /**
          * RegisterRequest
-         * @description Credentials for a new account.
+         * @description Credentials for a new account, carrying the pinned validation rules.
          */
         RegisterRequest: {
             /** Username */
@@ -198,6 +572,51 @@ export interface components {
             /** Password */
             password: string;
         };
+        /**
+         * SpecAttributes
+         * @description One specification revision of a product, as returned.
+         */
+        SpecAttributes: {
+            category: components["schemas"]["SpecCategory"] | null;
+            /** Enginecc */
+            engineCc: number | null;
+            /** Cylinders */
+            cylinders: number | null;
+            /** Powerkw */
+            powerKw: number | null;
+            /** Torquenm */
+            torqueNm: number | null;
+            /** Wetweightkg */
+            wetWeightKg: number | null;
+            /** Seatheightmm */
+            seatHeightMm: number | null;
+            /** Tankcapacityl */
+            tankCapacityL: number | null;
+            /** Topspeedkmh */
+            topSpeedKmh: number | null;
+            /** Abs */
+            abs: boolean | null;
+            /** A2Eligible */
+            a2Eligible: boolean | null;
+            priceBand: components["schemas"]["PriceBand"] | null;
+            /** Msrpeur */
+            msrpEur: number | null;
+            /** Extra */
+            extra: {
+                [key: string]: unknown;
+            };
+            /** Sourcehints */
+            sourceHints: {
+                [key: string]: unknown;
+            } | null;
+            /** Extractedat */
+            extractedAt: string | null;
+        };
+        /**
+         * SpecCategory
+         * @enum {string}
+         */
+        SpecCategory: "naked" | "sport" | "sport_touring" | "touring" | "adventure" | "cruiser" | "classic" | "scrambler" | "enduro" | "supermoto" | "scooter";
         /**
          * UserResponse
          * @description The authenticated account, as every `/auth/*` success body returns it.
@@ -384,6 +803,248 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+        };
+    };
+    events_api_events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description An event stream of `operation.updated`, `product.updated` and `document.updated` notifications. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+        };
+    };
+    list_operations_api_operations_get: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated list of entity types, e.g. `motorbike`. */
+                "filter[entityType]"?: string | null;
+                /** @description Comma-separated list of entity ids. */
+                "filter[entityId]"?: string | null;
+                /** @description Comma-separated list of statuses: queued, running, succeeded, failed */
+                "filter[status]"?: string | null;
+                /** @description 1-based page number. */
+                "page[number]"?: number;
+                /** @description Rows per page (maximum 100). */
+                "page[size]"?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationListDocument"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_products_api_products_get: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated list of statuses: backlog, ingesting, in_review, approved, rejected */
+                "filter[status]"?: string | null;
+                /** @description 1-based page number. */
+                "page[number]"?: number;
+                /** @description Rows per page (maximum 100). */
+                "page[size]"?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductListDocument"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_product_api_products_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProductCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductDocument"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_product_api_products__product_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description ULID of the product. */
+                product_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductDocument"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_product_api_products__product_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description ULID of the product. */
+                product_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProductPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductDocument"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
                 };
             };
         };
