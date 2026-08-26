@@ -108,7 +108,7 @@ export function AddModelDialog({
       fullWidth
     >
       <DialogTitle>{t("admin.backlog.addDialog.title")}</DialogTitle>
-      <Box component="form" onSubmit={handleSubmit}>
+      <Box component="form" noValidate onSubmit={handleSubmit}>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             {hasGeneralError && (
