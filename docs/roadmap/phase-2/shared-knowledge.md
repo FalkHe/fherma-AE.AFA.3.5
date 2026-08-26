@@ -1083,3 +1083,52 @@ depend on. 1–3 bullets per step, no prose.
   emit `document.updated` each. `app ingest run "<name>"` is create-or-find by
   slug + `start_ingestion` inside `broker.startup()/shutdown()`; it has no test
   file (same precedent as `probe`/`fetch-image`) and was verified live.
+
+### Step 2.17 (spec extraction)
+
+- **`app/llm/extraction.py` is the whole LLM half:** `ExtractedSpec` mirrors
+  `SPEC_FIELDS` 1:1 (all optional, `extra="ignore"` so an invented key costs
+  nothing), `to_spec_values(extracted_at=…) -> dict` **is** the full-object
+  mapping for `upsert_draft_spec` (enums unwrapped, `extra` `None` → `{}`), plus
+  `filled_fields()`, `ExtractionDocument(title, source_type, markdown, url=None)`,
+  `render_extraction_prompt(name, documents)`, `build_extraction_chain(model=None)`
+  (`with_structured_output(…, method="json_schema")`, `strict` deliberately not
+  passed — the open `extra`/`source_hints` objects would be illegal in strict
+  mode) and `await extract_spec(name, documents, model=None)`. Every field has a
+  `BeforeValidator`: units normalized from the number's *adjacent* unit only
+  ("72 kW (98 hp)" is kW; hp 0.7457 vs PS 0.7355), values outside a
+  motorcycle-wide plausibility window in `_QUANTITIES` → `None`, vocabulary
+  outside `SPEC_CATEGORIES`/`PRICE_BANDS` → `None`, foreign-currency price →
+  `None`, `abs="optional"` → `None`, model-supplied `extracted_at` always
+  discarded, `a2_eligible` passed through untouched (2.1 derives it). Phase 3 can
+  therefore assume verified specs are plausible, never that they are complete.
+- **`spec_extraction_service.extract_draft_spec(session, motorbike, *, model=None)
+  -> ExtractionResult | ExtractionFailure`** never raises: `ExtractionFailure
+  (reason ∈ no_documents | missing_api_key | model_error, warning-ready `detail`,
+  already logged once)` — the adapter convention from 2.10/2.12; `MissingApiKeyError`
+  is its own deterministic reason and everything else (`except Exception` around
+  the one `await`) is `model_error`. `assemble_documents(documents, *,
+  max_input_chars=None)` is the pinned budget: stable sort putting `wikipedia`
+  first, each document head-truncated to `DOCUMENT_MAX_CHARS = 12_000`, the one
+  that straddles the cap truncated to the remainder, the rest dropped; new config
+  `EXTRACTION_MAX_INPUT_CHARS=60000`. Writes go through `upsert_draft_spec` only —
+  draft replaced, `verified` never touched (verified against the real DB: two runs
+  → one draft row, same id).
+- **Ingestion:** `EXTRACTION_MILESTONE = (80, "Extracting specifications")` runs
+  in `_Run._extraction_stage`, between `_image_stage` and `_complete`; a failure
+  is `self._warn(detail)` and nothing else, so the bike still reaches `in_review`
+  (2.19's 90 % stage goes between this stage and `_complete`). Test seam: the
+  autouse `extracted_specs` fixture in `tests/services/ingestion/conftest.py`
+  stubs `app.llm.extraction.extract_spec` for the **whole** ingestion test
+  package (same spirit as `recorded_enqueues`), so the extraction *service* runs
+  for real in every orchestration test and no test can reach OpenRouter; the
+  milestone lists in `test_service.py` now carry `(80, …)`.
+- **CLI `app ingest extract-specs <slug> [--model]`** runs the extraction **in
+  process** (nothing enqueued — it is the prompt-tuning loop) and prints the full
+  frozen field set; unknown slug / typed failure → stderr + exit 1.
+  **Live extraction is BLOCKED: `OPENROUTER_API_KEY` is not set** (as in 2.16), so
+  no real completion has been made — prompt quality is unproven. What *is* live
+  verified: `app ingest run "Suzuki GSR600"` with no keys ends `succeeded` at
+  100 % with both warnings ("Web search skipped: TAVILY_API_KEY…" and
+  "Specification extraction skipped: OPENROUTER_API_KEY is not configured."),
+  bike `in_review`, `error` NULL, no retry.

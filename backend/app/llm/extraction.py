@@ -1,0 +1,474 @@
+"""Specification extraction: the frozen spec column set as an LLM output schema.
+
+This module is the project's first production LLM call. It holds three things
+and nothing else:
+
+* `ExtractedSpec` — a Pydantic model mirroring the **frozen** core
+  specification column set 1:1 (`motorbike_spec.SPEC_FIELDS`). Every field is
+  optional, because "the documents do not say" is the normal answer, and every
+  field carries a validator that normalizes what a model may plausibly return
+  (a foreign unit, a number as text, a category spelled differently) and clamps
+  anything implausible to `None`. A junk value is never an error: the draft
+  specification is admin-editable by design, and a null field the admin fills
+  in is cheaper than a wrong field they have to notice first.
+* `render_extraction_prompt` — the prompt assembly, including the fencing of
+  document text as **untrusted data**.
+* `build_extraction_chain` / `extract_spec` — the chain: the 2.16 factory plus
+  `with_structured_output(..., method="json_schema")`, nothing else.
+
+Which documents go in, in which order, and how much of them, is the caller's
+decision (`app.services.spec_extraction_service`). Writing the result is the
+caller's job too — this module never touches the database.
+"""
+
+import logging
+import re
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum, StrEnum
+from typing import Annotated, Any, cast
+
+from langchain_core.language_models import LanguageModelInput
+from langchain_core.messages import HumanMessage
+from langchain_core.runnables import Runnable
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+
+from app.db.models.motorbike_spec import PRICE_BANDS, SPEC_CATEGORIES, SPEC_FIELDS
+from app.llm.models import get_chat_model
+from app.llm.prompts import render_prompt
+
+logger = logging.getLogger(__name__)
+
+# The prompt file this module renders.
+PROMPT_NAME = "spec_extraction"
+
+# The fence around one document in the prompt. Deliberately unlikely to occur
+# in fetched prose, and stripped from the document text before it is fenced, so
+# a page cannot close its own block and continue as if it were the instructions.
+FENCE_START = "<<<UNTRUSTED-DOCUMENT-START>>>"
+FENCE_END = "<<<UNTRUSTED-DOCUMENT-END>>>"
+_FENCE_LOOKALIKE = re.compile(r"<{2,}\s*/?\s*UNTRUSTED[- _]?DOCUMENT[^>]*>{2,}", re.IGNORECASE)
+_FENCE_REPLACEMENT = "[fence removed]"
+
+# The pinned vocabularies as enums, so they reach the JSON schema the model is
+# constrained by instead of living in prose only. Built from the single source
+# of truth in the ORM model — they cannot drift from the columns.
+ExtractedCategory = StrEnum(
+    "ExtractedCategory", {value.upper(): value for value in SPEC_CATEGORIES}
+)
+ExtractedPriceBand = StrEnum("ExtractedPriceBand", {value.upper(): value for value in PRICE_BANDS})
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractionDocument:
+    """One source document as it is handed to the model."""
+
+    title: str
+    source_type: str
+    markdown: str
+    url: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Quantity:
+    """How one numeric field is normalized: units in, plausible range, rounding.
+
+    `conversions` maps a unit as it appears right after the number onto the
+    factor that turns it into the field's own unit; the first match wins, so
+    the more specific pattern comes first. A number without a recognizable unit
+    is taken to be in the field's unit already (that is what the prompt asks
+    for). `decimals=None` means the column is an integer one.
+    """
+
+    conversions: tuple[tuple[re.Pattern[str], float], ...]
+    minimum: float
+    maximum: float
+    decimals: int | None = None
+
+
+def _units(*patterns: tuple[str, float]) -> tuple[tuple[re.Pattern[str], float], ...]:
+    """Compile a unit table, keeping the given order (first match wins)."""
+    return tuple((re.compile(pattern, re.IGNORECASE), factor) for pattern, factor in patterns)
+
+
+# Plausibility windows are motorcycle-wide, not model-specific: they exist to
+# catch a value that cannot be the field at all (a price in the seat height, a
+# power figure that is really the torque), not to second-guess an unusual bike.
+_QUANTITIES: dict[str, _Quantity] = {
+    "engine_cc": _Quantity(
+        conversions=_units(
+            (r"\b(?:cu\.?\s?in|cubic\s?inch(?:es)?|ci)\b", 16.387064),
+            (r"\b(?:l|lit(?:er|re)s?)\b", 1000.0),
+            (r"\b(?:cc|ccm|cm3|cm³)\b", 1.0),
+        ),
+        minimum=25,
+        maximum=3000,
+    ),
+    "cylinders": _Quantity(conversions=(), minimum=1, maximum=8),
+    "power_kw": _Quantity(
+        conversions=_units(
+            (r"\bk\s?w\b", 1.0),
+            # Mechanical horsepower vs. the metric PS/CV/pk Europe quotes.
+            (r"\b(?:bhp|hp)\b", 0.745699872),
+            (r"\b(?:ps|cv|pk)\b", 0.73549875),
+        ),
+        minimum=0.5,
+        maximum=400,
+        decimals=1,
+    ),
+    "torque_nm": _Quantity(
+        conversions=_units(
+            (r"\bn\s?m\b", 1.0),
+            (r"\b(?:lbf?[\s.-]?ft|ft[\s.-]?lbf?)\b", 1.3558179),
+            (r"\bkg[\s.-]?m\b", 9.80665),
+        ),
+        minimum=1,
+        maximum=500,
+        decimals=1,
+    ),
+    "wet_weight_kg": _Quantity(
+        conversions=_units(
+            (r"\bkg\b", 1.0),
+            (r"\b(?:lbs?|pounds?)\b", 0.45359237),
+        ),
+        minimum=30,
+        maximum=600,
+        decimals=1,
+    ),
+    "seat_height_mm": _Quantity(
+        conversions=_units(
+            (r"\bmm\b", 1.0),
+            (r"\bcm\b", 10.0),
+            (r"(?:\b(?:in|inch(?:es)?)\b|\")", 25.4),
+        ),
+        minimum=400,
+        maximum=1200,
+    ),
+    "tank_capacity_l": _Quantity(
+        conversions=_units(
+            (r"\bimp(?:erial)?\.?\s?gal(?:lons?)?\b", 4.54609),
+            (r"\b(?:us\s?)?gal(?:lons?)?\b", 3.785411784),
+            (r"\b(?:l|lit(?:er|re)s?)\b", 1.0),
+        ),
+        minimum=1,
+        maximum=60,
+        decimals=1,
+    ),
+    "top_speed_kmh": _Quantity(
+        conversions=_units(
+            (r"\b(?:km/?h|kph|kmh)\b", 1.0),
+            (r"\bmph\b", 1.609344),
+        ),
+        minimum=30,
+        maximum=500,
+    ),
+    "msrp_eur": _Quantity(
+        conversions=_units((r"(?:€|\beur(?:os?)?\b)", 1.0)),
+        minimum=100,
+        maximum=1_000_000,
+    ),
+}
+
+# A price in another currency is not convertible here (no rate, no date), so it
+# is dropped instead of stored as if it were euros. The prompt asks for EUR
+# only and for the original to go into `extra`.
+_FOREIGN_CURRENCY = re.compile(
+    r"(?:[$£¥₹]|\b(?:usd|us\s?\$|gbp|chf|jpy|inr|pln|czk|sek|nok|dkk|cad|aud)\b)",
+    re.IGNORECASE,
+)
+
+_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+# A thousands separator ("1,234 mm") vs. a decimal comma ("12,5 kW").
+_THOUSANDS_SEPARATOR = re.compile(r"(?<=\d),(?=\d{3}(?!\d))")
+_DECIMAL_COMMA = re.compile(r"(?<=\d),(?=\d)")
+# The same grouping written the continental way ("6.999 €"). Applied to prices
+# only: for every other field a dot is a decimal point ("3.5 l"), and cents do
+# not matter in a price band.
+_THOUSANDS_DOT = re.compile(r"(?<=\d)\.(?=\d{3}(?!\d))")
+# How much of the text after the number may name its unit.
+_UNIT_WINDOW = 16
+
+# Words a model uses for a yes/no specification when it does not answer with a
+# boolean. Anything else (notably "optional") stays unknown: `abs = false`
+# claims the bike cannot have it, which is a different statement.
+_TRUE_WORDS = frozenset({"true", "yes", "y", "standard", "std", "series", "fitted", "1"})
+_FALSE_WORDS = frozenset({"false", "no", "n", "none", "not available", "unavailable", "0"})
+
+# Keeps a hallucinated long tail from becoming a JSONB blob.
+MAX_MAPPING_ENTRIES = 20
+MAX_MAPPING_KEY_CHARS = 64
+MAX_MAPPING_VALUE_CHARS = 500
+
+_NON_VOCABULARY_CHARACTERS = re.compile(r"[^a-z0-9]+")
+
+
+def _to_text(value: Any) -> str | None:
+    """Return `value` as trimmed text, or `None` when it carries no text."""
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return None
+
+
+def _normalize_quantity(value: Any, quantity: _Quantity) -> Any:
+    """Return `value` in the field's own unit, or `None` when it is unusable.
+
+    Anything the parser cannot make sense of returns `None` rather than
+    raising: the extraction schema clamps junk, it does not reject documents.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        number = float(value)
+    else:
+        parsed = _parse_quantity_text(value, quantity)
+        if parsed is None:
+            return None
+        number = parsed
+
+    if not quantity.minimum <= number <= quantity.maximum:
+        return None
+    if quantity.decimals is None:
+        return int(round(number))
+    return round(number, quantity.decimals)
+
+
+def _parse_quantity_text(value: Any, quantity: _Quantity) -> float | None:
+    """Parse "98 hp" / "1,234 mm" / "€6.999" into the field's own unit."""
+    text = _to_text(value)
+    if text is None:
+        return None
+    if _is_price(quantity):
+        if _FOREIGN_CURRENCY.search(text):
+            return None
+        text = _THOUSANDS_DOT.sub("", text)
+
+    text = _THOUSANDS_SEPARATOR.sub("", text)
+    text = _DECIMAL_COMMA.sub(".", text)
+    match = _NUMBER.search(text)
+    if match is None:
+        return None
+
+    number = float(match.group())
+    # Only the unit adjacent to the number counts: "73.6 kW (100 hp)" is kW.
+    unit = text[match.end() : match.end() + _UNIT_WINDOW].split("(")[0]
+    for pattern, factor in quantity.conversions:
+        if pattern.search(unit):
+            return number * factor
+    return number
+
+
+def _is_price(quantity: _Quantity) -> bool:
+    """Whether this field carries money (the only unit that is not converted)."""
+    return quantity is _QUANTITIES["msrp_eur"]
+
+
+def _quantity_validator(field: str) -> Callable[[Any], Any]:
+    """Return the before-validator of one numeric field of the frozen set."""
+    quantity = _QUANTITIES[field]
+
+    def validate(value: Any) -> Any:
+        return _normalize_quantity(value, quantity)
+
+    return validate
+
+
+def _normalize_flag(value: Any) -> Any:
+    """Return a yes/no specification as a boolean, or `None` when unclear."""
+    if isinstance(value, bool) or value is None:
+        return value
+    text = _to_text(value)
+    if text is None:
+        return None
+    lowered = text.lower()
+    if lowered in _TRUE_WORDS:
+        return True
+    if lowered in _FALSE_WORDS:
+        return False
+    return None
+
+
+def _vocabulary_validator(vocabulary: tuple[str, ...]) -> Callable[[Any], Any]:
+    """Return a before-validator clamping to one pinned vocabulary, else `None`."""
+    members = frozenset(vocabulary)
+
+    def validate(value: Any) -> Any:
+        text = _to_text(value)
+        if text is None:
+            return None
+        candidate = _NON_VOCABULARY_CHARACTERS.sub("_", text.lower()).strip("_")
+        return candidate if candidate in members else None
+
+    return validate
+
+
+def _discard(_value: Any) -> None:
+    """Drop whatever the model returned for a field only the system may fill."""
+    return None
+
+
+def _normalize_mapping(value: Any) -> Any:
+    """Return a JSONB mapping of trimmed text values, or `None` when empty."""
+    if not isinstance(value, dict):
+        return None
+
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        if len(normalized) >= MAX_MAPPING_ENTRIES:
+            break
+        key = _to_text(raw_key)
+        # A non-text value (a number, a nested object) is kept as its text form:
+        # the column is a free-form long tail, and dropping it loses provenance.
+        text = None if raw_value is None else _to_text(str(raw_value))
+        if key is None or text is None:
+            continue
+        normalized[key[:MAX_MAPPING_KEY_CHARS]] = text[:MAX_MAPPING_VALUE_CHARS]
+    return normalized or None
+
+
+class ExtractedSpec(BaseModel):
+    """What the model returns: the frozen specification column set, all optional.
+
+    Field names are the column names, so `to_spec_values()` is exactly the
+    full-object mapping `product_service.upsert_draft_spec` expects. Unknown
+    keys are ignored instead of rejected — a model that invents a field must not
+    cost the run its whole specification.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    category: Annotated[
+        ExtractedCategory | None, BeforeValidator(_vocabulary_validator(SPEC_CATEGORIES))
+    ] = Field(default=None, description="One of the pinned categories; null if none fits.")
+    engine_cc: Annotated[int | None, BeforeValidator(_quantity_validator("engine_cc"))] = Field(
+        default=None, description="Displacement in cm³."
+    )
+    cylinders: Annotated[int | None, BeforeValidator(_quantity_validator("cylinders"))] = Field(
+        default=None, description="Number of cylinders."
+    )
+    power_kw: Annotated[float | None, BeforeValidator(_quantity_validator("power_kw"))] = Field(
+        default=None, description="Maximum power in kW."
+    )
+    torque_nm: Annotated[float | None, BeforeValidator(_quantity_validator("torque_nm"))] = Field(
+        default=None, description="Maximum torque in Nm."
+    )
+    wet_weight_kg: Annotated[
+        float | None, BeforeValidator(_quantity_validator("wet_weight_kg"))
+    ] = Field(default=None, description="Wet/kerb weight in kg, fluids included.")
+    seat_height_mm: Annotated[
+        int | None, BeforeValidator(_quantity_validator("seat_height_mm"))
+    ] = Field(default=None, description="Seat height in mm.")
+    tank_capacity_l: Annotated[
+        float | None, BeforeValidator(_quantity_validator("tank_capacity_l"))
+    ] = Field(default=None, description="Fuel tank capacity in litres.")
+    top_speed_kmh: Annotated[int | None, BeforeValidator(_quantity_validator("top_speed_kmh"))] = (
+        Field(default=None, description="Top speed in km/h.")
+    )
+    abs: Annotated[bool | None, BeforeValidator(_normalize_flag)] = Field(
+        default=None, description="True when ABS is standard, null when only optional."
+    )
+    a2_eligible: Annotated[bool | None, BeforeValidator(_normalize_flag)] = Field(
+        default=None,
+        description="Only when a document states A2 licence eligibility explicitly.",
+    )
+    price_band: Annotated[
+        ExtractedPriceBand | None, BeforeValidator(_vocabulary_validator(PRICE_BANDS))
+    ] = Field(default=None, description="Price band derived from the EUR price.")
+    msrp_eur: Annotated[int | None, BeforeValidator(_quantity_validator("msrp_eur"))] = Field(
+        default=None, description="List price in EUR; null for any other currency."
+    )
+    extra: Annotated[dict[str, str] | None, BeforeValidator(_normalize_mapping)] = Field(
+        default=None, description="Additional named specifications as flat text values."
+    )
+    source_hints: Annotated[dict[str, str] | None, BeforeValidator(_normalize_mapping)] = Field(
+        default=None, description="Per-field note naming where the value came from."
+    )
+    # Part of the frozen column set, so it is part of this schema — but a model
+    # cannot know when it ran, so anything it returns here is discarded and the
+    # caller's timestamp is what `to_spec_values` writes.
+    extracted_at: Annotated[datetime | None, BeforeValidator(_discard)] = Field(
+        default=None, description="Always null: the system records the extraction time."
+    )
+
+    def to_spec_values(self, *, extracted_at: datetime) -> dict[str, Any]:
+        """Return the full-object mapping for `product_service.upsert_draft_spec`.
+
+        `extracted_at` is the caller's timestamp, never the model's: a model
+        cannot know when it ran, and the column records the extraction, not a
+        date it read somewhere.
+        """
+        values: dict[str, Any] = {}
+        for field in SPEC_FIELDS:
+            value = getattr(self, field)
+            values[field] = value.value if isinstance(value, Enum) else value
+        values["extra"] = self.extra or {}
+        values["extracted_at"] = extracted_at
+        return values
+
+    def filled_fields(self) -> tuple[str, ...]:
+        """Names of the frozen fields this extraction actually filled."""
+        return tuple(field for field in SPEC_FIELDS if getattr(self, field) is not None)
+
+
+def fence(markdown: str) -> str:
+    """Return document text with anything resembling a fence marker removed."""
+    return _FENCE_LOOKALIKE.sub(_FENCE_REPLACEMENT, markdown)
+
+
+def render_extraction_prompt(name: str, documents: Sequence[ExtractionDocument]) -> str:
+    """Render the extraction prompt for `name` over the given documents.
+
+    The documents are rendered in the order they are passed — the caller has
+    already decided which comes first and how much of each is included.
+    """
+    return render_prompt(
+        PROMPT_NAME,
+        name=name,
+        documents=[
+            ExtractionDocument(
+                title=document.title,
+                source_type=document.source_type,
+                markdown=fence(document.markdown),
+                url=document.url,
+            )
+            for document in documents
+        ],
+        categories=SPEC_CATEGORIES,
+        price_bands=PRICE_BANDS,
+        fence_start=FENCE_START,
+        fence_end=FENCE_END,
+    )
+
+
+def build_extraction_chain(model: str | None = None) -> Runnable[LanguageModelInput, ExtractedSpec]:
+    """Return the extraction chain: OpenRouter chat model + JSON-schema output.
+
+    Raises:
+        MissingApiKeyError: `OPENROUTER_API_KEY` is not configured.
+    """
+    chain = get_chat_model(model).with_structured_output(ExtractedSpec, method="json_schema")
+    return cast("Runnable[LanguageModelInput, ExtractedSpec]", chain)
+
+
+async def extract_spec(
+    name: str,
+    documents: Sequence[ExtractionDocument],
+    *,
+    model: str | None = None,
+) -> ExtractedSpec:
+    """Extract one specification for `name` from `documents`.
+
+    Raises:
+        MissingApiKeyError: `OPENROUTER_API_KEY` is not configured.
+        Exception: whatever the gateway or the parser raises — the caller
+            decides how loud a failed extraction is (in ingestion: a warning).
+    """
+    prompt = render_extraction_prompt(name, documents)
+    logger.info(
+        "Extracting specifications for %r from %d document(s), %d prompt characters.",
+        name,
+        len(documents),
+        len(prompt),
+    )
+    return await build_extraction_chain(model).ainvoke([HumanMessage(prompt)])

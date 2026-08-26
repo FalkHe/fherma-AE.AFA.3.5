@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     chat_model: str = "openai/gpt-4.1-mini"
 
+    # Specification extraction: the character-based input budget (no tokenizer
+    # dependency) one extraction call may spend on source documents.
+    extraction_max_input_chars: int = 60_000
+
 
 @lru_cache
 def get_settings() -> Settings:

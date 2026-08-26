@@ -15,8 +15,13 @@ the real internet — the one thing the test suite deliberately never does.
   catalogue entry for a model name and enqueues its ingestion, exactly as
   `POST /api/products` does. The work happens in the worker, so this command
   prints the operation id and returns.
+- `app ingest extract-specs` (step 2.17) re-runs the specification extraction
+  for an already-ingested model and replaces its draft specification. It runs
+  the LLM call **in this process** — nothing is enqueued, so the extracted
+  fields are printed here, which is what makes it a prompt-tuning tool.
 
-`fetch-image` and `run` touch the database; only `run` enqueues a job.
+`fetch-image`, `run` and `extract-specs` touch the database; only `run` enqueues
+a job.
 
 Follows the CLI async pattern of `app.cli.users`: the Typer command body stays
 synchronous and calls `asyncio.run(...)`.
@@ -29,9 +34,10 @@ import httpx2
 import typer
 
 from app.db.models.base import new_ulid
+from app.db.models.motorbike_spec import SPEC_FIELDS
 from app.db.session import get_sessionmaker
 from app.jobs.broker import broker
-from app.services import image_service, product_service
+from app.services import image_service, product_service, spec_extraction_service
 from app.services.ingestion import extract, fetch, search, storage, wikipedia
 
 app = typer.Typer(
@@ -216,6 +222,46 @@ async def _run(name: str) -> tuple[str, str]:
             return motorbike.name, operation.id
     finally:
         await broker.shutdown()
+
+
+@app.command("extract-specs")
+def extract_specs(
+    slug: Annotated[
+        str,
+        typer.Argument(help='Slug of an existing catalogue entry, e.g. "suzuki-gsr600".'),
+    ],
+    model: Annotated[
+        str | None,
+        typer.Option(help="OpenRouter model id; defaults to CHAT_MODEL."),
+    ] = None,
+) -> None:
+    """Extract the draft specification of one model from its stored documents.
+
+    Runs the LLM call in this process (nothing is enqueued) and replaces the
+    `draft` specification — the `verified` one is never touched. Running it
+    twice leaves exactly one draft row, so this is the prompt-tuning loop:
+    change `spec_extraction.md`, run again, read the fields.
+    """
+    outcome = asyncio.run(_extract_specs(slug, model))
+    if isinstance(outcome, spec_extraction_service.ExtractionFailure):
+        _fail(f"Extraction failed ({outcome.reason.value}): {outcome.detail}")
+
+    typer.echo(
+        f"Extracted {len(outcome.extracted.filled_fields())} field(s) "
+        f"from {outcome.documents} document(s) into draft {outcome.spec.id}.",
+        err=True,
+    )
+    for field in SPEC_FIELDS:
+        typer.echo(f"  {field + ':':18} {outcome.values[field]}")
+
+
+async def _extract_specs(slug: str, model: str | None) -> spec_extraction_service.ExtractionOutcome:
+    """Async half of `extract-specs`: one session, one service call."""
+    async with get_sessionmaker()() as session:
+        motorbike = await product_service.get_by_slug(session, slug)
+        if motorbike is None:
+            _fail(f"No catalogue entry with slug {slug!r}.")
+        return await spec_extraction_service.extract_draft_spec(session, motorbike, model=model)
 
 
 def _fail(message: str) -> NoReturn:

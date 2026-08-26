@@ -10,10 +10,10 @@ Three rules are implemented here and nowhere else:
 
 * **The milestone sequence is a contract.** 5 % `Looking up Wikipedia`, 15 %
   `Searching the web`, 20–60 % `Fetching sources (n/m)`, 65 % `Processing
-  images`, 100 % succeeded. The admin UI renders those messages verbatim, so
-  the constants below are the wording, not a paraphrase of it. Steps 2.17
-  (extraction, 80 %) and 2.19 (embeddings, 90 %) insert themselves between the
-  image stage and `_complete`.
+  images`, 80 % `Extracting specifications`, 100 % succeeded. The admin UI
+  renders those messages verbatim, so the constants below are the wording, not
+  a paraphrase of it. Step 2.19 (embeddings, 90 %) inserts itself between the
+  extraction stage and `_complete`.
 * **A partial failure is a warning, never a failure.** Every adapter returns a
   typed failure instead of raising, and each one is appended to the operation
   `message` while the run continues. **Zero usable documents** is the one
@@ -44,7 +44,13 @@ from app.db.models.motorbike_image import MotorbikeImage
 from app.db.models.operation import MAX_PROGRESS, Operation
 from app.db.models.source_document import SOURCE_TITLE_LENGTH, SourceDocument, SourceType
 from app.jobs import TransientJobError
-from app.services import document_service, image_service, operation_service, product_service
+from app.services import (
+    document_service,
+    image_service,
+    operation_service,
+    product_service,
+    spec_extraction_service,
+)
 from app.services.ingestion import extract, fetch, search, storage, wikipedia
 
 logger = logging.getLogger(__name__)
@@ -53,6 +59,7 @@ logger = logging.getLogger(__name__)
 WIKIPEDIA_MILESTONE = (5, "Looking up Wikipedia")
 SEARCH_MILESTONE = (15, "Searching the web")
 IMAGE_MILESTONE = (65, "Processing images")
+EXTRACTION_MILESTONE = (80, "Extracting specifications")
 
 # The fetch stage spreads its candidates over this band; the message counts
 # them as `Fetching sources (n/m)`.
@@ -174,6 +181,7 @@ class _Run:
             return
 
         await self._image_stage(image)
+        await self._extraction_stage()
         await self._complete()
 
     async def _discard_previous_run(self) -> None:
@@ -339,6 +347,20 @@ class _Run:
             gate=self.gate,
         )
         if isinstance(outcome, image_service.ImageFailure):
+            self._warn(outcome.detail)
+
+    async def _extraction_stage(self) -> None:
+        """Extract the draft specification; a failed extraction is a warning.
+
+        The admin can fill the specification form in by hand — that is the
+        correction mechanism for a bad extraction anyway — so nothing here may
+        cost the run its documents. A missing `OPENROUTER_API_KEY` is part of
+        that: deterministic, reported once, and never a retry.
+        """
+        await self._advance(*EXTRACTION_MILESTONE)
+
+        outcome = await spec_extraction_service.extract_draft_spec(self.session, self.motorbike)
+        if isinstance(outcome, spec_extraction_service.ExtractionFailure):
             self._warn(outcome.detail)
 
     async def _nothing_ingested(self) -> None:

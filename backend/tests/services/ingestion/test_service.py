@@ -1,13 +1,14 @@
-"""Tests for the ingestion orchestration service (step 2.14).
+"""Tests for the ingestion orchestration service (steps 2.14 and 2.17).
 
 Every adapter is replaced: `wikipedia.lookup`, the search provider,
-`fetch.fetch_html`, `extract.extract_markdown` and `image_service.ingest_image`
+`fetch.fetch_html`, `extract.extract_markdown`, `image_service.ingest_image`
+and the LLM call behind the extraction stage (`llm.extraction.extract_spec`)
 are stubbed, so what is under test is the composition — the pinned milestone
 sequence and its exact messages, the partial-failure rule, the zero-document
 failure, the retry decision and fresh-run replacement. No socket is opened (a
 sentinel stands in for the HTTP client) and the catalogue writes go through the
-in-memory `FakeAsyncSession`, so `product_service`, `document_service` and
-`operation_service` really run.
+in-memory `FakeAsyncSession`, so `product_service`, `document_service`,
+`operation_service` and `spec_extraction_service` really run.
 
 Retained payloads *are* written: `DATA_DIR` and `MEDIA_DIR` are pointed at
 `tmp_path`, because "the previous run's files are deleted" is part of the
@@ -24,10 +25,19 @@ import pytest
 
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus, MotorbikeImage
+from app.db.models.motorbike_spec import MotorbikeSpec, SpecKind
 from app.db.models.operation import Operation, OperationStatus
 from app.db.models.source_document import SourceDocument, SourceType
 from app.jobs import TransientJobError
-from app.services import document_service, image_service, operation_service, product_service
+from app.llm import extraction
+from app.llm.models import MissingApiKeyError
+from app.services import (
+    document_service,
+    image_service,
+    operation_service,
+    product_service,
+    spec_extraction_service,
+)
 from app.services.ingestion import extract, fetch, search, service, storage, wikipedia
 from tests.services.conftest import FakeAsyncSession
 
@@ -221,6 +231,7 @@ def test_successful_run_walks_the_pinned_milestones(
         (20, "Fetching sources (1/2)"),
         (40, "Fetching sources (2/2)"),
         (65, "Processing images"),
+        (80, "Extracting specifications"),
     ]
     assert operation.status is OperationStatus.SUCCEEDED
     assert operation.progress == 100
@@ -393,10 +404,92 @@ def test_a_missing_search_key_leaves_a_wikipedia_only_run(
         (5, "Looking up Wikipedia"),
         (15, "Searching the web"),
         (65, f"Processing images — {warning}"),
+        (80, f"Extracting specifications — {warning}"),
         (100, service.WARNING_SUMMARY_PREFIX + warning),
     ]
     assert operation.status is OperationStatus.SUCCEEDED
     assert len(fake_session.rows(SourceDocument)) == 1
+
+
+# --- the extraction stage (step 2.17) -----------------------------------------
+
+
+def test_the_extraction_stage_writes_the_draft_specification(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    extracted_specs: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stage reads what the run just stored and fills the review form."""
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(monkeypatch, search.SearchResults())
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    assert extracted_specs == [MODEL_NAME]
+    specs = fake_session.rows(MotorbikeSpec)
+    assert [spec.kind for spec in specs] == [SpecKind.DRAFT]
+    assert specs[0].engine_cc == 599
+    assert specs[0].extracted_at is not None
+    assert operation.status is OperationStatus.SUCCEEDED
+
+
+def test_a_missing_llm_key_is_a_warning_and_the_model_still_reaches_review(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    milestones: list[tuple[int, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deterministic configuration failure: warned about, never retried, never fatal.
+
+    The admin fills the specification form in by hand — that is the correction
+    mechanism for extraction anyway — so the documents this run fetched must not
+    be thrown away over a missing key.
+    """
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(monkeypatch, search.SearchResults())
+
+    async def raise_missing_key(name: str, documents: Any, *, model: str | None = None):
+        raise MissingApiKeyError
+
+    monkeypatch.setattr(extraction, "extract_spec", raise_missing_key)
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    assert operation.status is OperationStatus.SUCCEEDED
+    assert motorbike.status is MotorbikeStatus.IN_REVIEW
+    assert operation.message is not None
+    assert operation.message.startswith(service.WARNING_SUMMARY_PREFIX)
+    assert spec_extraction_service.MISSING_KEY_DETAIL in operation.message
+    assert operation.error is None
+    # The run kept its document and simply has no draft specification yet.
+    assert len(fake_session.rows(SourceDocument)) == 1
+    assert fake_session.rows(MotorbikeSpec) == []
+    assert milestones[-1][0] == 100
+
+
+def test_a_failing_extraction_is_a_warning_not_a_failure(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(monkeypatch, search.SearchResults())
+
+    async def fail(name: str, documents: Any, *, model: str | None = None):
+        raise RuntimeError("OpenRouter answered 502")
+
+    monkeypatch.setattr(extraction, "extract_spec", fail)
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    assert operation.status is OperationStatus.SUCCEEDED
+    assert motorbike.status is MotorbikeStatus.IN_REVIEW
+    assert operation.message is not None
+    assert "OpenRouter answered 502" in operation.message
 
 
 # --- the failure paths --------------------------------------------------------
