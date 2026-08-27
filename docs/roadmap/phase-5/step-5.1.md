@@ -4,7 +4,7 @@ step: "5.1"
 title: Error handling & validation sweep
 summary: Systematically harden every input surface (API schemas, forms, tool inputs), give LLM and ingestion failures explicit user-visible states, and wrap all retrieved web content in prompt-injection defences.
 effort: 8
-dependencies: ["1.1", "2.2", "2.3", "2.4", "3.1", "3.2", "3.3", "3.4", "4.1", "4.2"]
+dependencies: ["1.1", "2.2", "2.3", "2.4", "3.17", "4.2"]
 ---
 
 # Step 5.1 — Error handling & validation sweep

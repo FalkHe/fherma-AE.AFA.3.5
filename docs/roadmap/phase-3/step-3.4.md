@@ -1,36 +1,71 @@
 ---
 phase: 3
 step: "3.4"
-title: Advisor agent
-summary: A tool-calling LangChain agent (plain tool loop, no LangGraph) that runs the guided interview inside a Taskiq job, captures firmness-tagged preferences, produces recommendations with cited sources, persists everything to PostgreSQL for resumability, and flags unknown bikes into the backlog.
-effort: 16
-dependencies: ["1.1", "2.2", "3.2", "3.3"]
+title: Chat shell, UI-only
+summary: Consultation list and chat view routes with composer, markdown message bubbles, typing indicator, and the conversation state machine — all against stub hooks; deletes HomeRoute and rehomes the post-login landing to /consultations.
+effort: 4
+dependencies: ["3.2", "1.6", "2.4"]
 ---
 
-# Step 3.4 — Advisor agent
+# Step 3.4 — Chat shell, UI-only
 
-**Effort: 16** — integrates steps 3.1–3.3 plus new chat/preference persistence, a job-driven agent loop with step limits, structured recommendation output, and end-to-end scripted verification; roughly two solid days.
+**Effort: 4** — two routes, the bubble/typing components, the state-machine
+derivation, and the pinned stub fixtures; zero backend code needed.
 
-## Architect's outline
+Binding contracts: `docs/roadmap/phase-3/ui-spec.md` (§1–§6, §10–§13 —
+layouts, states, i18n keys, fixtures) and
+`docs/roadmap/phase-3/shared-knowledge.md` (§Frontend conventions — delta).
+Agent: **frontend-dev**.
 
-- DB models + migration (`backend/app/db/models/chat.py`): `chats` (owner, title, status), `chat_messages` (role, content, `tool_calls` JSONB with args+results, `sources` JSONB with provenance, `recommendations` JSONB), `chat_preferences` (chat-scoped: attribute, value, `firmness` enum `hard|soft|exploring`, superseded-by for revisions).
-- `ChatService`: create chat, append user message, enqueue response job, persist completed assistant message first, then NOTIFY `chat.message.created`; owns transactions.
-- JSON:API endpoints (`api/endpoints/chats.py`): `POST/GET /api/chats`, `GET/POST /api/chat-messages` (filtered by chat), session-cookie auth + CSRF, ownership checks, message length/shape validation.
-- System prompt `backend/app/llm/prompts/advisor_system.md`: interview stages (experience → licence → use case → budget → physique → preferences), steer-but-allow-free-form behaviour, cite-sources instruction, refuse out-of-domain requests (domain security measure).
-- Agent loop in `backend/app/llm/agents/advisor.py`: ChatOpenRouter with the four step-3.3 tools, a `retrieve_bike_knowledge` tool wrapping the step-3.2 pipeline, a `record_preference` tool (structured firmness capture → `chat_preferences`), and a `flag_unknown_bike` tool inserting a backlog-status motorbike via the catalogue service (an explicitly permitted low-risk autonomous write); configurable max tool steps and wall-clock timeout.
-- Taskiq task `generate_chat_response`: rebuilds LLM context from persisted history + non-superseded preferences (resumability = persistence; interrupted jobs rerun from the last user message), records operation state for the typing indicator, retries only transient LLM failures.
-- Recommendation structured output: final answer includes `recommendations: [{motorbikeId, reasoning, matchedPreferences}]` and per-claim source provenance, both persisted on the assistant message so Phase-4 cards and source panels are pure rendering.
-- Failure handling: agent/tool errors produce a persisted apologetic assistant message plus a failed operation — never a silent dead chat.
-- Verification script `backend/scripts/demo_conversation.py` (or `app chat simulate`): register/login via HTTP, run a 6–8 turn scripted interview over the real API, assert tool calls occurred, recommendations reference approved models, sources attached, and re-fetching the chat reproduces full history.
-- Tests: preference supersession, context rebuild from history, unknown-bike flag creates exactly one backlog entry (idempotent on name).
-- Agent assignment: **backend-dev** (qa runs and hardens the scripted-conversation check).
+## Outline
+
+- Routes per ui-spec §1: `frontend/src/routes/ConsultationsRoute.tsx`
+  (list, §4) and `frontend/src/routes/ConsultationChatRoute.tsx` (chat
+  view + state machine, §5, §3.3); index route becomes
+  `<Navigate to="/consultations" replace />`. **Delete `HomeRoute.tsx` +
+  test, `HealthStatus`, `useHealth`, the `home.*` i18n block; `nav.home` →
+  `nav.consultations`** (ui-spec §1/§10).
+- Components: `MessageBubble.tsx` (ui-spec §6 — react-markdown + remark-gfm
+  for assistant only, plain `pre-wrap` text for user, timestamps, send-state
+  captions), `TypingIndicator.tsx` (§2.2), `LiveConnectionAlert.tsx`
+  (§2.3 — extract from `AdminLayout`, refactor `AdminLayout` to use it,
+  move `admin.live.disconnected` → `common.live.disconnected`).
+- Composer per ui-spec §5: sticky, multiline, Enter-sends/Shift+Enter
+  newline (IME-safe), disabled rules per §3.3, auto-scroll rules.
+- Delete affordance per ui-spec §4: per-row delete `IconButton` +
+  `ConfirmDialog` (the existing 2.13 component, already-translated
+  strings); stubbed `useDeleteChat` removes the row from the fixture table.
+- Stub hooks (Phase-1/2 stub pattern, header comment naming step 3.6 as the
+  deleting step): `frontend/src/hooks/useChats.ts` (`useChats`,
+  `useChat(chatId)`, `useCreateChat`, `useDeleteChat` + type `Chat`) and
+  `frontend/src/hooks/useChatMessages.ts` (`useChatMessages`,
+  `useSendMessage` + types `ChatMessage`, `MessageSource`, `ToolCall`,
+  `Recommendation`, `ChatError`) over the **binding fixture set of ui-spec
+  §12** (5 chats: interview — opening with the advisor's greeting — /
+  typing / stale / new-with-incoming-greeting / idle-empty; the send stub
+  with the magic `"fail"` input; the delete stub removing rows). The
+  optimistic-send exemption (§3.2) is implemented here against the stub.
+- `frontend/src/queryKeys.ts` gains `chats.list()`, `chats.detail(id)`,
+  `chatMessages.byChat(chatId)` builders; i18n keys from ui-spec §11 merged
+  into `frontend/src/locales/en/translation.json`.
+- Constants: `MESSAGE_MAX_LENGTH = 4000`, `CHAT_TURN_STALE_SECONDS = 150`
+  (shared-knowledge mirrors).
+- Tests: state-machine table rows 1–5 via the fixtures, Enter/Shift+Enter,
+  failed-send retry/discard, markdown GFM table render, both `Intl`
+  timestamp formats.
 
 ## Verification
 
-- Demo script against `docker compose up` prints the interview, ≥3 distinct tool calls with results, recommendation JSON grounded in approved models with provenance; mentioning an uncatalogued bike leaves a new backlog row; killing the worker mid-response and re-sending the message still completes.
+- `make frontend-test` + `pnpm lint` + `pnpm typecheck` green;
+  `/consultations` renders the stub list (all four states reachable), the
+  interview chat renders bubbles with a GFM table, the typing fixture shows
+  the animated indicator + Seen caption, the stale fixture shows the
+  failed-turn row.
 
 ## Risks / notes
 
-- Interview quality is prompt work with a long tail — timebox iteration; "plausible interview" (the phase's done-criterion) is the bar, not perfection.
-- Context growth over long chats: start with full history replay (simplest); add a rolling summary only if token limits actually bite.
-- `flag_unknown_bike` needs dedup against existing catalogue/backlog names or repeated mentions spam the backlog.
+- Components written against the stubs must survive 3.6's wholesale stub
+  deletion unchanged — import types only from the two hook files.
+- Do not build any part renderers here (tool blocks/sources/cards are 3.10);
+  `MessageBubble` renders body + timestamp + send states only, with the part
+  slots left as clearly marked extension points.

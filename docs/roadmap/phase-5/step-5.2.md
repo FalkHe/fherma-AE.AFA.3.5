@@ -4,7 +4,7 @@ step: "5.2"
 title: Observability & polish
 summary: Wire the optional Langfuse callback (config-gated, with its optional Compose stack) and audit every screen for progress indicators, empty, loading, and error states.
 effort: 8
-dependencies: ["2.2", "2.6", "4.1", "4.2", "5.1"]
+dependencies: ["2.2", "2.6", "3.15", "4.2", "5.1"]
 ---
 
 # Step 5.2 — Observability & polish

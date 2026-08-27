@@ -1,32 +1,63 @@
 ---
 phase: 3
 step: "3.1"
-title: Hybrid retrieval
-summary: A RetrievalService combining PostgreSQL full-text search and pgvector cosine similarity over chunks via Reciprocal Rank Fusion, filterable by motorbike and lifecycle status, returning chunks with full provenance.
-effort: 8
-dependencies: ["2.1", "2.5"]
+title: Chat persistence
+summary: The chats/chat_messages/chat_preferences tables in one migration (incl. soft delete via deleted_at), plus ChatService with message append, title-once, soft delete, preference supersession, and the chat.message.created announcement seam.
+effort: 4
+dependencies: ["1.1", "2.1", "2.6"]
 ---
 
-# Step 3.1 — Hybrid retrieval
+# Step 3.1 — Chat persistence
 
-**Effort: 8** — the RRF SQL, indexes/migration, query-embedding wiring, and a CLI harness are each small but must be tuned and verified together against real ingested data.
+**Effort: 4** — three tables, one migration, and a service with a handful of
+functions; the supersession logic and the announce-after-commit ordering are
+the only subtleties. **The only Phase-3 migration.**
 
-## Architect's outline
+Binding contract: `docs/roadmap/phase-3/shared-knowledge.md` (§DB schema,
+§Persisted JSONB shapes, §SSE / events). Agent: **backend-dev**.
 
-- Alembic migration: generated `tsvector` column on the chunks table (`to_tsvector('english', text)`) with a GIN index, plus an HNSW (cosine) index on the embedding column.
-- `backend/app/services/retrieval_service.py`: `search(query_text, *, motorbike_ids=None, only_approved=True, limit=10)` — embeds the query via the configured OpenRouter embedding model (reusing the Phase-2 `EmbeddingService`), runs one SQL statement with two ranked CTEs (FTS rank, vector distance) fused by RRF (`k=60`), joined to motorbike + source-document metadata.
-- Metadata filtering happens inside the SQL (motorbike id list, status = approved, embedding model matches configured model) — never post-filtering in Python.
-- Result model `RetrievedChunk`: text, score, and provenance exactly as `docs/architecture.md` defines (`sourceDocumentId`, `sourceUrl`, `sourceTitle`, `headingPath`, `pageNumber`, `sequence`) plus `motorbikeId`.
-- Guard: if stored embedding dimensions/model mismatch the configured model, fail with a clear error pointing at the re-embed CLI command.
-- Typer command `app retrieval search "smooth beginner-friendly middleweight" [--bike <ulid>]` printing ranked results with scores and provenance.
-- Unit tests for RRF fusion ordering and the filter clauses (seeded fixture chunks).
-- Agent assignment: **backend-dev** (qa reviews the fusion tests).
+## Outline
+
+- `backend/app/db/models/chat.py`: `Chat`, `ChatMessage`, `ChatPreference`
+  exactly as pinned in shared-knowledge (ULID PKs, TIMESTAMPTZ, native enums
+  `chat_message_role('user','assistant')` /
+  `preference_firmness('hard','soft','exploring')` with `values_callable`,
+  JSONB `tool_calls`/`sources`/`recommendations` defaulting `'[]'`, no
+  relationships). One Alembic migration off head `0a65339a924a`; downgrade
+  drops both enum types explicitly (copy `4ea01933a43b`).
+- `backend/app/services/chat_service.py` (module-level functions,
+  `AsyncSession` first, services commit): `create_chat(session, user_id)`,
+  `get_owned_chat(session, chat_id, user_id)` (None for wrong owner **or**
+  soft-deleted — routes map to 404), `list_chats(session, user_id, *,
+  limit, offset) -> (rows, total)` ordered `updated_at DESC, id DESC`
+  filtering `deleted_at IS NULL`, `soft_delete_chat(session, chat)` (sets
+  `deleted_at`, commits, no event),
+  `append_user_message(session, chat, body)` (sets `title` from the first
+  user message truncated to 160 — only when still null; bumps
+  `updated_at`; commits), `append_assistant_message(session, chat, body, *,
+  tool_calls=(), sources=(), recommendations=())` (clears
+  `active_operation_id` in the same transaction, commits, then announces
+  `chat.message.created` via `operation_service.notify` — the pinned
+  emitter), `list_messages(session, chat_id)` ordered
+  `created_at ASC, id ASC`.
+- Preference functions: `record_preference(session, chat_id, *, attribute,
+  value, firmness)` — same chat + same attribute ⇒ insert new row and set
+  the old row's `superseded_by_id` in one transaction;
+  `active_preferences(session, chat_id)` filters
+  `superseded_by_id IS NULL`.
+- Tests (`FakeAsyncSession` pattern from `backend/tests/services/`):
+  supersession (old row marked, new row active), title set once and only
+  once (and **never** by an assistant message), message ordering, soft
+  delete excludes from list/get, announce-after-commit ordering observable
+  via the conftest notification interpreter.
 
 ## Verification
 
-- `docker compose exec app-web app retrieval search "comfortable touring bike"` returns ranked chunks with source titles/URLs from an approved Phase-2-ingested model; `--bike` restricts results to that model.
+- `make backend-test` green; `alembic upgrade head` / `downgrade -1`
+  round-trips; `alembic check` clean (schema fully expressed in the ORM).
 
 ## Risks / notes
 
-- RRF weights/`k` and per-leg candidate counts (e.g. top 50 each) need one tuning pass on real data — keep them settings, not literals.
-- English-only FTS config is a deliberate simplification; don't add language detection.
+- Zero deviations from the pinned schema — 3.3's serialization and the
+  frontend stubs are being built against it in parallel.
+- `active_operation_id` is a plain string, no FK — do not "improve" it.

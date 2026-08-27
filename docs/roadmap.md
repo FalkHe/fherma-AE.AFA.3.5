@@ -125,40 +125,69 @@ where both tracks converge into something demoable.
 *Done when:* admin types "Suzuki GSR 600", watches ingestion run, reviews and
 approves it, and the model exists in the live catalogue with verified specs.
 
-## Phase 3 — Retrieval & the advisor agent
+## Phase 3 — Retrieval, the advisor agent & the consultation UI
 
-**Goal: the advisory brain works end-to-end (testable via API/CLI before the
-customer UI exists).**
+**Goal: the advisory brain works end-to-end, and a customer can hold the
+consultation in the browser.** (Re-sliced 2026-08-27: the consultation UI —
+formerly step 4.1 — moved into this phase so each feature is built by
+frontend and backend in parallel.)
 
-- **3.1 Hybrid retrieval** — full-text search + pgvector similarity + RRF, with
-    metadata filtering; provenance flows through to results.
-- **3.2 Advanced RAG** — query translation/rewriting of conversational customer
-    language into retrieval queries; structured retrieval combining spec
-    filters with prose search.
-- **3.3 Domain tools** — structured catalogue search, spec comparison,
-    licence/fit checks, cost estimator; each a tool the agent calls, backed
-    by verified catalogue data.
-- **3.4 Advisor agent** — guided-interview behaviour, firmness-tagged preference
-    capture, recommendation generation with cited sources; chat persistence
-    and resumability; flags unknown bikes into the backlog.
+Two parallel tracks, 17 steps of effort ≤ 4, two cross-track sync points
+(S1: 3.6 needs 3.3 + 3.5; S2: 3.15 needs 3.13 + 3.14). The binding contract
+is `docs/roadmap/phase-3/shared-knowledge.md`; UI specs live in
+`docs/roadmap/phase-3/ui-spec.md`.
+
+Backend track (`backend-dev`):
+- **3.1 Chat persistence** — chats/messages/preferences tables (one
+   migration), ChatService, firmness supersession.
+- **3.3 Chat JSON:API endpoints** — chats + chat-messages resources incl.
+   the frozen message-part contract *(with 3.5 = S1)*.
+- **3.5 Minimal chat responder job** — plain-LLM replies via Taskiq,
+   operation lifecycle, stale-turn healing, apologetic failure path.
+- **3.7 Hybrid retrieval** — FTS + pgvector + RRF over the existing indexes,
+   provenance-carrying results.
+- **3.8 Query translation** · **3.9 RAG pipeline** — conversational language
+   → retrieval queries + spec filters → candidate-scoped fused retrieval.
+- **3.11 Domain tools I (convention, catalogue search, spec comparison)** ·
+   **3.12 Domain tools II (licence/fit check, cost estimator)**.
+- **3.13 Advisor agent loop** — guided interview, tool loop with limits,
+   persisted tool calls/sources/recommendations *(with 3.14 = S2)*.
+- **3.14 Preference capture & unknown-bike flagging**.
+- **3.16 Scripted-conversation demo & prompt hardening**.
+
+Frontend track (`frontend-dev`; 3.4/3.10 need zero backend code):
+- **3.2 Consultation ui-spec** *(ui-ux-designer — done)* ·
+   **3.4 Chat shell, UI-only** *(stubbed)* ·
+   **3.6 Wire chat live** *(S1)* ·
+   **3.10 Tool renderers, sources & recommendation cards, UI-only** ·
+   **3.15 Wire advisor UI live** *(S2)*.
+
+- **3.17 Phase-3 acceptance run** *(qa)* — the done-criterion, end-to-end.
+
+Commit per finished step; tag at the five milestones pinned in
+`shared-knowledge.md` (M1 chat plumbing & shells → M2 live chat → M3 the
+RAG brain → M4 the advisor → M5 acceptance) — each a feature where both
+tracks converge into something demoable.
 
 *Done when:* a scripted conversation over the API yields a plausible
 interview, visible tool calls, recommendations grounded in approved models,
-and sources attached.
+and sources attached — and the same interview works in the browser with
+seen/typing states, visible tool results, sources, and recommendation cards,
+resumable after closing the browser.
 
-## Phase 4 — Customer frontend
+## Phase 4 — Customer catalogue
 
-**Goal: the product as a customer experiences it.**
+**Goal: the browsable catalogue completing the customer experience.**
 
-- **4.1 Consultation UI** — consultation list (resume anytime), chat view with
-    seen/typing states over SSE, retrieved sources shown, tool-call results
-    displayed, recommendation cards linking to model detail pages.
+- **4.1** *(superseded — moved into Phase 3; see
+    `docs/roadmap/phase-4/step-4.1.md` for the mapping).*
 - **4.2 Catalogue browsing** — model list with URL-persisted filters, model
-    detail page (verified specs, prose, sources, images).
+    detail page (verified specs, prose, sources, images); adds the
+    recommendation-card link (`/catalogue/:productId`) reserved in Phase 3.
 
-*Done when:* a fresh user registers, is interviewed, gets recommendation
-cards, opens a model detail page, closes the browser, and resumes the
-consultation later.
+*Done when:* a fresh user filters the catalogue, opens a model detail page
+from a recommendation card, and an unapproved model is unreachable by direct
+URL.
 
 ## Phase 5 — Hardening & submission
 
@@ -182,7 +211,7 @@ consultation later.
 | LangChain + OpenRouter | Phases 2 (extraction, embeddings) & 3 (agent) |
 | Advanced RAG (query translation, structured retrieval, chunking) | Phases 2 & 3 |
 | ≥ 3 tool calls | Phase 3 (four tools) |
-| React UI: sources, tool results, progress | Phases 2 (admin) & 4 (customer) |
+| React UI: sources, tool results, progress | Phases 2 (admin) & 3 (customer chat; catalogue in 4) |
 | Error handling, validation, security | Phases 1, 5 (and throughout) |
 
 Optional-task bonus (≥ 2 medium + 1 hard) covered by design: **hard** — hybrid
