@@ -87,7 +87,7 @@ are stored (Phase-1 landed decision). ORM models define **no relationships**.
 | `id` | `String(26)` PK |
 | `name` | `String(160) NOT NULL` — display name as entered ("Suzuki GSR 600") |
 | `slug` | `String(160) NOT NULL`, unique `uq_motorbikes_slug` — service-side slugify: lowercase, `[^a-z0-9]+` → `-`, trimmed; no slugify dependency |
-| `manufacturer` | `String(64) NULL` (filled by extraction/admin) |
+| `manufacturer` | `String(64) NULL` (filled by extraction/admin) — **superseded (Phase 2b, 2026-08-27)**: column dropped, replaced by `manufacturer_id` FK → `manufacturers`; see [`../phase-2b/shared-knowledge.md`](../phase-2b/shared-knowledge.md) |
 | `model_name` | `String(128) NULL` |
 | `year_from`, `year_to` | `SmallInteger NULL` |
 | `status` | native enum `motorbike_status('backlog','ingesting','in_review','approved','rejected') NOT NULL`, server default `'backlog'`, index `ix_motorbikes_status` |
@@ -225,7 +225,11 @@ The small internal layer lives in `backend/app/api/jsonapi.py` (step 2.3).
   `operations`. Attributes camelCase; enum values as stored (lowercase
   snake, e.g. `in_review`).
 
-**`products`** — attributes: `name, slug, manufacturer, modelName, yearFrom,
+**`products`** — *(note, Phase 2b, 2026-08-27: `manufacturer` is since
+derived — the related `manufacturers` row's `name`, `null` when unassigned;
+wire shape unchanged. See
+[`../phase-2b/shared-knowledge.md`](../phase-2b/shared-knowledge.md).)* —
+attributes: `name, slug, manufacturer, modelName, yearFrom,
 yearTo, status, draftSpec, verifiedSpec, createdAt, updatedAt` (spec objects
 use the camelCase spec shape above; `null` when absent). **No relationships /
 includes in Phase 2** — operation state reaches the UI via `/api/operations`

@@ -125,6 +125,29 @@ where both tracks converge into something demoable.
 *Done when:* admin types "Suzuki GSR 600", watches ingestion run, reviews and
 approves it, and the model exists in the live catalogue with verified specs.
 
+## Phase 2b — Manufacturers table (interlude)
+
+**Goal: manufacturers become a first-class table (name, description, logo —
+NULL for now) instead of a free-text column; extraction fills it; an
+admin-only read API exposes it.** Admin UI for managing manufacturers is out
+of scope. (Owner-requested refactor, 2026-08-27, before Phase 3 starts.)
+
+Backend-only, 4 steps of effort ≤ 4. The binding contract is
+`docs/roadmap/phase-2b/shared-knowledge.md`.
+
+- **2b.1 Manufacturers table, migration & derived products attribute** —
+   new table + FK, legacy column dropped, products wire shape preserved by
+   derivation (zero frontend changes).
+- **2b.2 Extraction fills the manufacturer + backfill CLI** — get-or-create
+   on ingest; deterministic CLI backfills the 3 existing bikes without
+   touching embeddings.
+- **2b.3 `/api/manufacturers` read endpoints** — admin-only, read-only.
+- **2b.4 Phase-2b acceptance run** *(qa)* — tags `phase-2b-done`.
+
+*Done when:* the three approved bikes point at manufacturers rows, a fresh
+ingest assigns its brand automatically, the products API is byte-compatible,
+and the Phase-3 prerequisite (approved, embedded models) still holds.
+
 ## Phase 3 — Retrieval, the advisor agent & the consultation UI
 
 **Goal: the advisory brain works end-to-end, and a customer can hold the

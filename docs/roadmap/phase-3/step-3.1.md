@@ -23,7 +23,9 @@ Binding contract: `docs/roadmap/phase-3/shared-knowledge.md` (§DB schema,
   `chat_message_role('user','assistant')` /
   `preference_firmness('hard','soft','exploring')` with `values_callable`,
   JSONB `tool_calls`/`sources`/`recommendations` defaulting `'[]'`, no
-  relationships). One Alembic migration off head `0a65339a924a`; downgrade
+  relationships). One Alembic migration off the Phase-2b head
+  (`add_manufacturers_table` — **placeholder**: 2b.1 replaces this with the
+  concrete revision id when it lands; formerly `0a65339a924a`); downgrade
   drops both enum types explicitly (copy `4ea01933a43b`).
 - `backend/app/services/chat_service.py` (module-level functions,
   `AsyncSession` first, services commit): `create_chat(session, user_id)`,

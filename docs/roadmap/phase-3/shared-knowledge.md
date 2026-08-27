@@ -97,7 +97,9 @@ Phase-2 conventions verbatim: ULID `String(26)` PKs via
 `Base.metadata`, native PG enums with `values_callable` (lowercase stored),
 **no ORM relationships**; the migration's downgrade drops the two new enum
 types explicitly (copy `4ea01933a43b`'s pattern). Head chain: `0a65339a924a`
-→ 3.1's revision.
+→ Phase 2b's `add_manufacturers_table` revision (**placeholder** — 2b.1
+replaces this with the concrete id when it lands; see
+`../phase-2b/shared-knowledge.md` → *Landed decisions*) → 3.1's revision.
 
 **`chats`**
 
