@@ -1,8 +1,9 @@
-"""`app/llm/agents/tools/` — the convention and the two tools of step 3.11.
+"""`app/llm/agents/tools/` — the convention and the four tools of steps 3.11–3.12.
 
 A tool is a thin mapping between the model and a service, so these tests stub the
-services (`catalogue_search_service`, `product_service`) and assert the things
-only the tool layer owns:
+services (`catalogue_search_service`, `product_service`; the fit-check and cost
+services run for real on top of the stubbed catalogue read, because their own
+modules own their arithmetic) and assert the things only the tool layer owns:
 
 * **the frozen result shapes** — camelCase keys, the comparison covering every
   comparable specification field with explicit `null`s, the shortlist cap next to
@@ -27,11 +28,17 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import ValidationError
 from pydantic.alias_generators import to_camel
 
+from app.api.schemas.chat_messages import ToolCall
 from app.db.models.motorbike import MotorbikeStatus
 from app.llm.agents import tools
-from app.llm.agents.tools import catalogue_search, spec_comparison
+from app.llm.agents.tools import (
+    catalogue_search,
+    cost_estimator,
+    licence_fit_check,
+    spec_comparison,
+)
 from app.llm.query_translation import SpecFilters
-from app.services import catalogue_search_service, product_service
+from app.services import catalogue_search_service, cost_data, product_service
 from app.services.catalogue_search_service import COMPARISON_SPEC_FIELDS, VerifiedSpecs
 
 BIKE_A = "01J0BIKE0000000000000000AA"
@@ -118,9 +125,14 @@ def _execute(name: str, ctx: tools.ToolContext, arguments: dict[str, Any]) -> di
 
 def test_the_registry_holds_this_step_s_tools_and_rejects_an_unknown_name() -> None:
     """`tool_names` is what the CLI lists and what the loop binds, in order."""
-    assert tools.tool_names() == [catalogue_search.NAME, spec_comparison.NAME]
+    assert tools.tool_names() == [
+        catalogue_search.NAME,
+        spec_comparison.NAME,
+        licence_fit_check.NAME,
+        cost_estimator.NAME,
+    ]
     with pytest.raises(KeyError):
-        tools.get_tool_spec("licence_fit_check")
+        tools.get_tool_spec("present_recommendations")
 
 
 def test_every_registered_tool_has_a_described_camel_aliased_args_schema() -> None:
@@ -171,7 +183,9 @@ def test_a_langchain_tool_returns_the_result_as_json_and_records_it(
     catalogue.matches = [BIKE_A]
     catalogue.specs = [_specs(BIKE_A, "Honda CB500F", category="naked", power_kw=35.0)]
 
-    (search, _comparison) = tools.build_advisor_tools(ctx)
+    search = next(
+        tool for tool in tools.build_advisor_tools(ctx) if tool.name == catalogue_search.NAME
+    )
     answer = asyncio.run(search.ainvoke({"a2Eligible": True}))
 
     assert json.loads(answer) == {
@@ -344,3 +358,177 @@ def test_spec_comparison_rejects_a_call_that_cannot_be_a_comparison(
 
     assert ctx.collector.tool_calls == []
     assert catalogue.requested_ids == []
+
+
+# --- licence_fit_check --------------------------------------------------------
+
+
+def _approved(catalogue: Any, name: str = "Honda CB500F", **values: Any) -> None:
+    """Put one approved model with the given verified specs in the stubbed catalogue."""
+    catalogue.by_name[name] = _Motorbike(BIKE_A, name, MotorbikeStatus.APPROVED)
+    catalogue.by_id[BIKE_A] = catalogue.by_name[name]
+    catalogue.specs = [_specs(BIKE_A, name, **values)]
+
+
+def test_licence_fit_check_returns_the_frozen_rule_shape(
+    ctx: tools.ToolContext, catalogue: Any
+) -> None:
+    """The pinned result: the bike, then one rule object per check.
+
+    The verdicts and the evidence strings belong to `fit_check_service` (tested
+    there); what this asserts is the shape the chat UI's renderer reads and the
+    fact that the evidence carries the verified figures at all.
+    """
+    _approved(catalogue, power_kw=35.0, wet_weight_kg=189.0, seat_height_mm=789)
+
+    payload = _execute(
+        licence_fit_check.NAME,
+        ctx,
+        {"motorbikeName": "Honda CB500F", "licence": "A2", "riderHeightCm": 165},
+    )
+
+    assert set(payload) == {"motorbikeId", "name", "rules"}
+    assert payload["motorbikeId"] == BIKE_A
+    assert payload["name"] == "Honda CB500F"
+    for rule in payload["rules"]:
+        assert set(rule) == {"rule", "label", "verdict", "evidence"}
+        assert rule["verdict"] in {"pass", "fail", "unknown"}
+        assert rule["label"]
+    rules = {rule["rule"]: rule for rule in payload["rules"]}
+    assert rules["a2_power"]["verdict"] == "pass"
+    # The numbers used are in the evidence, not only in the verdict.
+    assert "35.0 kW" in rules["a2_power"]["evidence"]
+    assert "189 kg" in rules["a2_power_to_weight"]["evidence"]
+    assert "789 mm" in rules["seat_height_fit"]["evidence"]
+
+
+def test_licence_fit_check_records_a_read_path_valid_entry(
+    ctx: tools.ToolContext, catalogue: Any
+) -> None:
+    """What is persisted must survive `GET /api/chat-messages`' validation.
+
+    The read path validates every stored `tool_calls[]` entry against the frozen
+    `ToolCall` model, where a missing key is a 500 rather than a silent gap — so
+    the recorded entry is validated here, at the only place that produces it.
+    """
+    _approved(catalogue, power_kw=35.0, wet_weight_kg=189.0, seat_height_mm=789)
+
+    _execute(licence_fit_check.NAME, ctx, {"motorbikeName": "Honda CB500F", "insideLegMm": 780})
+
+    (entry,) = ctx.collector.tool_calls
+    validated = ToolCall.model_validate(entry)
+    assert validated.tool == licence_fit_check.NAME
+    assert validated.status.value == "succeeded"
+    assert validated.result == entry["result"]
+    # Arguments are recorded camelCase, defaults included, as the shape pins them.
+    assert entry["arguments"] == {
+        "motorbikeId": None,
+        "motorbikeName": "Honda CB500F",
+        "licence": "A2",
+        "riderHeightCm": None,
+        "insideLegMm": 780,
+        "experience": None,
+    }
+
+
+def test_licence_fit_check_answers_unknown_bike_for_a_name_it_cannot_resolve(
+    ctx: tools.ToolContext, catalogue: Any
+) -> None:
+    """The shared resolution failure, and no rules invented around it."""
+    payload = _execute(licence_fit_check.NAME, ctx, {"motorbikeName": "Bikeley 999"})
+
+    assert payload == {"unknownBike": "Bikeley 999"}
+    assert ctx.collector.tool_calls[0]["status"] == "succeeded"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"licence": "A2"},
+        {"motorbikeName": "Honda CB500F", "riderHeightCm": 17},
+        {"motorbikeName": "Honda CB500F", "insideLegMm": 78},
+        {"motorbikeName": "Honda CB500F", "licence": "A1"},
+    ],
+    ids=["no-bike", "metres-for-centimetres", "centimetres-for-millimetres", "unsupported-licence"],
+)
+def test_licence_fit_check_rejects_arguments_it_cannot_answer_honestly(
+    ctx: tools.ToolContext, catalogue: Any, arguments: dict[str, Any]
+) -> None:
+    """A unit slip or an unsupported licence must fail loudly, not produce a verdict."""
+    with pytest.raises(ValidationError):
+        _execute(licence_fit_check.NAME, ctx, arguments)
+
+    assert ctx.collector.tool_calls == []
+
+
+# --- cost_estimator -----------------------------------------------------------
+
+
+def test_cost_estimator_returns_the_frozen_estimate_shape(
+    ctx: tools.ToolContext, catalogue: Any
+) -> None:
+    """The pinned estimate: EUR line items, their total, assumptions, table version."""
+    _approved(catalogue, category="naked", engine_cc=471, power_kw=35.0, price_band="mid")
+
+    payload = _execute(
+        cost_estimator.NAME, ctx, {"motorbikeName": "Honda CB500F", "annualKm": 8000}
+    )
+
+    assert set(payload) == {
+        "motorbikeId",
+        "name",
+        "currency",
+        "lineItems",
+        "total",
+        "assumptions",
+        "coefficientsVersion",
+    }
+    assert payload["currency"] == "EUR"
+    assert payload["coefficientsVersion"] == cost_data.COEFFICIENTS_VERSION
+    assert payload["lineItems"]
+    for line in payload["lineItems"]:
+        assert set(line) == {"label", "amount"}
+        assert isinstance(line["amount"], int)
+    assert payload["total"] == sum(line["amount"] for line in payload["lineItems"])
+    # The estimate has to say what it rests on — this is the field that makes it
+    # an estimate rather than a price.
+    assert payload["assumptions"]
+    assert ToolCall.model_validate(ctx.collector.tool_calls[0]).result == payload
+
+
+def test_cost_estimator_is_deterministic_through_the_tool(
+    ctx: tools.ToolContext, catalogue: Any
+) -> None:
+    """Same bike, same mileage, same euros — twice in one conversation."""
+    _approved(catalogue, category="naked", engine_cc=471, power_kw=35.0, price_band="mid")
+    arguments = {"motorbikeName": "Honda CB500F", "annualKm": 11000}
+
+    assert _execute(cost_estimator.NAME, ctx, arguments) == _execute(
+        cost_estimator.NAME, ctx, arguments
+    )
+
+
+def test_cost_estimator_answers_unknown_bike_for_an_unapproved_id(
+    ctx: tools.ToolContext, catalogue: Any
+) -> None:
+    """An id is a reference like any other: an unreviewed entry has no price to quote."""
+    catalogue.by_id = {BIKE_B: _Motorbike(BIKE_B, "Backlog Bike", MotorbikeStatus.BACKLOG)}
+
+    payload = _execute(cost_estimator.NAME, ctx, {"motorbikeId": BIKE_B})
+
+    assert payload == {"unknownBike": BIKE_B}
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{}, {"motorbikeName": "Honda CB500F", "annualKm": -1}, {"annualKm": 8000}],
+    ids=["nothing", "negative-mileage", "no-bike"],
+)
+def test_cost_estimator_rejects_a_call_it_cannot_cost(
+    ctx: tools.ToolContext, catalogue: Any, arguments: dict[str, Any]
+) -> None:
+    """No bike named, or a mileage that is not a mileage: nothing runs, nothing is recorded."""
+    with pytest.raises(ValidationError):
+        _execute(cost_estimator.NAME, ctx, arguments)
+
+    assert ctx.collector.tool_calls == []

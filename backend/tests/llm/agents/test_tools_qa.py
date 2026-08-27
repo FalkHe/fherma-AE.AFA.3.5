@@ -388,7 +388,9 @@ def test_the_langchain_class_based_args_schema_trap_is_real_and_the_app_avoids_i
     assert "a2Eligible" not in trapped_props
 
     ctx = tools.ToolContext(session=object())
-    (real_search, _real_comparison) = tools.build_advisor_tools(ctx)
+    real_search = next(
+        tool for tool in tools.build_advisor_tools(ctx) if tool.name == catalogue_search.NAME
+    )
     real_props = convert_to_openai_tool(real_search)["function"]["parameters"]["properties"]
     assert "a2Eligible" in real_props
     assert "a2_eligible" not in real_props

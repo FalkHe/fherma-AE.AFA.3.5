@@ -21,6 +21,13 @@ migration and 3.1 is pinned as the only Phase-3 migration, so the lock is
 the in-phase option. Owner decision: fix in 3.16's acceptance pass, defer
 to Phase 4, or accept as documented.
 
+**N1 (demo-data note, from 3.12, 2026-08-27).** No approved model in the
+dev DB carries a verified `msrp_eur` or `price_band`, so live
+`cost_estimator` output has no purchase-price line (the honest-omission
+path; unit-tested only). Before the M4/M5 demos, verifying a price band on
+at least one approved model (owner action or the Phase-2 curation flow)
+would make the demo materially stronger. Not a code defect.
+
 ---
 
 *(previously: no open questions, 2026-08-27)*

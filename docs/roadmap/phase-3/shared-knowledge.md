@@ -854,3 +854,46 @@ depend on. 1–3 bullets per step, no prose.
   tool-value i18n exemption. Test convention: MUI `Collapse` hides its children
   from the accessibility tree, so a collapsed toggle is asserted with
   `queryByRole(...)` → null plus `getByLabelText(...).not.toBeVisible()`.
+
+### Step 3.12 (domain tools II: licence/fit check & cost estimator)
+
+- **Two single-bike tools on the 3.11 convention, registry order now
+  `catalogue_search, spec_comparison, licence_fit_check, cost_estimator`** (the CLI
+  picks them up unchanged). Both take the same reference pair `motorbikeId` /
+  `motorbikeName` (id wins when both are given, at least one is required by an
+  args-schema validator) and go through `tools.resolve_references`, so an
+  unresolvable *or unapproved* reference answers the shared
+  `{"unknownBike": "<reference verbatim>"}`. Rider inputs are range-validated
+  (`riderHeightCm` 120–230, `insideLegMm` 500–1200, `annualKm` 0–60 000) so a unit
+  slip is a `ValidationError`, not a confident verdict. `licence` is
+  `Licence` (`"A2"` default, `"A"`) — **A1 is a deliberate omission** (no A1
+  counterpart to the verified `a2_eligible` column); LangChain inlines both StrEnums
+  into the function schema (no `$defs`/`$ref` reaches the provider).
+- **`fit_check_service.check(session, motorbike_id, *, licence, rider_height_cm,
+  inside_leg_mm, experience) -> FitCheck | None`** and
+  **`cost_estimator_service.estimate(session, motorbike_id, *, annual_km)
+  -> CostEstimate | None`** both do exactly one read
+  (`catalogue_search_service.get_verified_specs`), commit nothing, and return
+  `None` for anything that is not an approved entry — the tool turns that into
+  `unknownBike`. All verdict/label/evidence and line-item/assumption strings are
+  composed **in the services** (the tools only map to camelCase), so 3.13/3.16 must
+  not re-word them. `Verdict`/`Licence`/`RiderExperience` are StrEnums in
+  `fit_check_service`; the A2 limits are imported from `product_service`
+  (`A2_MAX_POWER_KW`, `A2_MAX_POWER_TO_WEIGHT`) so this tool and the stored
+  `a2_eligible` column cannot drift. Rule ids: `a2_power`, `a2_power_to_weight`,
+  plus `a2_restricted_version` **only** above 35 kW and `a2_eligible` **only** when
+  power or weight is unverified (the catalogue flag is the fallback, not a second
+  opinion), `licence_unrestricted` for licence A, then always `seat_height_fit` and
+  `weight_fit`.
+- **`cost_data.py` is the whole coefficient table, `COEFFICIENTS_VERSION = "2026.1"`
+  (Germany/EUR, no config key, no pricing API).** Rules that hold: a line item needs
+  a verified input or it is **omitted** with the gap named in `assumptions`
+  (unverified price → no purchase line; no power → no insurance; no displacement →
+  no tax/fuel/maintenance), `assumptions` is never empty and its last entry is the
+  "not a quote" disclaimer naming the version, and the total is a **first-year**
+  total (purchase + one-offs + one year of running cost). Tests pin the calibration
+  case exactly (mid-band 471 cm³ naked, 35 kW, 8 000 km → €1 500/year running cost)
+  and drift-guard `INSURANCE_CLASS_FACTOR` / `PRICE_BAND_PRICE_EUR` against
+  `SPEC_CATEGORIES` / `PRICE_BANDS` — bump the version whenever a coefficient
+  changes. **Dev-DB gap for whoever demos this:** no approved model has a verified
+  `msrp_eur` or `price_band`, so the live estimate has no purchase-price line.
