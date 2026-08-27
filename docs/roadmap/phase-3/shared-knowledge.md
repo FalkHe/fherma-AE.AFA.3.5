@@ -698,3 +698,78 @@ depend on. 1–3 bullets per step, no prose.
   (EdgeNetworkTimeoutResponseError, RequestTimeoutResponseError)` from
   `openrouter.errors` — timeouts only, everything else becomes the apology
   (`job.APOLOGY`) + `failed`; the job does **not** re-raise after apologising.
+
+### Step 3.6 (chat wired live, S1 closed)
+
+- **Optimistic reconciliation is pinned** (ui-spec §3.2 left it open): the
+  server does not echo `localId`, so `useChatMessages`' `queryFn` merges the
+  fetched pages with the cached rows whose `state` is `"sending"` or
+  `"failed"` (`withUnsentEntries`) and drops everything else — a *confirmed*
+  optimistic entry is already in the fetched list, while a failed one holds
+  text the user typed and must survive the refetch an arriving advisor reply
+  triggers. Consequence for later steps: **anything that writes client-only
+  rows into `["chatMessages", chatId]` must mark them `sending`/`failed`, or a
+  refetch will silently drop them.** A 409 `response-pending` takes the same
+  failed-bubble path (retry/discard is the only way not to lose the text) and
+  *additionally* invalidates `["chats"]` — that is the "quiet refetch", there
+  is no snackbar.
+- **Hook shapes as generated, no hand-written types:** `Chat = {id} &
+  ChatAttributes`; `ChatMessage = {id} & ChatMessageAttributes & {localId?,
+  state?}`; `MessageSource`/`ToolCall`/`Recommendation` are now
+  `components["schemas"][…]` re-exports (so 3.10's renderers get
+  `RecommendationKeySpecs`, `SpecCategory` and `PriceBand` typed from the
+  backend enums, and `toolCalls[].arguments/result` stay open objects).
+  `ChatError` + the builder `chatError(status, body)` live in
+  `useChatMessages.ts`; `useChats.ts` imports the builder from there (one
+  direction, no cycle). `PAGE_SIZE = 100` page walk inlined in both list
+  hooks; `DELETE /api/chats/{id}` treats 404 as success.
+- **`useServerEvents` now has a payload-conditional layer:** the static
+  `INVALIDATIONS` map gained `chat.message.created →
+  ["chatMessages"] + ["chats"]`, and `conditionalInvalidations()` parses
+  `event.data` (`entityTypeOf`) to add `["chats"]` on `operation.updated`
+  with `entityType === "chat"` — the only event payload this app reads.
+  Reconnect blanket = products, operations, chats, chatMessages. **Test
+  convention:** mutation-driven cache changes are only visible in
+  `renderHook` results inside `waitFor`, and a stubbed request resolves in the
+  same tick as the keystroke, so the `sending` state needs a released gate
+  promise (`holdNextPost()` in `ConsultationChatRoute.test.tsx`) — reuse both
+  in 3.15.
+
+### Step 3.9 (RAG pipeline service)
+
+- **`rag_pipeline_service.retrieve(session, utterance, *, preferences=(),
+  history_summary="", limit=retrieval_service.DEFAULT_LIMIT) -> RagResult`** is
+  the whole pipeline and the only thing 3.13's `retrieve_bike_knowledge` may
+  call. `RagResult` is a frozen Pydantic model with exactly the four pinned
+  fields, **snake_case** (`queries`, `applied_filters`,
+  `candidate_motorbike_ids`, `chunks`); `applied_filters` holds **only the
+  stated bounds** as plain values (`SpecFilters.values()` minus `None`/`[]`), and
+  `chunks[].score` is the **cross-query** RRF score (`model_copy` replaces the
+  per-query one), comparable only inside one result. Candidate order is
+  **resolved names first, then the filter matches** (merged, not intersected).
+  Nothing is committed; `preferences` is `Sequence[ActivePreference]`.
+- **Three degradation rules 3.13 must not re-implement:** a failed *or* empty
+  translation → raw utterance, no filters, unscoped (logged once, never raised);
+  `candidate_motorbike_ids == []` **with** non-empty `applied_filters` means the
+  constraints match no approved model and **no search is issued at all** (empty
+  `chunks` is the honest answer — widening would cite bikes the customer ruled
+  out), while `[]` with empty filters means unscoped; `retrieval_service`'s two
+  configuration errors (`MissingApiKeyError`, `StaleEmbeddingsError`) **do
+  propagate** — the tool wrapper turns them into a `failed` tool_call entry.
+  Name resolution is a private `_resolve_names` (slug via
+  `product_service.get_by_slug`, approved-only, unresolvable names skipped) —
+  **3.11's `catalogue_search_service.resolve_name` should replace it**, it is the
+  first call site.
+- **Live finding (open, environmental):** the fan-out issues one embeddings
+  request per rewritten query and `app/llm/embeddings.py` sets **no request
+  timeout**, so a stalled OpenRouter embeddings call hangs the caller for the
+  openai-SDK default (~600 s). Reproduced 7/7 for the utterance *"What do
+  reviewers say about the Suzuki GSR600?"* via `app rag ask` (3rd `POST
+  /embeddings` sent, no response, no DB wait; identical calls from a script
+  harness and every other utterance probed pass in 7–10 s). The pinned
+  verification utterance is unaffected (3/3 green). 3.13's
+  `asyncio.timeout(AGENT_TIMEOUT_SECONDS)` covers the production path; adding a
+  client-side timeout would touch `llm/embeddings.py` (outside 3.9) — owner call.
+  Note for anyone probing the CLI: a `timeout`-killed `docker compose exec` leaves
+  the process **alive inside app-web** holding an idle-in-transaction session —
+  kill them (`/proc` scan) or the pool fills up.
