@@ -183,3 +183,39 @@ here** — phase-3's `shared-knowledge.md` and `step-3.1.md` reference it.
   `IntegrityError` and simulates the winning transaction's row, and
   `tests/api/test_products.py::_assign_manufacturer` is the fixture helper that
   creates the `manufacturers` row a derived attribute needs.
+
+### Step 2b.2 (extraction fills the manufacturer, backfill CLI)
+
+- **`extraction.NON_SPEC_FIELDS = ("manufacturer",)`** is the new name for "in the
+  LLM schema, not in the frozen spec column set". `ExtractedSpec.manufacturer` is
+  `str | None` with `BeforeValidator(_to_text)` (trimmed text, anything non-text →
+  `None`; no truncation — `normalize_name` owns that), and `to_spec_values()` /
+  `filled_fields()` still iterate `SPEC_FIELDS` only, so the exclusion is by
+  construction. The overridden `model_json_schema` puts it in `required`
+  automatically; **verified live** through OpenRouter (`app ingest extract-specs
+  suzuki-gsr600`, 2026-08-27) — the 15-property schema is accepted and the model
+  answers the brand. A later field of this kind only needs to be added to
+  `NON_SPEC_FIELDS` and written by its own service call.
+- **`spec_extraction_service._assign_manufacturer(session, motorbike, name)`** runs
+  *after* `upsert_draft_spec` (never before — a bad brand must not cost the spec):
+  `normalize_name` → `None` means skip silently; otherwise `get_or_create` +
+  `product_service.assign_manufacturer` inside one broad `except Exception` that
+  logs a warning and returns. No `rollback` is issued there — `get_or_create`
+  already rolls back its own failed insert, and everything before it was committed
+  — so the caller's session stays usable. `ExtractionResult` is unchanged: the
+  brand is not reported in the outcome, only in the log.
+- **`app catalogue set-manufacturer <slug> "<name>"`** (`backend/app/cli/catalogue.py`,
+  registered in `main.py` before `chunks`): resolves the bike first (unknown slug →
+  stderr + exit 1), then `get_or_create` (its `ValueError` for `"???"` → stderr +
+  exit 1, nothing written) then `assign_manufacturer`; stdout is
+  `"<slug> now belongs to manufacturer '<name>' (<id>)."`. `app catalogue` is now
+  the home for deterministic, LLM-free catalogue corrections. **Live state left in
+  place (2026-08-27):** `suzuki-gsr600`→Suzuki, `honda-cb500f`→Honda,
+  `bmw-s-1000-xr`→BMW, 3 `manufacturers` rows, `description`/`logo_path` NULL;
+  8 documents / 49 chunks / 49 embeddings unchanged by all of it.
+- **Deliberate omissions for 2b.4:** the prompt rules were renumbered (brand is
+  rule 6 of 13), no test asserts rule numbers; `tests/cli/test_catalogue.py`
+  copies the `_SessionContextManager` + `_patch_sessionmaker` pattern from
+  `tests/cli/test_users.py` rather than sharing it; the live re-extraction moved
+  the Suzuki's **draft** `seat_height_mm` 800 → 785 (model variance) — the
+  `verified` row and therefore the API payload are untouched.

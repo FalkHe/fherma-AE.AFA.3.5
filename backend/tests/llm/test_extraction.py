@@ -23,6 +23,10 @@ from app.llm.models import MissingApiKeyError
 
 EXTRACTED_AT = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 
+# Everything the model is asked for: the frozen spec column set plus the fields
+# that describe the bike but are stored elsewhere (the manufacturer).
+_SCHEMA_FIELDS = set(SPEC_FIELDS) | set(extraction.NON_SPEC_FIELDS)
+
 WIKIPEDIA_DOCUMENT = extraction.ExtractionDocument(
     title="Suzuki GSR600",
     source_type="wikipedia",
@@ -54,12 +58,18 @@ def _extracted(**values: Any) -> extraction.ExtractedSpec:
 
 def test_schema_mirrors_the_frozen_column_set() -> None:
     """Field for field, name for name — `to_spec_values` depends on it."""
-    assert set(extraction.ExtractedSpec.model_fields) == set(SPEC_FIELDS)
+    assert set(extraction.ExtractedSpec.model_fields) == _SCHEMA_FIELDS
+
+
+def test_the_only_field_outside_the_frozen_set_is_the_manufacturer() -> None:
+    """It describes the bike but lives in its own table (step 2b.2)."""
+    assert extraction.NON_SPEC_FIELDS == ("manufacturer",)
+    assert "manufacturer" not in SPEC_FIELDS
 
 
 def test_every_field_is_optional() -> None:
     """ "The documents do not say" is the normal answer, never a validation error."""
-    assert _extracted().model_dump() == dict.fromkeys(SPEC_FIELDS)
+    assert _extracted().model_dump() == dict.fromkeys((*extraction.NON_SPEC_FIELDS, *SPEC_FIELDS))
 
 
 def test_an_invented_field_is_ignored_not_rejected() -> None:
@@ -256,6 +266,39 @@ def test_to_spec_values_is_the_full_frozen_mapping() -> None:
     assert values["extracted_at"] == EXTRACTED_AT
 
 
+def test_to_spec_values_leaves_the_manufacturer_out() -> None:
+    """It is not a spec column — `upsert_draft_spec` would reject the key (2b.2)."""
+    extracted = _extracted(manufacturer="Suzuki", engine_cc=599)
+
+    values = extracted.to_spec_values(extracted_at=EXTRACTED_AT)
+
+    assert extracted.manufacturer == "Suzuki"
+    assert "manufacturer" not in values
+    assert list(values) == list(SPEC_FIELDS)
+
+
+def test_filled_fields_ignores_the_manufacturer() -> None:
+    """The count reported for a run is a count of specification fields."""
+    assert _extracted(manufacturer="Suzuki", engine_cc=599).filled_fields() == ("engine_cc",)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("Suzuki", "Suzuki"),
+        ("  BMW  ", "BMW"),
+        ("", None),
+        ("   ", None),
+        (None, None),
+        # Not text at all: the brand is a name, and junk becomes `null` here too.
+        (42, None),
+        ({"name": "Suzuki"}, None),
+    ],
+)
+def test_the_manufacturer_is_trimmed_text_or_null(value: Any, expected: str | None) -> None:
+    assert _extracted(manufacturer=value).manufacturer == expected
+
+
 def test_to_spec_values_leaves_a2_eligible_to_the_spec_write() -> None:
     """Derivation lives in `product_service`; extraction only passes it through."""
     values = _extracted(power_kw=30, wet_weight_kg=200).to_spec_values(extracted_at=EXTRACTED_AT)
@@ -336,10 +379,12 @@ def test_the_chain_constrains_the_answer_to_the_json_schema() -> None:
     response_format = chain.steps[0].kwargs["response_format"]
     assert response_format["type"] == "json_schema"
     schema = response_format["json_schema"]["schema"]
-    assert set(schema["properties"]) == set(SPEC_FIELDS)
+    assert set(schema["properties"]) == _SCHEMA_FIELDS
     # OpenAI/Azure reject a response format whose `required` misses a property,
-    # even without `strict`; optionality is the null union on every field.
-    assert set(schema["required"]) == set(SPEC_FIELDS)
+    # even without `strict`; optionality is the null union on every field. The
+    # 2b.2 addition rides along on that rule instead of being an exception.
+    assert set(schema["required"]) == _SCHEMA_FIELDS
+    assert "manufacturer" in schema["required"]
     assert "additionalProperties" not in schema
 
 
@@ -347,7 +392,7 @@ def test_the_json_schema_is_the_frozen_column_set() -> None:
     """What LangChain sends is derived from the model, so it cannot drift."""
     schema = convert_to_json_schema(extraction.ExtractedSpec)
 
-    assert set(schema["properties"]) == set(SPEC_FIELDS)
+    assert set(schema["properties"]) == _SCHEMA_FIELDS
     assert schema["properties"]["category"]["anyOf"][0]["enum"] == list(SPEC_CATEGORIES)
 
 

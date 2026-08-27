@@ -4,7 +4,9 @@ This module is the project's first production LLM call. It holds three things
 and nothing else:
 
 * `ExtractedSpec` — a Pydantic model mirroring the **frozen** core
-  specification column set 1:1 (`motorbike_spec.SPEC_FIELDS`). Every field is
+  specification column set 1:1 (`motorbike_spec.SPEC_FIELDS`), plus the handful
+  of fields in `NON_SPEC_FIELDS` that belong to another table (the
+  manufacturer). Every field is
   optional, because "the documents do not say" is the normal answer, and every
   field carries a validator that normalizes what a model may plausibly return
   (a foreign unit, a number as text, a category spelled differently) and clamps
@@ -44,6 +46,13 @@ logger = logging.getLogger(__name__)
 
 # The prompt file this module renders.
 PROMPT_NAME = "spec_extraction"
+
+# Fields of this schema that are **not** part of the frozen specification column
+# set: they describe the motorbike, but they are stored elsewhere (the brand gets
+# a `manufacturers` row of its own). `to_spec_values` iterates `SPEC_FIELDS`, so
+# they are excluded from the spec write by construction — passing one of them to
+# `upsert_draft_spec` would raise.
+NON_SPEC_FIELDS = ("manufacturer",)
 
 # The fence around one document in the prompt. Deliberately unlikely to occur
 # in fetched prose, and stripped from the document text before it is fenced, so
@@ -333,9 +342,10 @@ class ExtractedSpec(BaseModel):
     """What the model returns: the frozen specification column set, all optional.
 
     Field names are the column names, so `to_spec_values()` is exactly the
-    full-object mapping `product_service.upsert_draft_spec` expects. Unknown
-    keys are ignored instead of rejected — a model that invents a field must not
-    cost the run its whole specification.
+    full-object mapping `product_service.upsert_draft_spec` expects — the
+    `NON_SPEC_FIELDS` are left out of it, because they are stored in another
+    table. Unknown keys are ignored instead of rejected — a model that invents a
+    field must not cost the run its whole specification.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -362,6 +372,12 @@ class ExtractedSpec(BaseModel):
         schema["required"] = list(schema["properties"])
         return schema
 
+    # Not a specification column: the brand becomes a `manufacturers` row, which
+    # `spec_extraction_service` resolves after the draft specification is written.
+    manufacturer: Annotated[str | None, BeforeValidator(_to_text)] = Field(
+        default=None,
+        description="Brand name only, without the model designation; null if unclear.",
+    )
     category: Annotated[
         ExtractedCategory | None, BeforeValidator(_vocabulary_validator(SPEC_CATEGORIES))
     ] = Field(default=None, description="One of the pinned categories; null if none fits.")
@@ -417,6 +433,10 @@ class ExtractedSpec(BaseModel):
 
     def to_spec_values(self, *, extracted_at: datetime) -> dict[str, Any]:
         """Return the full-object mapping for `product_service.upsert_draft_spec`.
+
+        Only the frozen column set is mapped: `manufacturer` (and any other
+        `NON_SPEC_FIELDS`) is deliberately absent, because `upsert_draft_spec`
+        rejects a key outside `SPEC_FIELDS`.
 
         `extracted_at` is the caller's timestamp, never the model's: a model
         cannot know when it ran, and the column records the extraction, not a

@@ -21,6 +21,11 @@ Two rules live here:
 Re-running is idempotent by construction: `upsert_draft_spec` is a full-object
 replace of the single `draft` row, so a second run replaces the first result
 instead of adding anything.
+
+One extracted field is not a specification column: the **manufacturer**. It gets
+a `manufacturers` row (get-or-create on the brand's slug) and the catalogue entry
+starts pointing at it — after, and only after, the draft specification was
+written, and never loudly enough to cost the run its specification.
 """
 
 import logging
@@ -38,7 +43,7 @@ from app.db.models.motorbike_spec import MotorbikeSpec
 from app.db.models.source_document import SourceDocument, SourceType
 from app.llm import extraction
 from app.llm.models import MissingApiKeyError
-from app.services import document_service, product_service
+from app.services import document_service, manufacturer_service, product_service
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +168,7 @@ async def extract_draft_spec(
 
     values = extracted.to_spec_values(extracted_at=datetime.now(UTC))
     spec = await product_service.upsert_draft_spec(session, motorbike.id, values)
+    await _assign_manufacturer(session, motorbike, extracted.manufacturer)
     logger.info(
         "Extracted %d specification field(s) for motorbike %s from %d document(s): %s.",
         len(extracted.filled_fields()),
@@ -171,6 +177,39 @@ async def extract_draft_spec(
         ", ".join(extracted.filled_fields()) or "none",
     )
     return ExtractionResult(spec=spec, extracted=extracted, values=values, documents=len(documents))
+
+
+async def _assign_manufacturer(
+    session: AsyncSession, motorbike: Motorbike, name: str | None
+) -> None:
+    """Point `motorbike` at the extracted brand — never at the cost of the run.
+
+    The brand is not a specification column: it is a `manufacturers` row, so it
+    is written here rather than by `upsert_draft_spec`. Nothing about it is worth
+    losing an extraction over — an unusable name (`"???"`, which `get_or_create`
+    rejects) or a failing write is logged and the draft specification stands.
+    """
+    normalized = manufacturer_service.normalize_name(name)
+    if normalized is None:
+        return
+
+    try:
+        manufacturer = await manufacturer_service.get_or_create(session, normalized)
+        await product_service.assign_manufacturer(session, motorbike, manufacturer.id)
+    except Exception as error:
+        logger.warning(
+            "Motorbike %s: extracted manufacturer %r was not assigned.",
+            motorbike.id,
+            normalized,
+            exc_info=error,
+        )
+        return
+    logger.info(
+        "Motorbike %s assigned to manufacturer %s (%r).",
+        motorbike.id,
+        manufacturer.id,
+        manufacturer.name,
+    )
 
 
 def _failed(

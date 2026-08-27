@@ -1,9 +1,10 @@
 """Tests for the spec-extraction service (step 2.17).
 
 The LLM is always a stub (`extraction.extract_spec` is replaced), so what is
-under test is the service's own three jobs: which documents go into the prompt
-and how much of them, that the result lands in the **draft** row and nowhere
-else, and that every expected failure comes back as a typed warning instead of
+under test is the service's own jobs: which documents go into the prompt and how
+much of them, that the result lands in the **draft** row and nowhere else, that
+the extracted brand becomes a `manufacturers` row the entry points at (step
+2b.2), and that every expected failure comes back as a typed warning instead of
 an exception the ingestion job would have to survive.
 """
 
@@ -14,12 +15,18 @@ from typing import Any
 import pytest
 
 from app.core.config import get_settings
+from app.db.models.manufacturer import Manufacturer
 from app.db.models.motorbike import Motorbike
 from app.db.models.motorbike_spec import SPEC_FIELDS, MotorbikeSpec, SpecKind
 from app.db.models.source_document import SourceDocument, SourceType
 from app.llm import extraction
 from app.llm.models import MissingApiKeyError
-from app.services import document_service, product_service, spec_extraction_service
+from app.services import (
+    document_service,
+    manufacturer_service,
+    product_service,
+    spec_extraction_service,
+)
 from tests.services.conftest import FakeAsyncSession
 
 MODEL_NAME = "Suzuki GSR 600"
@@ -74,6 +81,11 @@ def stub_model(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[Any]]:
         return calls
 
     return install
+
+
+def _answer(**values: Any) -> extraction.ExtractedSpec:
+    """One stubbed model answer, built the way the parser would build it."""
+    return extraction.ExtractedSpec.model_validate(values)
 
 
 def _document(
@@ -254,6 +266,62 @@ def test_the_write_is_the_full_frozen_column_set(
     assert outcome.spec.seat_height_mm is None
 
 
+# --- the manufacturer ---------------------------------------------------------
+
+
+def test_the_extracted_brand_becomes_a_manufacturer_row_and_the_reference(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    stub_model: Callable[..., list[Any]],
+) -> None:
+    """The brand is no spec column: it gets its own row, after the draft write."""
+    stub_model(answer=_answer(manufacturer="  Suzuki ", engine_cc="599 cc"))
+    _store_document(fake_session, motorbike, SourceType.WIKIPEDIA, "599 cc")
+
+    outcome = asyncio.run(spec_extraction_service.extract_draft_spec(fake_session, motorbike))
+
+    assert isinstance(outcome, spec_extraction_service.ExtractionResult)
+    manufacturer = fake_session.rows(Manufacturer)[0]
+    assert (manufacturer.name, manufacturer.slug) == ("Suzuki", "suzuki")
+    assert motorbike.manufacturer_id == manufacturer.id
+    # The brand never reaches the frozen column set.
+    assert "manufacturer" not in outcome.values
+
+
+def test_a_second_model_of_a_known_brand_reuses_its_row(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    stub_model: Callable[..., list[Any]],
+) -> None:
+    stub_model(answer=_answer(manufacturer="Suzuki"))
+    _store_document(fake_session, motorbike, SourceType.WIKIPEDIA, "599 cc")
+    other = asyncio.run(product_service.create_backlog(fake_session, "Suzuki SV 650"))
+    _store_document(fake_session, other, SourceType.WIKIPEDIA, "645 cc", title="Other")
+
+    asyncio.run(spec_extraction_service.extract_draft_spec(fake_session, motorbike))
+    asyncio.run(spec_extraction_service.extract_draft_spec(fake_session, other))
+
+    assert len(fake_session.rows(Manufacturer)) == 1
+    assert motorbike.manufacturer_id == other.manufacturer_id is not None
+
+
+@pytest.mark.parametrize("brand", [None, "", "   "])
+def test_no_brand_leaves_the_reference_untouched(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    stub_model: Callable[..., list[Any]],
+    brand: str | None,
+) -> None:
+    stub_model(answer=_answer(manufacturer=brand))
+    _store_document(fake_session, motorbike, SourceType.WIKIPEDIA, "599 cc")
+
+    outcome = asyncio.run(spec_extraction_service.extract_draft_spec(fake_session, motorbike))
+
+    assert isinstance(outcome, spec_extraction_service.ExtractionResult)
+    assert fake_session.rows(Manufacturer) == []
+    assert motorbike.manufacturer_id is None
+
+
 # --- typed failures -----------------------------------------------------------
 
 
@@ -300,6 +368,45 @@ def test_any_gateway_or_parser_error_is_a_typed_failure(
     assert "RuntimeError" in outcome.detail
     assert "OpenRouter answered 502" in outcome.detail
     assert _drafts(fake_session) == []
+
+
+def test_a_bad_manufacturer_never_costs_the_run_its_specification(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    stub_model: Callable[..., list[Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same policy as the rest of the service: the draft stands, the brand is not."""
+    stub_model(answer=_answer(manufacturer="Suzuki", engine_cc="599 cc"))
+    _store_document(fake_session, motorbike, SourceType.WIKIPEDIA, "599 cc")
+
+    async def _explode(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("manufacturers table is on fire")
+
+    monkeypatch.setattr(manufacturer_service, "get_or_create", _explode)
+
+    outcome = asyncio.run(spec_extraction_service.extract_draft_spec(fake_session, motorbike))
+
+    assert isinstance(outcome, spec_extraction_service.ExtractionResult)
+    assert outcome.spec.engine_cc == 599
+    assert fake_session.rows(Manufacturer) == []
+    assert motorbike.manufacturer_id is None
+
+
+def test_a_manufacturer_without_an_identity_is_skipped(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    stub_model: Callable[..., list[Any]],
+) -> None:
+    """`get_or_create` rejects "???"; that is a skip, not a failed extraction."""
+    stub_model(answer=_answer(manufacturer="???"))
+    _store_document(fake_session, motorbike, SourceType.WIKIPEDIA, "a bike")
+
+    outcome = asyncio.run(spec_extraction_service.extract_draft_spec(fake_session, motorbike))
+
+    assert isinstance(outcome, spec_extraction_service.ExtractionResult)
+    assert fake_session.rows(Manufacturer) == []
+    assert motorbike.manufacturer_id is None
 
 
 def test_an_empty_extraction_still_records_the_attempt(

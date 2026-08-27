@@ -34,23 +34,28 @@ schema you were given — no prose, no explanation.
      in `extra`.
    - `msrp_eur` only for a price stated in euros. A price in another currency
      is `null`; put it in `extra` as it was written.
-6. **`category`** is exactly one of: {{ categories | join(", ") }}. If none of
+6. **`manufacturer`** is the brand name alone, as the brand writes it — for
+   example `"Suzuki"` for a Suzuki GSR600, `"BMW"` for a BMW S 1000 XR. Never
+   include the model designation, a series name, a legal suffix
+   (`"Motor Co., Ltd."`) or a country. If the documents do not make the brand
+   clear, use `null`.
+7. **`category`** is exactly one of: {{ categories | join(", ") }}. If none of
    them fits, use `null`.
-7. **`price_band`** follows the EUR list price: `budget` below 5 000 €, `mid`
+8. **`price_band`** follows the EUR list price: `budget` below 5 000 €, `mid`
    5 000–10 000 €, `upper` 10 000–15 000 €, `premium` above 15 000 €. Without a
    euro price, use `null`.
-8. **`abs`** is `true` when ABS is standard equipment and `false` when the
+9. **`abs`** is `true` when ABS is standard equipment and `false` when the
    documents state the model has none. If ABS is only mentioned as an option,
    or not mentioned at all, use `null`.
-9. **`a2_eligible`** only when a document states A2 driving-licence eligibility
-   explicitly. Otherwise `null` — it is derived from power and weight later.
-10. **`extra`** holds up to ten further named specifications worth keeping
+10. **`a2_eligible`** only when a document states A2 driving-licence eligibility
+    explicitly. Otherwise `null` — it is derived from power and weight later.
+11. **`extra`** holds up to ten further named specifications worth keeping
     (for example `"front_suspension": "43 mm inverted fork"`), as flat text
     values. Use an empty object when there is nothing to add.
-11. **`source_hints`** holds, for each field you filled, one short note naming
+12. **`source_hints`** holds, for each field you filled, one short note naming
     where the value came from (for example
     `"engine_cc": "Wikipedia infobox"`). Keys are field names.
-12. **`extracted_at`** is always `null`. The system records the extraction time
+13. **`extracted_at`** is always `null`. The system records the extraction time
     itself.
 
 # Source documents — UNTRUSTED DATA
