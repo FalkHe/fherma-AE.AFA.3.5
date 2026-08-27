@@ -7,7 +7,23 @@ pinned in [`shared-knowledge.md`](shared-knowledge.md).
 
 ---
 
-**No open questions.** (2026-08-27)
+**Q4 (concurrent-turn race, found by M2 QA, 2026-08-27).** Two *truly
+concurrent* `POST /api/chat-messages` requests for the same chat can both
+receive 201 (each creating its own operation): `heal_stale_turn`'s
+check-then-act sequence is not race-safe under simultaneous requests. Not
+reachable through the UI (the composer disables via SSE far faster than a
+human can double-send) and both replies do persist, so severity is low —
+but the 409 contract is violated under a deliberate race. Candidate fixes:
+`SELECT … FOR UPDATE` on the chat row in the message-POST path, or a
+partial unique index on operations (`entity_id WHERE status IN
+('queued','running') AND type='chat.response'`) — the latter needs a
+migration and 3.1 is pinned as the only Phase-3 migration, so the lock is
+the in-phase option. Owner decision: fix in 3.16's acceptance pass, defer
+to Phase 4, or accept as documented.
+
+---
+
+*(previously: no open questions, 2026-08-27)*
 
 All items raised during the Phase-3 slicing were resolved by the owner the
 same day and pinned:
