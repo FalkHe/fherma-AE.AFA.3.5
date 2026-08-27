@@ -247,3 +247,17 @@ here** — phase-3's `shared-knowledge.md` and `step-3.1.md` reference it.
   `485b2042d7f8`. The smoke test used a throw-away account `tmp2b3admin`
   (registered via `/auth/register`, promoted, then set back to `user` — same
   precedent as `tmp2b2admin`); no admin session of it is left signed in.
+
+### Step 2b.4 (acceptance run — QA finding)
+
+- **PASS on all 7 criteria** (2026-08-27); tagged `phase-2b-done`.
+- **Operational pin: `app-worker` does not hot-reload.** `app-web` runs
+  `uvicorn --reload`, but the taskiq worker keeps the ORM it started with —
+  after landing any step that changes `backend/app/db/models/` (or anything
+  the worker imports), restart it: `docker compose restart app-worker`.
+  During acceptance a stale worker crashed a queued ingestion with
+  `UndefinedColumn: motorbikes.manufacturer` until restarted. Applies to
+  every future phase (Phase 3's chat-response job runs in this worker).
+- The criterion-1 downgrade→upgrade round-trip regenerates manufacturer ids
+  (backfill creates fresh ULIDs) — assignments survive by name/slug, ids are
+  not stable across a round-trip.
