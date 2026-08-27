@@ -1025,3 +1025,45 @@ depend on. 1–3 bullets per step, no prose.
   `present_recommendations` answer `unknownBike` until told the exact catalogue name;
   and a stated budget makes `catalogue_search` return nothing, because no approved
   model has a verified `price_band` (open-questions N1).
+
+### Step 3.16 (scripted demo & prompt hardening)
+
+- **`backend/scripts/demo_conversation.py` is the phase's evidence generator** (3.17 and
+  Phase 5.3 reuse it, no new dependency): `docker compose exec app-web python
+  scripts/demo_conversation.py`, HTTP only (`httpx2`, cookie jar + `X-CSRF-Token`
+  mirrored from the `csrf_token` cookie, names imported from `app.api.deps`), throwaway
+  account, 8 scripted turns polled through `GET /api/chats/{id}` +
+  `GET /api/chat-messages`. Six assertions print as `PASS`/`FAIL` and the exit code is
+  the verdict: greeting-before-any-user-message · ≥3 distinct tools · ≥1 recommendation
+  card, all pointing at approved ids · every message that retrieved snippets carries
+  sources · **exactly one** new catalogue row, matching `slugify(UNCATALOGUED_BIKE)` ·
+  a second, freshly logged-in client re-reads the identical timeline. Every turn retries
+  **once** (lost turn, apology row, or unmet expectation), and a `finally` block deletes
+  the account (chat/messages/preferences/sessions cascade), the chat's `operations` rows
+  (no FK, so cascade cannot reach them) and the backlog row it created — plain `delete()`
+  statements, because no delete service exists and a script must not grow one behind the
+  routes' back. **`UNCATALOGUED_BIKE = "Kawasaki Z650"`, deliberately not the M4 demo's
+  "Yamaha MT-07"**: that slug is already in the backlog, so flagging it would answer
+  `already_known` and prove no insert.
+- **Prompt tuning pass on `advisor_system.md` (stage/steering text only, loop and schema
+  untouched) fixed all three 3.15 findings, each live-verified:** ids/names must be
+  copied from a previous tool result (no more `honda_cb500f`, and the demo's
+  `present_recommendations` now resolves first try); flagging is two-turn consent —
+  offer in one turn, `flag_unknown_bike` only after a yes (new decision **2** in the
+  continue-the-interview list, so the list is now 1–5); a named model is looked up
+  (`licence_fit_check`/`spec_comparison` take a name) instead of judged from memory; and
+  `totalCount: 0` means "search again without the least essential filter — budget first
+  — and say so", with the budget kept out of the first search entirely (N1 stays an
+  owner/data matter, no data was mutated). **`tests/llm/agents/test_write_tools_qa.py::
+  test_prompt_instructs_consent_gated_flagging` was updated to the new wording** (it now
+  builds the context with a one-message history, because the consent step renders only
+  in the non-opening branch, and matches whitespace-normalised sentences so Markdown
+  wrapping cannot break it) — no loop/schema test touched, suite 1162 green.
+- **Two behaviours the demo exposed that are data, not code:** with one A2-eligible
+  approved model, the advisor kept re-searching instead of presenting a one-model
+  shortlist (fixed by a prompt rule *and* by not asking for "two bikes" in the script —
+  turn 8 asks for "your shortlist, even if it is only one bike"); and the cards carry no
+  purchase-price line at all (N1). If the interview quality still disappoints, the
+  intended knob remains `ADVISOR_MODEL` in `.env` — an owner decision, not code. Q4
+  (concurrent-turn race) was **not** touched: it is unreachable through this script and
+  still awaits an owner call.

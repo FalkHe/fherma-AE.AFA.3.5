@@ -302,15 +302,29 @@ def test_no_extra_tool_module_exists_beyond_the_eight_registered_ones() -> None:
 # --- 4. prompt block: consent-gated flagging + preference rendering ------------
 
 
-def test_prompt_instructs_consent_gated_flagging() -> None:
+def test_prompt_instructs_consent_gated_flagging(chat_ctx: tools.ToolContext) -> None:
     """The model must offer, then wait for a yes, before calling `flag_unknown_bike`."""
-    system_prompt = advisor.build_context(history=[], preferences=[])[0].text
+    assert chat_ctx.chat is not None
+    # A non-empty history renders the "continue the interview" branch — the only
+    # turn kind in which a flag can happen at all.
+    history = [
+        asyncio.run(
+            chat_service.append_user_message(
+                chat_ctx.session, chat_ctx.chat, "What about the Kawasaki Z650?"
+            )
+        )
+    ]
+    system_prompt = advisor.build_context(history=history, preferences=[])[0].text
 
     assert "flag_unknown_bike" in system_prompt
-    lowered = system_prompt.lower()
+    # Line breaks are Markdown wrapping, not meaning: match whole sentences.
+    lowered = " ".join(system_prompt.lower().split())
     # The offer-then-consent phrasing, not an unconditional instruction to flag.
-    assert "offer to note" in lowered
-    assert "if the customer would like that" in lowered
+    # Step 3.16 sharpened the wording after the model flagged unprompted: the
+    # offer and the call now have to sit in two different turns.
+    assert "ask** whether they would like the model noted" in lowered
+    assert "the call only after the customer has answered yes in a later message" in lowered
+    assert "without that yes, do not call it" in lowered
 
 
 def test_prompt_renders_the_active_preferences_block_directly(
