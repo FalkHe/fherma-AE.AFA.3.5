@@ -28,30 +28,91 @@ import { queryKeys } from "../queryKeys";
 const eventsUrl = `${import.meta.env.VITE_API_URL ?? ""}/api/events`;
 
 /** The event names the backend emits on the `app_events` channel. */
-type ServerEventName = "operation.updated" | "product.updated" | "document.updated";
+type ServerEventName =
+  | "operation.updated"
+  | "product.updated"
+  | "document.updated"
+  | "chat.message.created";
 
 /**
- * Which caches each event invalidates.
+ * Which caches each event always invalidates.
  *
  * `operation.updated` deliberately touches `["operations"]` only: progress
  * ticks arrive several times per ingestion and must not drag the product list
  * along with them. A product's own status flip comes as `product.updated`.
+ *
+ * `chat.message.created` touches both chat caches: the advisor's answer joins
+ * the timeline, and the consultation's last activity and `activeOperationId`
+ * (the typing indicator's only input) move with it.
  */
 const INVALIDATIONS: Record<ServerEventName, readonly (readonly string[])[]> = {
   "operation.updated": [queryKeys.operations.all],
   "product.updated": [queryKeys.products.all],
   "document.updated": [queryKeys.documents.all, queryKeys.products.all],
+  "chat.message.created": [queryKeys.chatMessages.all, queryKeys.chats.all],
 };
 
 /**
  * Refetched after a reconnect: events emitted while the stream was down are
- * gone for good, so the two caches that drive the live screens are restored
- * wholesale rather than left showing a frozen past.
+ * gone for good, so the caches that drive the live screens are restored
+ * wholesale rather than left showing a frozen past. The chat caches are in here
+ * because a reply that landed during the gap must appear on reconnect — without
+ * a reload, and without polling.
  */
 const RECONNECT_INVALIDATIONS: readonly (readonly string[])[] = [
   queryKeys.products.all,
   queryKeys.operations.all,
+  queryKeys.chats.all,
+  queryKeys.chatMessages.all,
 ];
+
+/** `entity_type` of an operation answering a consultation turn. */
+const CHAT_ENTITY_TYPE = "chat";
+
+/**
+ * The one field of the one payload this listener reads.
+ *
+ * Event payloads carry ids only and are never trusted as content, so parsing is
+ * normally unnecessary — every mapping above invalidates a whole prefix. The
+ * exception is `operation.updated`: it is emitted for every operation in the
+ * system, and the customer chat cannot read `/api/operations` (that endpoint is
+ * admin-only, deliberately), so an operation on a *chat* has to move the
+ * `chats` cache instead, where the pointer the UI reads actually lives.
+ */
+function entityTypeOf(event: Event): string | null {
+  if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
+    return null;
+  }
+
+  try {
+    const payload: unknown = JSON.parse(event.data);
+
+    if (typeof payload === "object" && payload !== null && "entityType" in payload) {
+      const entityType = (payload as { entityType: unknown }).entityType;
+
+      return typeof entityType === "string" ? entityType : null;
+    }
+  } catch {
+    // A malformed payload is not worth a broken screen: the static mapping above
+    // already ran, so the worst case is one cache not being refreshed.
+  }
+
+  return null;
+}
+
+/**
+ * Prefixes an event invalidates only for some payloads — see `entityTypeOf`.
+ */
+function conditionalInvalidations(
+  name: ServerEventName,
+  event: Event,
+): readonly (readonly string[])[] {
+  if (name === "operation.updated" && entityTypeOf(event) === CHAT_ENTITY_TYPE) {
+    return [queryKeys.chats.all];
+  }
+
+  return [];
+}
 
 // Connection state lives in the module, not in the hook's component: layouts
 // render a "live updates are down" warning, and they must be able to read the
@@ -128,10 +189,12 @@ export function useServerEvents(): void {
       setConnected(false);
     }
 
-    // The payloads carry ids only and every mapping below invalidates a whole
-    // prefix, so there is nothing to parse out of `event.data`.
     const eventListeners = Object.entries(INVALIDATIONS).map(([name, prefixes]) => {
-      const listener = (): void => invalidate(prefixes);
+      const eventName = name as ServerEventName;
+      const listener = (event: Event): void => {
+        invalidate(prefixes);
+        invalidate(conditionalInvalidations(eventName, event));
+      };
 
       source.addEventListener(name, listener);
 

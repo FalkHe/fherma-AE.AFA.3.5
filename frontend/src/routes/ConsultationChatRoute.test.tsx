@@ -1,28 +1,39 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { components } from "../api/schema";
+import { jsonResponse, stubFetch } from "../test/network";
 import { renderWithProviders } from "../test/render";
 
 import { ConsultationChatRoute } from "./ConsultationChatRoute";
 
 /**
  * The conversation state machine of ui-spec §3.3, row by row, plus the composer's
- * keyboard contract — all against the pinned stub fixtures, which exist precisely
- * to make every state reachable before the API does.
+ * keyboard contract — all against a small in-memory `chats`/`chat-messages` API
+ * behind the `fetch` stub, so the real request path (envelope unwrapping, page
+ * walk, error mapping, the optimistic update) is what the assertions exercise.
  *
  * The chat id normally comes from the path; the route is rendered on its own here
  * (the app's route table is not under test), so `useParams` is doubled.
  */
 
+type ChatResource = components["schemas"]["ChatResource"];
+type ChatMessageResource = components["schemas"]["ChatMessageResource"];
+
 const CHAT_IDS = {
-  interview: "01STUBCHATINTERVIEW0000000",
-  typing: "01STUBCHATTYPING0000000000",
-  stale: "01STUBCHATSTALE00000000000",
-  new: "01STUBCHATNEW0000000000000",
-  empty: "01STUBCHATEMPTY00000000000",
+  interview: "01CHATINTERVIEW00000000001",
+  typing: "01CHATTYPING000000000000001",
+  stale: "01CHATSTALE0000000000000001",
+  new: "01CHATNEW000000000000000001",
+  empty: "01CHATEMPTY0000000000000001",
+  gone: "01CHATGONE00000000000000001",
 } as const;
+
+/** Bodies the fake API answers with a failure, so both paths are reachable. */
+const FAILING_BODY = "fail";
+const CONFLICTING_BODY = "busy";
 
 let chatIdParam: string = CHAT_IDS.interview;
 
@@ -31,6 +42,240 @@ vi.mock("react-router", async (importOriginal) => {
 
   return { ...actual, useParams: () => ({ chatId: chatIdParam }) };
 });
+
+function minutesAgo(minutes: number): string {
+  return new Date(Date.now() - minutes * 60_000).toISOString();
+}
+
+function chat(
+  id: string,
+  attributes: Partial<components["schemas"]["ChatAttributes"]>,
+): ChatResource {
+  return {
+    id,
+    type: "chats",
+    attributes: {
+      title: null,
+      activeOperationId: null,
+      createdAt: minutesAgo(60),
+      updatedAt: minutesAgo(60),
+      ...attributes,
+    },
+  };
+}
+
+function message(
+  id: string,
+  role: components["schemas"]["ChatMessageRole"],
+  body: string,
+  createdAt: string,
+): ChatMessageResource {
+  return {
+    id,
+    type: "chat-messages",
+    attributes: {
+      role,
+      body,
+      toolCalls: [],
+      sources: [],
+      recommendations: [],
+      createdAt,
+    },
+  };
+}
+
+/** The advisor's opener carries Markdown incl. a GFM table (the pinned config). */
+const INTERVIEW_MESSAGES: readonly ChatMessageResource[] = [
+  message(
+    "01MESSAGEGREETING0000000001",
+    "assistant",
+    "Hello! **What licence do you hold**, and how much riding have you done?",
+    "2026-08-25T09:02:00Z",
+  ),
+  message(
+    "01MESSAGEUSER00000000000001",
+    "user",
+    "A2 since last month.\nI commute 20 km a day.",
+    "2026-08-25T09:04:00Z",
+  ),
+  message(
+    "01MESSAGEANSWER0000000000001",
+    "assistant",
+    `## What A2 means
+
+| Class | Typical power |
+| --- | --- |
+| A2 naked twin | 35 kW |`,
+    "2026-08-25T09:05:00Z",
+  ),
+];
+
+/** How many times the chat detail was read — the 409 test's evidence. */
+let chatReads = 0;
+
+/**
+ * A gate the POST waits behind, so the `sending` caption is observable at all: a
+ * stubbed request otherwise resolves within the same tick as the keystroke.
+ */
+let postGate: Promise<void> | null = null;
+
+function holdNextPost(): () => Promise<void> {
+  let release = (): void => undefined;
+
+  postGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  return async () => {
+    postGate = null;
+    release();
+    // One turn of the event loop, so the resolved request is delivered inside
+    // the caller's `act` block rather than after it.
+    await Promise.resolve();
+  };
+}
+
+/**
+ * The fake API: chat detail reads, the paginated timeline read, and a POST that
+ * really appends the message and starts a turn (so "Seen" and the typing bubble
+ * come from refetched server state, not from the mutation).
+ */
+function installApi() {
+  const chats = new Map<string, ChatResource>([
+    [CHAT_IDS.interview, chat(CHAT_IDS.interview, { title: "Commuter bike for the city" })],
+    [
+      CHAT_IDS.typing,
+      chat(CHAT_IDS.typing, {
+        title: "First big bike after the A2",
+        activeOperationId: "01OPERATIONTYPING000000001",
+      }),
+    ],
+    [
+      CHAT_IDS.stale,
+      chat(CHAT_IDS.stale, {
+        title: "Weekend trips on a budget",
+        activeOperationId: "01OPERATIONSTALE0000000001",
+      }),
+    ],
+    [
+      CHAT_IDS.new,
+      chat(CHAT_IDS.new, {
+        activeOperationId: "01OPERATIONGREETING0000001",
+        createdAt: new Date().toISOString(),
+      }),
+    ],
+    [CHAT_IDS.empty, chat(CHAT_IDS.empty, {})],
+  ]);
+
+  const timelines = new Map<string, ChatMessageResource[]>([
+    [CHAT_IDS.interview, [...INTERVIEW_MESSAGES]],
+    [
+      CHAT_IDS.typing,
+      [
+        message("01MESSAGETYPING00000000001", "assistant", "Welcome back!", minutesAgo(3)),
+        // "Just now": the turn is young, so it is not stale.
+        message("01MESSAGETYPING00000000002", "user", "Compare the CB500F with the Z650.", minutesAgo(0)),
+      ],
+    ],
+    [
+      CHAT_IDS.stale,
+      [
+        message("01MESSAGESTALE000000000001", "assistant", "Tell me what you ride today.", minutesAgo(20)),
+        // Older than CHAT_TURN_STALE_SECONDS (150 s), so the turn is lost.
+        message("01MESSAGESTALE000000000002", "user", "I'm on a 125.", minutesAgo(6)),
+      ],
+    ],
+    [CHAT_IDS.new, []],
+    [CHAT_IDS.empty, []],
+  ]);
+
+  let createdMessages = 0;
+
+  chatReads = 0;
+
+  function notFound(): Response {
+    return jsonResponse(
+      { errors: [{ status: "404", code: "not-found", detail: "gone" }] },
+      { status: 404 },
+    );
+  }
+
+  stubFetch(async (request) => {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/api/chat-messages" && request.method === "GET") {
+      const rows = timelines.get(url.searchParams.get("filter[chat]") ?? "");
+
+      return rows === undefined
+        ? notFound()
+        : jsonResponse({ data: rows, meta: { totalCount: rows.length } });
+    }
+
+    if (url.pathname === "/api/chat-messages" && request.method === "POST") {
+      const payload = (await request.json()) as components["schemas"]["ChatMessageCreateRequest"];
+      const { chatId, body } = payload.data.attributes;
+      const row = chats.get(chatId);
+      const rows = timelines.get(chatId);
+
+      if (row === undefined || rows === undefined) {
+        return notFound();
+      }
+
+      if (postGate !== null) {
+        await postGate;
+      }
+
+      if (body === FAILING_BODY) {
+        return jsonResponse(
+          { errors: [{ status: "500", code: "server-error", detail: "boom" }] },
+          { status: 500 },
+        );
+      }
+
+      if (body === CONFLICTING_BODY) {
+        // A turn the client did not know about: the message is refused and
+        // nothing is stored, but the chat now reports the pointer.
+        chats.set(chatId, {
+          ...row,
+          attributes: { ...row.attributes, activeOperationId: "01OPERATIONRACE00000000001" },
+        });
+
+        return jsonResponse(
+          { errors: [{ status: "409", code: "response-pending", detail: "busy" }] },
+          { status: 409 },
+        );
+      }
+
+      createdMessages += 1;
+
+      // The server assigns its own ULID — it never echoes the client's localId.
+      const created = message(
+        `01MESSAGESERVER${String(createdMessages).padStart(11, "0")}`,
+        "user",
+        body,
+        new Date().toISOString(),
+      );
+
+      rows.push(created);
+      chats.set(chatId, {
+        ...row,
+        attributes: { ...row.attributes, activeOperationId: "01OPERATIONREPLY0000000001" },
+      });
+
+      return jsonResponse({ data: created }, { status: 201 });
+    }
+
+    if (url.pathname.startsWith("/api/chats/") && request.method === "GET") {
+      chatReads += 1;
+
+      const row = chats.get(url.pathname.split("/").at(-1) ?? "");
+
+      return row === undefined ? notFound() : jsonResponse({ data: row });
+    }
+
+    throw new Error(`Unexpected ${request.method} ${request.url}`);
+  });
+}
 
 /** The composer input; also the target of every keyboard interaction. */
 function composer(): HTMLElement {
@@ -43,6 +288,8 @@ function sendButton(): HTMLElement {
 
 beforeEach(() => {
   chatIdParam = CHAT_IDS.interview;
+  postGate = null;
+  installApi();
 });
 
 describe("ConsultationChatRoute — turn states", () => {
@@ -119,7 +366,7 @@ describe("ConsultationChatRoute — turn states", () => {
   });
 
   it("answers an unknown chat with the not-found gate", async () => {
-    chatIdParam = "01STUBCHATGONE00000000000X";
+    chatIdParam = CHAT_IDS.gone;
 
     // A nested provider, only here: the application retries a failed query three
     // times with backoff (~7 s), and this test is about the gate, not the wait.
@@ -137,11 +384,13 @@ describe("ConsultationChatRoute — turn states", () => {
 });
 
 describe("ConsultationChatRoute — composer", () => {
-  it("row 1: Enter sends and the bubble reports its own progress", async () => {
+  it("row 1: Enter sends, and the server row replaces the optimistic bubble", async () => {
     const user = userEvent.setup();
 
     renderWithProviders(<ConsultationChatRoute />);
     await screen.findByRole("log", { name: "Conversation" });
+
+    const releasePost = holdNextPost();
 
     await user.type(composer(), "I ride 20 km a day.{Enter}");
 
@@ -151,13 +400,22 @@ describe("ConsultationChatRoute — composer", () => {
     expect(screen.getByText("I ride 20 km a day.")).toBeInTheDocument();
     expect(composer()).toHaveValue("");
 
-    // A successful POST *is* the "seen" signal, and the advisor's turn begins.
+    await act(releasePost);
+
+    // A successful POST *is* the "seen" signal, and the advisor's turn begins —
+    // the typing bubble comes from the refetched `activeOperationId`.
     await waitFor(() => {
       expect(screen.getByText("Seen")).toBeInTheDocument();
     });
     expect(
       screen.getByRole("status", { name: "The advisor is typing…" }),
     ).toBeInTheDocument();
+
+    // The refetch delivered the server's own row: the optimistic entry is gone
+    // rather than duplicated, even though the server echoes no `localId`.
+    await waitFor(() => {
+      expect(screen.getAllByText("I ride 20 km a day.")).toHaveLength(1);
+    });
   });
 
   it("inserts a newline on Shift+Enter instead of sending", async () => {
@@ -192,19 +450,44 @@ describe("ConsultationChatRoute — composer", () => {
     renderWithProviders(<ConsultationChatRoute />);
     await screen.findByText("Tell the advisor about yourself");
 
-    // The stub's magic input, so the failure path is reachable without a server.
-    await user.type(composer(), "fail{Enter}");
+    await user.type(composer(), `${FAILING_BODY}{Enter}`);
     expect(await screen.findByText("Not sent.")).toBeInTheDocument();
-    // The composer is usable again, and the text lives in the bubble.
+    // The text lives in the bubble, and the empty composer cannot be sent.
     expect(sendButton()).toBeDisabled();
-    expect(screen.getByText("fail")).toBeInTheDocument();
+    expect(screen.getByText(FAILING_BODY)).toBeInTheDocument();
+
+    // Retrying re-fires the same body in place rather than adding a second bubble.
+    const releasePost = holdNextPost();
 
     await user.click(screen.getByRole("button", { name: "Send again" }));
     expect(screen.getByText("Sending…")).toBeInTheDocument();
+
+    await act(releasePost);
     expect(await screen.findByText("Not sent.")).toBeInTheDocument();
+    expect(screen.getAllByText(FAILING_BODY)).toHaveLength(1);
 
     await user.click(screen.getByRole("button", { name: "Discard" }));
     expect(screen.queryByText("Not sent.")).not.toBeInTheDocument();
-    expect(screen.queryByText("fail")).not.toBeInTheDocument();
+    expect(screen.queryByText(FAILING_BODY)).not.toBeInTheDocument();
+  });
+
+  it("treats a 409 response-pending as a quiet refetch of the chat", async () => {
+    const user = userEvent.setup();
+
+    renderWithProviders(<ConsultationChatRoute />);
+    await screen.findByRole("log", { name: "Conversation" });
+
+    const readsBefore = chatReads;
+
+    await user.type(composer(), `${CONFLICTING_BODY}{Enter}`);
+
+    // The message was refused, so the bubble keeps the text and its way out…
+    expect(await screen.findByText("Not sent.")).toBeInTheDocument();
+    // …and the chat detail is refetched instead of an error being shown, so the
+    // UI learns about the turn it raced with.
+    await waitFor(() => {
+      expect(chatReads).toBeGreaterThan(readsBefore);
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

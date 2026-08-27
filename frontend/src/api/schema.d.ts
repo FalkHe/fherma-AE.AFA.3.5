@@ -153,6 +153,112 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/chat-messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the messages of one consultation
+         * @description Return one page of a consultation's timeline, oldest message first.
+         *
+         *     The page is cut from the timeline in the route: `chat_service.list_messages`
+         *     loads a whole conversation in one query — a bounded, per-account amount of
+         *     text the agent loop replays in full anyway — so paging here keeps that one
+         *     pinned ordering as the single source of truth instead of duplicating it in a
+         *     second, paginated query. `meta.totalCount` stays the length of the whole
+         *     timeline, so the SPA can walk pages.
+         */
+        get: operations["list_chat_messages_api_chat_messages_get"];
+        put?: never;
+        /**
+         * Send a message to the advisor
+         * @description Persist the customer's message and start the advisor's answer.
+         *
+         *     The body arrives stripped, non-empty and bounded from the request schema —
+         *     `chat_service.append_user_message` stores it verbatim and names the
+         *     consultation from it when it is still unnamed.
+         *
+         *     The stale-turn check comes first, because its refusal is a refusal of the
+         *     message: an in-flight turn built its context before this request arrived, so
+         *     a message stored next to it would never be answered.
+         */
+        post: operations["create_chat_message_api_chat_messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/chats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the signed-in account's consultations
+         * @description Return one page of the customer's consultations, most recent activity first.
+         *
+         *     The pinned sort deviation from the admin lists: `-updatedAt`, not
+         *     `-createdAt` — a customer looks for the conversation they were just having.
+         *     Deleted consultations are absent.
+         */
+        get: operations["list_chats_api_chats_get"];
+        put?: never;
+        /**
+         * Start a consultation
+         * @description Create an empty consultation for the signed-in account and let the advisor open it.
+         *
+         *     The request body carries an empty attributes object: there is nothing to
+         *     supply, the title is derived later from the first user message, and a
+         *     consultation is only ever created by an explicit request — never on page
+         *     load. The payload is therefore never read — validating it is the point, so
+         *     an invented attribute is a 422 instead of a silently ignored key.
+         *
+         *     The advisor speaks first: a response turn is started immediately, so the
+         *     201 already carries `activeOperationId` and the greeting arrives over SSE as
+         *     an ordinary assistant message. It does not name the consultation — the title
+         *     still comes from the first *user* message.
+         */
+        post: operations["create_chat_api_chats_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/chats/{chat_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one consultation
+         * @description Return one of the customer's own, live consultations.
+         */
+        get: operations["get_chat_api_chats__chat_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a consultation
+         * @description Soft-delete one of the customer's own consultations.
+         *
+         *     The row and its messages stay in the database behind the ownership check,
+         *     which is why a second DELETE answers 404. Nothing is announced over SSE:
+         *     only the owner can see this list, and their own mutation invalidates it.
+         */
+        delete: operations["delete_chat_api_chats__chat_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/documents": {
         parameters: {
             query?: never;
@@ -344,6 +450,181 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * ChatAttributes
+         * @description The pinned attribute set of a consultation.
+         */
+        ChatAttributes: {
+            /** Title */
+            title: string | null;
+            /** Activeoperationid */
+            activeOperationId: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /**
+         * ChatCreateAttributes
+         * @description No attributes at all — a consultation is created empty.
+         */
+        ChatCreateAttributes: Record<string, never>;
+        /**
+         * ChatCreateRequest
+         * @description Body of `POST /api/chats`.
+         */
+        ChatCreateRequest: {
+            data: components["schemas"]["ChatCreateResource"];
+        };
+        /**
+         * ChatCreateResource
+         * @description The resource object of a create request.
+         */
+        ChatCreateResource: {
+            /**
+             * Type
+             * @default chats
+             * @constant
+             */
+            type: "chats";
+            attributes: components["schemas"]["ChatCreateAttributes"];
+        };
+        /**
+         * ChatDocument
+         * @description Body of `GET`/`POST` on a single consultation.
+         */
+        ChatDocument: {
+            data: components["schemas"]["ChatResource"];
+        };
+        /**
+         * ChatListDocument
+         * @description Body of `GET /api/chats`.
+         */
+        ChatListDocument: {
+            /** Data */
+            data: components["schemas"]["ChatResource"][];
+            meta: components["schemas"]["Meta"];
+        };
+        /**
+         * ChatMessageAttributes
+         * @description The pinned attribute set of a message.
+         *
+         *     The three traces are empty lists on a user message and on an assistant
+         *     message that needed no tools.
+         */
+        ChatMessageAttributes: {
+            role: components["schemas"]["ChatMessageRole"];
+            /** Body */
+            body: string;
+            /** Toolcalls */
+            toolCalls: components["schemas"]["ToolCall"][];
+            /** Sources */
+            sources: components["schemas"]["MessageSource"][];
+            /** Recommendations */
+            recommendations: components["schemas"]["Recommendation"][];
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+        };
+        /**
+         * ChatMessageCreateAttributes
+         * @description What a customer may send: which consultation, and what they said.
+         */
+        ChatMessageCreateAttributes: {
+            /**
+             * Chatid
+             * @description ULID of the consultation this message belongs to.
+             */
+            chatId: string;
+            /**
+             * Body
+             * @description The customer's message, at most 4000 characters.
+             */
+            body: string;
+        };
+        /**
+         * ChatMessageCreateRequest
+         * @description Body of `POST /api/chat-messages`.
+         */
+        ChatMessageCreateRequest: {
+            data: components["schemas"]["ChatMessageCreateResource"];
+        };
+        /**
+         * ChatMessageCreateResource
+         * @description The resource object of a create request.
+         */
+        ChatMessageCreateResource: {
+            /**
+             * Type
+             * @default chat-messages
+             * @constant
+             */
+            type: "chat-messages";
+            attributes: components["schemas"]["ChatMessageCreateAttributes"];
+        };
+        /**
+         * ChatMessageDocument
+         * @description Body of `POST /api/chat-messages`.
+         */
+        ChatMessageDocument: {
+            data: components["schemas"]["ChatMessageResource"];
+        };
+        /**
+         * ChatMessageListDocument
+         * @description Body of `GET /api/chat-messages`.
+         */
+        ChatMessageListDocument: {
+            /** Data */
+            data: components["schemas"]["ChatMessageResource"][];
+            meta: components["schemas"]["Meta"];
+        };
+        /**
+         * ChatMessageResource
+         * @description A message resource object.
+         */
+        ChatMessageResource: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default chat-messages
+             * @constant
+             */
+            type: "chat-messages";
+            attributes: components["schemas"]["ChatMessageAttributes"];
+        };
+        /**
+         * ChatMessageRole
+         * @description Who wrote a message.
+         *
+         *     Only these two: the system prompt is code and never a row, and tool traffic
+         *     lives in the JSONB columns of the assistant message it belongs to.
+         * @enum {string}
+         */
+        ChatMessageRole: "user" | "assistant";
+        /**
+         * ChatResource
+         * @description A consultation resource object.
+         */
+        ChatResource: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default chats
+             * @constant
+             */
+            type: "chats";
+            attributes: components["schemas"]["ChatAttributes"];
+        };
         /**
          * DocumentAttributes
          * @description The pinned attribute set of a source document.
@@ -570,6 +851,29 @@ export interface components {
              */
             type: "manufacturers";
             attributes: components["schemas"]["ManufacturerAttributes"];
+        };
+        /**
+         * MessageSource
+         * @description One knowledge-base chunk backing this answer.
+         *
+         *     Provenance, not prose: the UI shows title, heading path and a link, and the
+         *     `chunkId` is what ties a claim back to the ingested document it came from.
+         */
+        MessageSource: {
+            /** Chunkid */
+            chunkId: string;
+            /** Motorbikeid */
+            motorbikeId: string;
+            /** Sourcedocumentid */
+            sourceDocumentId: string;
+            /** Sourceurl */
+            sourceUrl: string | null;
+            /** Sourcetitle */
+            sourceTitle: string;
+            /** Headingpath */
+            headingPath: string | null;
+            /** Score */
+            score: number;
         };
         /**
          * Meta
@@ -874,6 +1178,46 @@ export interface components {
             database: "ok" | "unavailable";
         };
         /**
+         * Recommendation
+         * @description One recommended model, snapshotted when the answer was written.
+         *
+         *     A write-time snapshot rather than a catalogue reference: plain users cannot
+         *     read `/api/products` in this phase, so the card has to be self-contained.
+         *     Staleness is accepted.
+         */
+        Recommendation: {
+            /** Motorbikeid */
+            motorbikeId: string;
+            /** Name */
+            name: string;
+            /** Imageurl */
+            imageUrl: string | null;
+            /** Rationale */
+            rationale: string;
+            /** Matchedpreferences */
+            matchedPreferences: string[];
+            keySpecs: components["schemas"]["RecommendationKeySpecs"];
+        };
+        /**
+         * RecommendationKeySpecs
+         * @description The specification snippet a recommendation card shows.
+         *
+         *     Every field is nullable: a missing verified specification stays missing —
+         *     the advisor never guesses a number.
+         */
+        RecommendationKeySpecs: {
+            category: components["schemas"]["SpecCategory"] | null;
+            /** Enginecc */
+            engineCc: number | null;
+            /** Powerkw */
+            powerKw: number | null;
+            /** Wetweightkg */
+            wetWeightKg: number | null;
+            /** Seatheightmm */
+            seatHeightMm: number | null;
+            priceBand: components["schemas"]["PriceBand"] | null;
+        };
+        /**
          * RegisterRequest
          * @description Credentials for a new account, carrying the pinned validation rules.
          */
@@ -934,6 +1278,37 @@ export interface components {
          * @enum {string}
          */
         SpecCategory: "naked" | "sport" | "sport_touring" | "touring" | "adventure" | "cruiser" | "classic" | "scrambler" | "enduro" | "supermoto" | "scooter";
+        /**
+         * ToolCall
+         * @description One tool the advisor executed for this turn, with its outcome.
+         *
+         *     Every executed call is recorded — the retrieval and comparison tools graders
+         *     look for, and the write tools (`record_preference`, `flag_unknown_bike`,
+         *     `present_recommendations`) alike.
+         */
+        ToolCall: {
+            /** Id */
+            id: string;
+            /** Tool */
+            tool: string;
+            /** Arguments */
+            arguments: {
+                [key: string]: unknown;
+            };
+            /** Result */
+            result: {
+                [key: string]: unknown;
+            };
+            status: components["schemas"]["ToolCallStatus"];
+            /** Error */
+            error: string | null;
+        };
+        /**
+         * ToolCallStatus
+         * @description How an executed tool call ended.
+         * @enum {string}
+         */
+        ToolCallStatus: "succeeded" | "failed";
         /**
          * UserResponse
          * @description The authenticated account, as every `/auth/*` success body returns it.
@@ -1140,6 +1515,258 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": string;
+                };
+            };
+        };
+    };
+    list_chat_messages_api_chat_messages_get: {
+        parameters: {
+            query?: {
+                /** @description ULID of the consultation whose messages to return (required). */
+                "filter[chat]"?: string | null;
+                /** @description 1-based page number. */
+                "page[number]"?: number;
+                /** @description Rows per page (maximum 100). */
+                "page[size]"?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatMessageListDocument"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_chat_message_api_chat_messages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatMessageCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatMessageDocument"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_chats_api_chats_get: {
+        parameters: {
+            query?: {
+                /** @description 1-based page number. */
+                "page[number]"?: number;
+                /** @description Rows per page (maximum 100). */
+                "page[size]"?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatListDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_chat_api_chats_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_chat_api_chats__chat_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description ULID of the consultation. */
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatDocument"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_chat_api_chats__chat_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description ULID of the consultation. */
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

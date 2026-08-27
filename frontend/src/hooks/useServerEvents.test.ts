@@ -97,9 +97,44 @@ describe("useServerEvents", () => {
   it("invalidates only the operations cache on operation.updated", () => {
     const { invalidateQueries } = mountHook();
 
-    currentSource().emitServerEvent("operation.updated", { operationId: "op-1" });
+    currentSource().emitServerEvent("operation.updated", {
+      operationId: "op-1",
+      entityType: "motorbike",
+    });
 
     expect(invalidateQueries.mock.calls).toEqual([[{ queryKey: ["operations"] }]]);
+  });
+
+  it("also invalidates the chats cache when the operation works on a chat", () => {
+    const { invalidateQueries } = mountHook();
+
+    // The customer UI cannot read `/api/operations` (admin-only), so the turn
+    // pointer it renders has to be refetched from the chat resource.
+    currentSource().emitServerEvent("operation.updated", {
+      operationId: "op-1",
+      entityType: "chat",
+      entityId: "chat-1",
+    });
+
+    expect(invalidateQueries.mock.calls).toEqual([
+      [{ queryKey: ["operations"] }],
+      [{ queryKey: ["chats"] }],
+    ]);
+  });
+
+  it("invalidates the timeline and the chat list on chat.message.created", () => {
+    const { invalidateQueries } = mountHook();
+
+    currentSource().emitServerEvent("chat.message.created", {
+      chatId: "chat-1",
+      messageId: "message-1",
+      role: "assistant",
+    });
+
+    expect(invalidateQueries.mock.calls).toEqual([
+      [{ queryKey: ["chatMessages"] }],
+      [{ queryKey: ["chats"] }],
+    ]);
   });
 
   it("invalidates the products cache on product.updated", () => {
@@ -129,7 +164,7 @@ describe("useServerEvents", () => {
     expect(invalidateQueries).not.toHaveBeenCalled();
   });
 
-  it("invalidates products and operations after a reconnect", () => {
+  it("invalidates every live cache after a reconnect", () => {
     const { invalidateQueries } = mountHook();
     const source = currentSource();
 
@@ -137,9 +172,13 @@ describe("useServerEvents", () => {
     source.emitLifecycle("error");
     source.emitLifecycle("open");
 
+    // Events lost during the gap are gone for good — including an advisor reply,
+    // which must appear without a reload and without any polling.
     expect(invalidateQueries.mock.calls).toEqual([
       [{ queryKey: ["products"] }],
       [{ queryKey: ["operations"] }],
+      [{ queryKey: ["chats"] }],
+      [{ queryKey: ["chatMessages"] }],
     ]);
   });
 

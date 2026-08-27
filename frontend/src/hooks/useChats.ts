@@ -6,188 +6,125 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+import { apiClient } from "../api/client";
+import type { components } from "../api/schema";
 import { queryKeys } from "../queryKeys";
 
-import {
-  ChatError,
-  stubActiveOperationId,
-  stubForgetChat,
-  stubStartGreetingTurn,
-} from "./useChatMessages";
+import { chatError } from "./useChatMessages";
 
 /**
- * STUB — the whole file is replaced wholesale in step 3.6, when the `chats`
- * endpoints reach the generated API client. The exported names, the argument
- * shapes and the query keys are pinned by
- * `docs/roadmap/phase-3/shared-knowledge.md` (§Frontend conventions — delta);
- * do not change them, and do not import anything from here that 3.6 will not
- * still export.
+ * The `chats` resource: the signed-in customer's consultations, plus the two
+ * writes the list screen performs on them.
  *
- * What is real here: the TanStack Query plumbing. The hooks return genuine
- * `useQuery`/`useMutation` results over an in-memory fixture table, keyed and
- * invalidated exactly as the live versions will be, so the components written
- * against them survive the replacement without edits. Only the "stub server"
- * section goes away in 3.6.
+ * Every request goes through the generated `openapi-fetch` client, so the
+ * JSON:API envelopes (`data`/`attributes`/`meta`) are typed from the backend's
+ * own schema. The envelope is unwrapped here and nowhere else — components see
+ * flat rows.
  *
- * `ChatError` is re-exported by the sibling `useChatMessages.ts` (pinned there);
- * the three `stub*` helpers imported above are the fixture conversations' turn
- * lifecycle, which lives next to the timers that drive it.
+ * Nothing here updates optimistically (the one exemption lives in
+ * `useChatMessages`): creating and deleting await the server and then
+ * invalidate, so the list always renders refetched server truth. Owner scoping
+ * is server-side — there is no client-side filter to forget.
+ *
+ * `ChatError` is defined in the sibling `useChatMessages.ts` and re-exported by
+ * it; the error builder is imported from there so both resources produce one
+ * error shape (one direction only, no cycle).
  */
 
-// --- Contract types (survive 3.6) ------------------------------------------
-
 /**
- * One consultation, as the `chats` resource delivers it (id merged with its
- * attributes — no component ever touches a JSON:API envelope).
+ * One consultation: the resource id merged with its attributes.
  *
  * `activeOperationId` is the **only** source of the "advisor is replying" state:
  * `/api/operations` is admin-only and the customer UI never reads it.
  * `updatedAt` doubles as last activity — the server bumps it on every appended
  * message and sorts the list by it, descending. There is no status column.
  */
-export interface Chat {
-  id: string;
-  title: string | null;
-  activeOperationId: string | null;
-  createdAt: string;
-  updatedAt: string;
+export type Chat = { id: string } & components["schemas"]["ChatAttributes"];
+
+/**
+ * Pinned page size — also the server's maximum. A customer has a handful of
+ * consultations, so the hook walks the pages instead of paginating the list;
+ * without the walk row 101 would silently disappear.
+ */
+const PAGE_SIZE = 100;
+
+function toChat(resource: components["schemas"]["ChatResource"]): Chat {
+  return { id: resource.id, ...resource.attributes };
 }
 
-// --- Stub server (deleted in 3.6) ------------------------------------------
+/** `GET /api/chats`, following `meta.totalCount` to the last page. */
+async function listChats(): Promise<Chat[]> {
+  const chats: Chat[] = [];
 
-/** Fixture ids, 26 characters like the ULID primary keys they stand in for. */
-const FIXTURE_IDS = {
-  interview: "01STUBCHATINTERVIEW0000000",
-  typing: "01STUBCHATTYPING0000000000",
-  stale: "01STUBCHATSTALE00000000000",
-  new: "01STUBCHATNEW0000000000000",
-  empty: "01STUBCHATEMPTY00000000000",
-} as const;
+  for (let page = 1; ; page += 1) {
+    const { data, error, response } = await apiClient.GET("/api/chats", {
+      params: { query: { "page[number]": page, "page[size]": PAGE_SIZE } },
+    });
 
-/** Round trip long enough to make the pending states observable in the UI. */
-const STUB_LATENCY_MS = 500;
+    if (!response.ok || data === undefined) {
+      throw chatError(response.status, error);
+    }
 
-/**
- * The five consultations of ui-spec §12, newest activity first — one per state
- * the list and the chat view can be in: a finished interview, a turn in flight,
- * a turn that went stale, a just-created chat waiting for its greeting, and an
- * untitled idle one (the rare intro state). `activeOperationId` is not stored
- * here: it is derived from the sibling stub's turn table, so the timers that end
- * a turn also clear the pointer.
- */
-const FIXTURE_CHATS: readonly Omit<Chat, "activeOperationId">[] = [
-  {
-    id: FIXTURE_IDS.new,
-    title: null,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: FIXTURE_IDS.typing,
-    title: "First big bike after the A2",
-    createdAt: "2026-08-26T07:40:00Z",
-    updatedAt: new Date(Date.now() - 60_000).toISOString(),
-  },
-  {
-    id: FIXTURE_IDS.stale,
-    title: "Weekend trips on a budget",
-    createdAt: "2026-08-26T18:05:00Z",
-    updatedAt: new Date(Date.now() - 6 * 60_000).toISOString(),
-  },
-  {
-    id: FIXTURE_IDS.interview,
-    title: "Commuter bike for the city",
-    createdAt: "2026-08-25T09:01:00Z",
-    updatedAt: new Date(Date.now() - 33 * 60_000).toISOString(),
-  },
-  {
-    id: FIXTURE_IDS.empty,
-    title: null,
-    createdAt: "2026-08-20T09:15:00Z",
-    updatedAt: "2026-08-20T09:15:00Z",
-  },
-];
+    // The server's order is the pinned `-updatedAt` (last activity first) and is
+    // kept as delivered — the list renders it row for row.
+    chats.push(...data.data.map(toChat));
 
-/**
- * The stub's mutable table. Creating and deleting write to it so the list query
- * refetches into visibly different data — without that, "Ask the advisor" and
- * the delete dialog would look broken to anyone clicking through the screen
- * before 3.6.
- */
-let stubChats: Omit<Chat, "activeOperationId">[] = [...FIXTURE_CHATS];
+    // The empty-page guard is what keeps this loop finite if a row is deleted
+    // between two page requests and `totalCount` stays ahead of what is left.
+    if (chats.length >= data.meta.totalCount || data.data.length === 0) {
+      return chats;
+    }
+  }
+}
 
-function stubLatency(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, STUB_LATENCY_MS);
+/** `GET /api/chats/{id}` — the resource carrying the turn pointer. */
+async function getChat(chatId: string): Promise<Chat> {
+  const { data, error, response } = await apiClient.GET("/api/chats/{chat_id}", {
+    params: { path: { chat_id: chatId } },
   });
-}
 
-/** Adds the derived turn pointer to a stored row. */
-function toChat(row: Omit<Chat, "activeOperationId">): Chat {
-  return { ...row, activeOperationId: stubActiveOperationId(row.id) };
-}
-
-function listChats(): Promise<Chat[]> {
-  // The endpoint's pinned sort is `-updatedAt` (last activity first).
-  return Promise.resolve(
-    [...stubChats]
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      .map(toChat),
-  );
-}
-
-function getChat(chatId: string): Promise<Chat> {
-  const row = stubChats.find((chat) => chat.id === chatId);
-
-  if (row === undefined) {
-    // Unknown id and foreign owner answer the same 404 — no existence leak.
-    return Promise.reject(new ChatError(404, "not-found"));
+  if (!response.ok || data === undefined) {
+    // Unknown id, foreign owner and deleted row all answer 404 — no existence
+    // leak, and the route shows one not-found gate for all three.
+    throw chatError(response.status, error);
   }
 
-  return Promise.resolve(toChat(row));
+  return toChat(data.data);
 }
 
+/** `POST /api/chats` — the strict empty envelope the endpoint requires. */
 async function createChat(): Promise<Chat> {
-  await stubLatency();
+  const { data, error, response } = await apiClient.POST("/api/chats", {
+    body: { data: { type: "chats", attributes: {} } },
+  });
 
-  // Always the same fixture chat, reset to its just-created shape: ui-spec §12
-  // pins `chat-new` as the destination of the create stub, and resetting makes
-  // the advisor-speaks-first arrival repeatable.
-  const created: Omit<Chat, "activeOperationId"> = {
-    id: FIXTURE_IDS.new,
-    title: null,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-
-  stubChats = [created, ...stubChats.filter((chat) => chat.id !== created.id)];
-
-  // The greeting turn is started in the hook's `onSuccess`, which is where the
-  // query client driving the stub's timers is available; the chat detail the
-  // view then fetches carries the pointer, exactly as the real 201 does.
-  return toChat(created);
-}
-
-async function deleteChat(chatId: string): Promise<void> {
-  await stubLatency();
-
-  if (!stubChats.some((chat) => chat.id === chatId)) {
-    // A 404 counts as success for the real hook (the row is gone either way),
-    // so the stub does not reject here.
-    return;
+  if (!response.ok || data === undefined) {
+    throw chatError(response.status, error);
   }
 
-  stubChats = stubChats.filter((chat) => chat.id !== chatId);
-  stubForgetChat(chatId);
+  return toChat(data.data);
 }
 
-// --- Hooks (contract; survives 3.6) ----------------------------------------
+/** `DELETE /api/chats/{id}` — a soft delete server-side. */
+async function deleteChat(chatId: string): Promise<void> {
+  const { error, response } = await apiClient.DELETE("/api/chats/{chat_id}", {
+    params: { path: { chat_id: chatId } },
+  });
+
+  // A 404 counts as success: the row the user asked to be rid of is gone either
+  // way (already deleted, or never theirs), and the list invalidation below
+  // makes the screen agree.
+  if (!response.ok && response.status !== 404) {
+    throw chatError(response.status, error);
+  }
+}
 
 /**
  * The signed-in user's consultations, last activity first.
  *
- * Owner scoping is server-side; the live version walks the pages of
- * `GET /api/chats` via `meta.totalCount`.
+ * Refreshes itself: an advisor reply landing in any conversation arrives as an
+ * SSE invalidation of this cache, so rows reorder and the "replying…" hint
+ * disappears without a reload.
  */
 export function useChats(): UseQueryResult<Chat[], Error> {
   return useQuery({
@@ -211,23 +148,20 @@ export function useChat(chatId: string): UseQueryResult<Chat, Error> {
 }
 
 /**
- * Starts a consultation (`POST /api/chats`, empty body).
+ * Starts a consultation (`POST /api/chats`, empty attributes object).
  *
  * A chat is only ever created by the explicit "Ask the advisor" button, never on
- * page load, and the response already carries `activeOperationId` set: the
- * advisor opens the conversation with a greeting and the first interview
- * question, so the chat view lands directly in the typing state. Navigating to
- * the new chat belongs to the route, which owns the URL.
+ * page load, and the 201 already carries `activeOperationId` set: the advisor
+ * opens the conversation with a greeting and the first interview question, so the
+ * chat view lands directly in the typing state and the greeting arrives over SSE.
+ * Navigating to the new chat belongs to the route, which owns the URL.
  */
 export function useCreateChat(): UseMutationResult<Chat, Error, void> {
   const queryClient = useQueryClient();
 
   return useMutation<Chat, Error, void>({
     mutationFn: createChat,
-    onSuccess: (created) => {
-      // Stub only: the greeting turn (pointer set, message ~1.5 s later) is what
-      // `start_response` does server-side from step 3.5 on.
-      stubStartGreetingTurn(created.id, queryClient);
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.chats.all });
     },
   });
@@ -238,6 +172,8 @@ export function useCreateChat(): UseMutationResult<Chat, Error, void> {
  *
  * There is no restore affordance: the row is kept in the database, but bringing
  * it back is not a UI feature. The confirmation dialog lives in the list route.
+ * Deleting emits no SSE event — only the owner sees this list, so their own
+ * invalidation is enough.
  */
 export function useDeleteChat(): UseMutationResult<void, Error, { chatId: string }> {
   const queryClient = useQueryClient();
