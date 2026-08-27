@@ -10,8 +10,10 @@ Set these in `.env` (see `.env.dist` for the full, commented list):
 
 - `OPENROUTER_API_KEY` — without it, spec extraction and embeddings skip with
   a warning instead of failing the run.
-- `TAVILY_API_KEY` — without it, ingestion runs Wikipedia-only (no web
-  search) and appends a warning instead of failing.
+- `SEARCH_PROVIDER` — which web-search backend finds the product, technical
+  and review pages: `tavily` (default) or `openrouter` (see below).
+- `TAVILY_API_KEY` — needed by `SEARCH_PROVIDER=tavily`. Without it, ingestion
+  runs Wikipedia-only (no web search) and appends a warning instead of failing.
 - `CHAT_MODEL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS` — model choice.
   Changing `EMBEDDING_DIMENSIONS` requires a migration that alters the
   `chunks.embedding` column width to match; the embedding pass refuses to run
@@ -25,6 +27,27 @@ Set these in `.env` (see `.env.dist` for the full, commented list):
   `backend/var/media` on the host, both gitignored). `MEDIA_DIR` is also
   served publicly, read-only, at `/media`.
 
+## Web search providers
+
+Both providers run the same three pinned queries (official specifications →
+`product`, technical data → `technical`, review/test → `magazine`), return only
+URL and title, and are switched by `SEARCH_PROVIDER` alone — the ingestion job
+does not change. The pages themselves are always fetched by us.
+
+- `tavily` (default) — `POST https://api.tavily.com/search`, basic depth, needs
+  `TAVILY_API_KEY`. Free tier: 1000 credits/month, one credit per query.
+- `openrouter` — OpenRouter's `web` plugin on the chat-completions endpoint;
+  reuses `OPENROUTER_API_KEY` and `CHAT_MODEL`, so no second vendor account.
+  Costs roughly $0.01–0.02 per query (web plugin results are billed at about
+  $4 per 1000 results, plus the model tokens of the call that carries them) —
+  noticeably more than a Tavily credit, so pick it when you would rather not
+  hold a Tavily key at all. Cited URLs arrive tagged with
+  `?utm_source=openai`; that parameter is stripped (all others are kept)
+  because the URL is provenance and the dedupe key downstream.
+
+Either way an empty key is a valid configuration: ingestion then runs
+Wikipedia-only and appends a warning instead of failing.
+
 ## Admin UI flow
 
 Requires an admin account (`docker compose exec app-web app users set-role
@@ -35,8 +58,9 @@ Requires an admin account (`docker compose exec app-web app users set-role
    entry (`backlog` status) and enqueues an ingestion job; the row moves to
    `ingesting` and shows live progress over SSE.
 3. Ingestion runs, in order: Wikipedia lookup (title + lead image) → web
-   search for further sources (Tavily, if configured) → fetch and store each
-   document → download the image → LLM spec extraction into a draft → chunk
+   search for further sources (the configured provider, if it has a key) →
+   fetch and store each document → download the image → LLM spec extraction
+   into a draft → chunk
    and embed the stored documents. The entry lands in `in_review`.
 4. Open the model's review screen (`/admin/models/:motorbikeId`) to check the
    fetched documents, the draft specification, and the image.

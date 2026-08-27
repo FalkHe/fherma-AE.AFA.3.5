@@ -35,6 +35,8 @@ def _settings_environment() -> Iterator[None]:
         patch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
         patch.setenv("ENVIRONMENT", "development")
         patch.setenv("LOG_LEVEL", "WARNING")
+        # The root `.env` may legitimately select `openrouter`; tests pin the default instead.
+        patch.setenv("SEARCH_PROVIDER", "tavily")
         get_settings.cache_clear()
         yield
     get_settings.cache_clear()

@@ -13,7 +13,9 @@ Environment = Literal["development", "production"]
 LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
 
 # Web search backends behind `app.services.ingestion.search.SearchProvider`.
-SearchProviderName = Literal["tavily"]
+# `openrouter` reuses `OPENROUTER_API_KEY` / `CHAT_MODEL` (its web plugin);
+# `tavily` needs `TAVILY_API_KEY`.
+SearchProviderName = Literal["tavily", "openrouter"]
 
 
 class Settings(BaseSettings):

@@ -1336,3 +1336,35 @@ depend on. 1–3 bullets per step, no prose.
   CB500F" (worker recreated): operation `succeeded` at 100 % with only the
   Tavily warning, draft `471 cc / 35.0 kW / 43.0 Nm / 785 mm / ABS true`, 11/11
   chunks embedded (1536 dims) — bike, files and operation deleted afterwards.
+
+### Follow-up: second search provider (`SEARCH_PROVIDER=openrouter`)
+
+- **`config.SearchProviderName = Literal["tavily", "openrouter"]`**, no new
+  settings: `OpenRouterSearchProvider` reuses `OPENROUTER_API_KEY` +
+  `CHAT_MODEL`. `get_search_provider()` is still the only name→class mapping
+  (`"openrouter"` → `OpenRouterSearchProvider()`, else Tavily). Both providers
+  keep the identical `search.py` contract: same `QUERY_TEMPLATES` and labelling,
+  `RESULTS_PER_TEMPLATE = 2` per query, dedupe by URL, `INGESTION_MAX_WEB_DOCUMENTS`
+  cap that also stops later queries, politeness gate on the API host, and warnings
+  instead of exceptions (missing key → `"Web search skipped: OPENROUTER_API_KEY is
+  not configured."`, a failed query → `f"Web search for {query} failed."`).
+- **Deliberately raw httpx, not `app.llm.models.get_chat_model`:** `POST
+  OPENROUTER_SEARCH_URL` (`…/api/v1/chat/completions`) with `plugins:
+  [{"id": "web", "max_results": RESULTS_PER_TEMPLATE}]`, the model from
+  `settings.chat_model`, one user message, and `Authorization` +
+  `HTTP-Referer`/`X-Title` from the existing `APP_URL`/`APP_TITLE` constants —
+  this module needs an injectable client and the gate, and the LLM is only the
+  vehicle for the web plugin, not a reasoning step.
+- **Citation-parsing contract:** candidates come **only** from
+  `choices[0].message.annotations` entries with `type == "url_citation"` and a
+  non-empty string `url_citation.url` (assistant prose is never used); every level
+  is isinstance-checked, malformed shapes are skipped silently. OpenRouter appends
+  `utm_source=openai` to cited URLs — **only that parameter is stripped**, all other
+  query parameters survive, because the URL is provenance and the dedupe key
+  downstream (dedupe therefore happens on the cleaned URL).
+- **`SEARCH_PROVIDER=tavily` is pinned in `tests/conftest.py::_settings_environment`**
+  alongside `DATABASE_URL`/`REDIS_URL`/`ENVIRONMENT`/`LOG_LEVEL`: the root `.env`
+  (which `Settings` falls back to, and which compose passes to `app-cli` via
+  `env_file`) may legitimately select `openrouter`, so no test may depend on it.
+  A test that wants the other provider uses `settings_override(SEARCH_PROVIDER=…)`
+  explicitly — the same rule applies to any future provider-selecting setting.
