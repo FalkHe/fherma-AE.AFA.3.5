@@ -11,7 +11,7 @@ plan at all" (full fallback, unscoped); named+filtered dedup; the exact
 scanning) that the pipeline is not wired into the chat responder.
 
 No test reaches OpenRouter or a database: `retrieval_service.search`,
-`catalogue_search_service.find_motorbike_ids`, `product_service.get_by_slug`
+`catalogue_search_service.find_motorbike_ids`, `catalogue_search_service.resolve_name`
 and `query_translation.build_translation_chain` are all monkeypatched.
 """
 
@@ -123,11 +123,17 @@ def catalogue(monkeypatch: pytest.MonkeyPatch) -> Any:
             seen.append(filters)
             return list(matches or [])
 
-        async def get_by_slug(session: Any, slug: str) -> _Motorbike | None:
-            return (by_slug or {}).get(slug)
+        async def resolve_name(session: Any, name: str) -> _Motorbike | None:
+            # Step 3.11 moved the lookup behind `resolve_name`, which owns the
+            # slug derivation *and* the approved-only rule — so the stub models
+            # both and the fixture keeps its slug-keyed table.
+            motorbike = (by_slug or {}).get(product_service.slugify(name))
+            if motorbike is None or motorbike.status is not MotorbikeStatus.APPROVED:
+                return None
+            return motorbike
 
         monkeypatch.setattr(catalogue_search_service, "find_motorbike_ids", find_motorbike_ids)
-        monkeypatch.setattr(product_service, "get_by_slug", get_by_slug)
+        monkeypatch.setattr(catalogue_search_service, "resolve_name", resolve_name)
         return seen
 
     return install

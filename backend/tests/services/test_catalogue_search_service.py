@@ -17,13 +17,15 @@ What matters about this service is entirely in that statement:
 
 import asyncio
 import re
+from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 import pytest
 from sqlalchemy.dialects import postgresql
 
 from app.db.models.motorbike import MotorbikeStatus
-from app.db.models.motorbike_spec import SpecKind
+from app.db.models.motorbike_spec import SPEC_FIELDS, SpecKind
 from app.llm.query_translation import FILTER_FIELD_COLUMNS, SpecFilters
 from app.services import catalogue_search_service
 
@@ -182,3 +184,219 @@ def test_a2_eligible_false_is_a_clause_too() -> None:
     _find(session, SpecFilters(a2_eligible=False))
 
     assert "motorbike_specs.a2_eligible IS false" in _sql(session)
+
+
+# --- step 3.11: shared name resolution and the comparison projection ----------
+#
+# Same convention as above: no database, the **compiled** statement is what is
+# asserted. `resolve_name` issues up to two statements (the slug lookup through
+# `product_service`, then the substring fallback) and `get_verified_specs` one
+# outer join, so these tests use a session that replays a *queue* of results.
+
+
+@dataclass(frozen=True, slots=True)
+class _Motorbike:
+    """The three attributes the resolver and the projection read."""
+
+    id: str
+    name: str
+    status: MotorbikeStatus
+
+
+class _ScriptedScalars:
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[Any]:
+        return self._rows
+
+    def first(self) -> Any | None:
+        return self._rows[0] if self._rows else None
+
+
+class _ScriptedResult:
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def scalar_one_or_none(self) -> Any | None:
+        assert len(self._rows) <= 1
+        return self._rows[0] if self._rows else None
+
+    def scalars(self) -> _ScriptedScalars:
+        return _ScriptedScalars(self._rows)
+
+    def mappings(self) -> _ScriptedScalars:
+        return _ScriptedScalars(self._rows)
+
+
+class ScriptedSession:
+    """Records statements and replays one scripted result set per `execute`."""
+
+    def __init__(self, *results: list[Any]) -> None:
+        self.results = list(results)
+        self.statements: list[Any] = []
+
+    async def execute(self, statement: Any) -> _ScriptedResult:
+        self.statements.append(statement)
+        return _ScriptedResult(self.results.pop(0) if self.results else [])
+
+
+def _sql_at(session: ScriptedSession, index: int) -> str:
+    """Return one recorded statement's compiled SQL, parameters reduced to `?`."""
+    return _PARAMETER.sub("?", str(session.statements[index].compile(dialect=postgresql.dialect())))
+
+
+def _params_at(session: ScriptedSession, index: int) -> dict[str, Any]:
+    return dict(session.statements[index].compile(dialect=postgresql.dialect()).params)
+
+
+def _resolve(session: ScriptedSession, name: str) -> Any | None:
+    """Drive the async resolver from a synchronous test."""
+    return asyncio.run(catalogue_search_service.resolve_name(session, name))
+
+
+def _verified(session: ScriptedSession, motorbike_ids: list[str]) -> list[Any]:
+    """Drive the async projection from a synchronous test."""
+    return asyncio.run(catalogue_search_service.get_verified_specs(session, motorbike_ids))
+
+
+def test_an_exact_slug_match_wins_before_any_substring_search() -> None:
+    """Resolution order: the slug is the identity, the substring is a guess."""
+    approved = _Motorbike(BIKE_ID, "Honda CB500F", MotorbikeStatus.APPROVED)
+    session = ScriptedSession(
+        [approved], [_Motorbike(OTHER_BIKE_ID, "x", MotorbikeStatus.APPROVED)]
+    )
+
+    assert _resolve(session, "  Honda   CB500F ") is approved
+    # One statement: the fallback was never issued.
+    assert len(session.statements) == 1
+    assert _params_at(session, 0)["slug_1"] == "honda-cb500f"
+
+
+def test_a_name_the_slug_misses_falls_through_to_an_approved_substring_match() -> None:
+    """ "CB500F" is not a slug, so step two has to find the entry that contains it."""
+    approved = _Motorbike(BIKE_ID, "Honda CB500F", MotorbikeStatus.APPROVED)
+    session = ScriptedSession([], [approved])
+
+    assert _resolve(session, "CB500F") is approved
+    sql = _sql_at(session, 1)
+    params = _params_at(session, 1)
+    assert "motorbikes.name ILIKE ?" in sql
+    assert params["name_1"] == "%CB500F%"
+    # Approved only, shortest name first, one answer.
+    assert "motorbikes.status = ?" in sql
+    assert params["status_1"] is MotorbikeStatus.APPROVED
+    assert "ORDER BY length(motorbikes.name), motorbikes.name, motorbikes.id" in sql
+    assert "LIMIT ?" in sql
+
+
+def test_a_slug_hit_that_is_not_approved_is_not_an_answer() -> None:
+    """An unreviewed entry is not showable, so resolution continues and then fails."""
+    session = ScriptedSession([_Motorbike(BIKE_ID, "Honda CB500F", MotorbikeStatus.BACKLOG)], [])
+
+    assert _resolve(session, "Honda CB500F") is None
+    # It did try the substring search before giving up.
+    assert len(session.statements) == 2
+
+
+def test_an_unknown_name_resolves_to_none_instead_of_raising() -> None:
+    """The pinned contract: tools turn `None` into `{"unknownBike": …}`."""
+    session = ScriptedSession([], [])
+
+    assert _resolve(session, "Bikeley 999") is None
+
+
+def test_a_blank_name_is_answered_without_a_single_statement() -> None:
+    """Nothing to look up, nothing to ask the database."""
+    session = ScriptedSession()
+
+    assert _resolve(session, "   ") is None
+    assert session.statements == []
+
+
+def test_like_wildcards_in_a_name_are_escaped_not_honoured() -> None:
+    """A `%` a customer typed must not widen the match to the whole catalogue."""
+    session = ScriptedSession([], [])
+
+    _resolve(session, "100% naked_bike")
+
+    assert _params_at(session, 1)["name_1"] == "%100\\% naked\\_bike%"
+    assert "ESCAPE '\\\\'" in _sql_at(session, 1)
+
+
+def test_the_comparable_columns_are_exactly_the_frozen_set_minus_the_long_tail() -> None:
+    """Drift guard: a new specification column forces a decision here.
+
+    Same shape as 3.8's guard on the filterable set — a frozen column that is
+    neither comparable nor deliberately excluded would silently never appear in a
+    comparison table.
+    """
+    comparable = catalogue_search_service.COMPARISON_SPEC_FIELDS
+    excluded = catalogue_search_service.UNCOMPARED_SPEC_FIELDS
+
+    assert set(comparable) | set(excluded) == set(SPEC_FIELDS)
+    assert not set(comparable) & set(excluded)
+    # Table order follows the frozen column order, so the table is stable.
+    assert list(comparable) == [field for field in SPEC_FIELDS if field not in excluded]
+
+
+def test_the_comparison_projection_is_one_outer_join_over_approved_entries() -> None:
+    """The `verified` condition belongs in the `ON` clause, not the `WHERE`.
+
+    In the `WHERE` it would drop an approved entry whose specification was never
+    verified — exactly the column a comparison must still be able to show, all
+    values `NULL`.
+    """
+    session = ScriptedSession([])
+
+    _verified(session, [BIKE_ID, OTHER_BIKE_ID])
+    sql = _sql_at(session, 0)
+    params = _params_at(session, 0)
+
+    assert "LEFT OUTER JOIN motorbike_specs ON motorbike_specs.motorbike_id = motorbikes.id" in sql
+    assert "AND motorbike_specs.kind = ?" in sql
+    assert params["kind_1"] is SpecKind.VERIFIED
+    assert "motorbikes.status = ?" in sql
+    assert params["status_1"] is MotorbikeStatus.APPROVED
+    assert "motorbikes.id IN (__[POSTCOMPILE_id_1])" in sql
+    # Every comparable column is projected, and nothing else from the spec row.
+    for field in catalogue_search_service.COMPARISON_SPEC_FIELDS:
+        assert f"motorbike_specs.{field}" in sql
+    for field in catalogue_search_service.UNCOMPARED_SPEC_FIELDS:
+        assert f"motorbike_specs.{field}" not in sql
+
+
+def test_the_comparison_projection_keeps_the_requested_order_and_plain_values() -> None:
+    """Alignment is the caller's order; `Decimal` is unwrapped for JSON.
+
+    The database answers in its own order and knows nothing about an unknown id;
+    both are the service's problem, and a missing verified row stays `None`.
+    """
+    rows = [
+        {"id": OTHER_BIKE_ID, "name": "Suzuki GSR600"}
+        | dict.fromkeys(catalogue_search_service.COMPARISON_SPEC_FIELDS),
+        {"id": BIKE_ID, "name": "Honda CB500F"}
+        | dict.fromkeys(catalogue_search_service.COMPARISON_SPEC_FIELDS)
+        | {"power_kw": Decimal("35.0"), "seat_height_mm": 785, "category": "naked"},
+    ]
+    session = ScriptedSession(rows)
+
+    entries = _verified(session, [BIKE_ID, OTHER_BIKE_ID, "01J0BIKE00000000000000000Z"])
+
+    assert [entry.motorbike_id for entry in entries] == [BIKE_ID, OTHER_BIKE_ID]
+    assert entries[0].name == "Honda CB500F"
+    assert entries[0].values["power_kw"] == 35.0
+    assert isinstance(entries[0].values["power_kw"], float)
+    assert entries[0].values["seat_height_mm"] == 785
+    # Every comparable field is present, unknown ones explicitly `None`.
+    assert set(entries[0].values) == set(catalogue_search_service.COMPARISON_SPEC_FIELDS)
+    assert entries[0].values["msrp_eur"] is None
+    assert all(value is None for value in entries[1].values.values())
+
+
+def test_no_ids_means_no_round_trip() -> None:
+    """An empty comparison is answered without asking the database."""
+    session = ScriptedSession()
+
+    assert _verified(session, []) == []
+    assert session.statements == []

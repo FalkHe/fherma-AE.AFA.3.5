@@ -773,3 +773,84 @@ depend on. 1–3 bullets per step, no prose.
   Note for anyone probing the CLI: a `timeout`-killed `docker compose exec` leaves
   the process **alive inside app-web** holding an idle-in-transaction session —
   kill them (`/proc` scan) or the pool fills up.
+
+### Step 3.11 (domain tools I: convention, catalogue search, spec comparison)
+
+- **The tool convention (3.12–3.14 follow it verbatim), all in
+  `app/llm/agents/tools/__init__.py`:** a tool is a `ToolSpec(name, description,
+  args_schema, run)` registered in `tool_specs()` (in-function imports break the
+  package cycle); `run(ctx, args) -> BaseModel` calls services only, and
+  `execute(spec, ctx, arguments)` is the **single execution path** (agent loop and
+  `app tools run` both go through it): it validates with the args schema, runs,
+  dumps `by_alias=True` and records the pinned `tool_calls[]` entry — successes
+  *and* failures (`record_failure` then **re-raise**, so 3.13 still tells the model
+  what broke). A `ValidationError` is deliberately *not* recorded (nothing
+  executed). Entry ids are ULIDs, `status` strings are `"succeeded"`/`"failed"`,
+  `result` is `{}` on failure so the frozen read-side `ToolCall` still validates.
+  `ToolContext(session, chat=None, collector=ToolCallCollector())`; the LangChain
+  tool's coroutine returns the result **as a JSON string** (the ToolMessage
+  content). **Library trap:** given a Pydantic `args_schema`, LangChain rebuilds a
+  subset model and loses aliases + any `model_json_schema` override, so
+  `build_advisor_tools` passes `args_schema.model_json_schema()` (a dict) — that is
+  the only way the model actually sees camelCase arguments; validation stays with
+  the Pydantic model in `execute`.
+- **`catalogue_search_service` gained the two shared reads** (no SQL in tools):
+  `resolve_name(session, name) -> Motorbike | None` — exact slug (via
+  `product_service.get_by_slug`) then `name ILIKE '%…%'` (LIKE wildcards escaped,
+  shortest name first, `LIMIT 1`), approved only, never raises; substring instead
+  of trigram because `pg_trgm` is not installed and only 3.1 may migrate. And
+  `get_verified_specs(session, ids) -> list[VerifiedSpecs]` — one `LEFT OUTER JOIN`
+  with `kind='verified'` **in the ON clause** (an approved bike without a verified
+  revision still yields an all-`None` column), approved-only in the `WHERE`,
+  re-ordered in Python to the caller's id order, `Decimal` unwrapped to `float`.
+  `COMPARISON_SPEC_FIELDS` (13 fields, frozen order) + `UNCOMPARED_SPEC_FIELDS`
+  (`extra`, `source_hints`, `extracted_at`) == `SPEC_FIELDS`, drift-guarded — and
+  identical to 3.10's independently landed `SPEC_FIELD_KEYS`. Row keys are
+  `to_camel(field)`; the tool does that mapping, the service stays snake_case.
+  `spec_comparison` resolves 2–4 references through
+  `tools.resolve_references(ctx, motorbike_ids=…, names=…)` (ids before names,
+  deduped) and returns `{"unknownBike": <first unresolved reference, verbatim>}`
+  for an unresolvable id *or* name — an unapproved id counts as unresolvable.
+- **Two bundled follow-ups landed here:** `query_translation.TRANSLATION_TEMPERATURE
+  = 0.0` is passed through `with_structured_output(..., temperature=…)` (it binds
+  extra kwargs next to the response format — no config key, `translate_query`
+  unchanged); and `rag_pipeline_service._resolve_names` now delegates to
+  `catalogue_search_service.resolve_name`, so **the stubbing seam in the two
+  `test_rag_pipeline_service*` files moved** from `product_service.get_by_slug` to
+  `catalogue_search_service.resolve_name` (fixture bodies only, every test
+  unchanged — the stub models the approved-only rule the resolver now owns). CLI:
+  `app tools run <tool> --args '<json>'` (registered in `cli/main.py`, no test file
+  — the 2.19 DB-touching-CLI precedent; it prints the aligned table for
+  `spec_comparison`, then the JSON payload for every tool).
+
+### Step 3.10 (tool renderers, sources & recommendation cards, UI-only)
+
+- **Component contract:** `ToolResultBlock` owns the frame *and* the dispatch; each
+  styled renderer takes an already-**parsed**, typed `result` prop and never sees
+  the open object. The pinned result types + their shape checks live in the new
+  non-component module `components/toolResults.ts` (a guard exported from a
+  component file would trip `react-refresh/only-export-components`), spec-field
+  display in `components/specFields.ts` (`SPEC_FIELD_KEYS` = the 13 frozen
+  camelCase names, `specFieldLabel/specFieldUnit/formatSpecValue`).
+  `CostEstimateChip` is a second component export of
+  `ToolResultCostEstimator.tsx`, rendered into the frame's `chip` slot;
+  `MessageBubble` owns the part order and the `recommendations.heading` + Stack
+  wrapper, `MessageSources` owns its own Divider and returns `null` when empty.
+- **`src/test/chatFixtures.ts` is the frontend's contract test for 3.13's
+  persisted output** — the ui-spec §12 kitchen-sink message with every pinned key
+  (both subtle rows included, deliberately, so one fixture proves the whole part
+  set). Consequences 3.13 must know: a result missing a key a renderer *reads*
+  drops to the generic table, so a `failed` call with `result: {}` renders as an
+  empty labelled block (`toolCalls[].error` is **not** rendered — it is not in
+  ui-spec §8.1's data needs); `"+ n more"` counts the returned `results` list, not
+  `totalCount`; the licence block renders `rules` only (no bike name), so
+  bike context has to live in the server-composed `label`/`evidence` strings.
+- **Two pins for later UI steps:** the assistant `Paper` now carries
+  `maxWidth: "100%"` — without it a wide comparison table's min-content width
+  pushes the whole bubble past a phone viewport instead of scrolling inside it
+  (verified at 390 px). i18n: `consultations.specFields.*` covers all 13 frozen
+  fields, `specUnits` gained `cc/nm/l/kmh/eur`, booleans reuse `common.yes/no`,
+  and backend enum values (`category`, `priceBand`) render **verbatim** per the
+  tool-value i18n exemption. Test convention: MUI `Collapse` hides its children
+  from the accessibility tree, so a collapsed toggle is asserted with
+  `queryByRole(...)` → null plus `getByLabelText(...).not.toBeVisible()`.

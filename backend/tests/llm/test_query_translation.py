@@ -370,6 +370,20 @@ def test_the_chain_constrains_the_answer_to_the_json_schema() -> None:
     assert "$ref" not in filters_schema
 
 
+@pytest.mark.usefixtures("configured")
+def test_the_chain_pins_the_translation_temperature() -> None:
+    """A sampled translation would invent filters; the temperature reaches the model.
+
+    `with_structured_output` binds its extra keyword arguments alongside the
+    response format, so the constant lands in the same `kwargs` the schema does —
+    which is what the gateway receives.
+    """
+    chain = query_translation.build_translation_chain()
+
+    assert chain.steps[0].kwargs["temperature"] == query_translation.TRANSLATION_TEMPERATURE
+    assert query_translation.TRANSLATION_TEMPERATURE == 0.0
+
+
 def test_the_json_schema_is_derived_from_the_models() -> None:
     """What LangChain sends comes from the schemas, so it cannot drift."""
     schema = convert_to_json_schema(TranslatedQuery)

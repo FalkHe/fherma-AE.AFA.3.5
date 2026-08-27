@@ -21,7 +21,8 @@ This module is the translation pass that splits it, and it holds nothing else:
 * `render_translation_prompt` / `build_translation_chain` / `translate_query` —
   the prompt assembly and the chain: the 2.16 factory plus
   `with_structured_output(..., method="json_schema")`, exactly as
-  `extraction.py`. The provider concession lives on the schemas themselves (see
+  `extraction.py`, at the pinned `TRANSLATION_TEMPERATURE`. The provider
+  concession lives on the schemas themselves (see
   `TranslatedQuery.model_json_schema`).
 
 The model is `get_chat_model()` (i.e. `CHAT_MODEL`): translation is a utility
@@ -66,6 +67,12 @@ MAX_QUERY_CHARS = 200
 # a name the catalogue could hold.
 MAX_TARGET_NAMES = 5
 MAX_NAME_CHARS = MOTORBIKE_NAME_LENGTH
+
+# Translation is a deterministic extraction task, not a creative one: the same
+# utterance must produce the same retrieval plan, because a sampled filter is an
+# invented claim about the customer. A module constant rather than configuration —
+# there is no environment in which a warmer translation is wanted.
+TRANSLATION_TEMPERATURE = 0.0
 
 # Which frozen specification columns a filter set can constrain, and which it
 # deliberately ignores. Together they are exactly `SPEC_FIELDS` — the drift
@@ -375,10 +382,19 @@ def build_translation_chain(
 ) -> Runnable[LanguageModelInput, TranslatedQuery]:
     """Return the translation chain: OpenRouter chat model + JSON-schema output.
 
+    `temperature` rides along with the response format: `with_structured_output`
+    binds its extra keyword arguments to the model, so the pinned
+    `TRANSLATION_TEMPERATURE` reaches the request without a second wrapper and
+    without touching the 2.17 structured-output mechanics.
+
     Raises:
         MissingApiKeyError: `OPENROUTER_API_KEY` is not configured.
     """
-    chain = get_chat_model(model).with_structured_output(TranslatedQuery, method="json_schema")
+    chain = get_chat_model(model).with_structured_output(
+        TranslatedQuery,
+        method="json_schema",
+        temperature=TRANSLATION_TEMPERATURE,
+    )
     return cast("Runnable[LanguageModelInput, TranslatedQuery]", chain)
 
 

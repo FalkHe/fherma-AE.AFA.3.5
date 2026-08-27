@@ -42,10 +42,9 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.db.models.motorbike import MotorbikeStatus
 from app.llm import query_translation
 from app.llm.query_translation import ActivePreference, SpecFilters, TranslatedQuery
-from app.services import catalogue_search_service, product_service, retrieval_service
+from app.services import catalogue_search_service, retrieval_service
 from app.services.retrieval_service import RetrievedChunk
 
 logger = logging.getLogger(__name__)
@@ -236,23 +235,21 @@ async def _candidate_ids(session: AsyncSession, plan: TranslatedQuery) -> list[s
 async def _resolve_names(session: AsyncSession, names: Sequence[str]) -> list[str]:
     """Resolve model names the conversation mentioned to approved catalogue ids.
 
-    Slug match against approved entries only: prose about a `backlog` or
-    `ingesting` model is either absent or unreviewed, and `retrieval_service`
-    would filter it out anyway. A name that resolves to nothing is skipped, never
-    an error — the customer may well be naming a bike this catalogue has never
-    heard of, and step 3.14's `flag_unknown_bike` is where that becomes visible.
+    The resolution itself is `catalogue_search_service.resolve_name` (step 3.11's
+    shared resolver: exact slug, then a substring match, approved entries only) —
+    this helper only turns its answers into a deduplicated id list. A name that
+    resolves to nothing is skipped, never an error: the customer may well be
+    naming a bike this catalogue has never heard of, and step 3.14's
+    `flag_unknown_bike` is where that becomes visible.
 
-    Deliberately a private helper for now: step 3.11 introduces the shared
-    `catalogue_search_service.resolve_name` (slug, then ILIKE/trigram) that the
-    tools need, and this function is its first replacement site.
+    Approved-only is the resolver's rule, not a second check here: prose about a
+    `backlog` or `ingesting` model is either absent or unreviewed, and
+    `retrieval_service` would filter it out anyway.
     """
     resolved: list[str] = []
     for name in names:
-        slug = product_service.slugify(name)
-        if not slug:
-            continue
-        motorbike = await product_service.get_by_slug(session, slug)
-        if motorbike is None or motorbike.status is not MotorbikeStatus.APPROVED:
+        motorbike = await catalogue_search_service.resolve_name(session, name)
+        if motorbike is None:
             logger.info("Named bike %r did not resolve to an approved catalogue entry.", name)
             continue
         if motorbike.id not in resolved:
