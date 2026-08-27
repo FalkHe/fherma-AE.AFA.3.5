@@ -9,9 +9,9 @@ opening a real database connection or event loop of its own — everything here
 is plain `async def` called from the test's own `asyncio.run()`.
 
 Supported: `select`/`delete`/`update` against a single mapped entity, `where`
-clauses built from `==`/`!=`/`IN` comparisons of a column against a literal
-combined with `AND`, `order_by` over the same kind of expressions, `limit` /
-`offset`, `select(func.count())` over one table, and
+clauses built from `==`/`!=`/`IN`/`IS` comparisons of a column against a literal
+(or `NULL`) combined with `AND`, `order_by` over the same kind of expressions,
+`limit` / `offset`, `select(func.count())` over one table, and
 `select(func.pg_notify(channel, payload))` (recorded in `.notifications`, so the
 "commit first, then notify" ordering is observable). Anything else raises
 `NotImplementedError` loudly rather than silently matching nothing, so a future
@@ -31,9 +31,15 @@ from typing import Any
 
 import pytest
 from sqlalchemy import BinaryExpression, DateTime, Delete, Select, Update
-from sqlalchemy.sql.elements import BindParameter, BooleanClauseList, ColumnClause, UnaryExpression
+from sqlalchemy.sql.elements import (
+    BindParameter,
+    BooleanClauseList,
+    ColumnClause,
+    Null,
+    UnaryExpression,
+)
 from sqlalchemy.sql.functions import Function
-from sqlalchemy.sql.operators import and_, eq, in_op, ne
+from sqlalchemy.sql.operators import and_, desc_op, eq, in_op, is_, is_not, ne
 
 from app.db.models.base import Base, new_ulid
 from app.db.models.session import Session
@@ -43,6 +49,10 @@ _COMPARISONS = {
     eq: operator.eq,
     ne: operator.ne,
     in_op: lambda left, right: left in right,
+    # `column.is_(None)` / `.is_not(None)` — the soft-delete and supersession
+    # filters of `chat_service`.
+    is_: operator.is_,
+    is_not: operator.is_not,
 }
 
 
@@ -121,6 +131,9 @@ class FakeAsyncSession:
 
     async def commit(self) -> None:
         self.commit_count += 1
+
+    async def flush(self) -> None:
+        """No-op: `add` already inserted the row and assigned its id."""
 
     async def refresh(self, obj: Any) -> None:
         """No-op: the store hands out live objects, nothing ever expires."""
@@ -206,7 +219,9 @@ class FakeAsyncSession:
 
     @classmethod
     def _sorted(cls, rows: list[Any], clause: object) -> list[Any]:
-        descending = isinstance(clause, UnaryExpression) and clause.modifier is not None
+        # `.desc()` is the only descending modifier; `.asc()` and a bare column
+        # both sort ascending.
+        descending = isinstance(clause, UnaryExpression) and clause.modifier is desc_op
         key = clause.element if isinstance(clause, UnaryExpression) else clause
         return sorted(rows, key=lambda row: cls._value(key, row), reverse=descending)
 
@@ -215,6 +230,9 @@ class FakeAsyncSession:
         """Evaluate one SQL expression against a stored row, in Python."""
         if isinstance(clause, BindParameter):
             return clause.value
+        if isinstance(clause, Null):
+            # The right-hand side of `column.is_(None)`.
+            return None
         if isinstance(clause, BooleanClauseList):
             if clause.operator is not and_:
                 raise NotImplementedError(f"FakeAsyncSession: unsupported junction {clause!r}")

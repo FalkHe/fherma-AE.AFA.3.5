@@ -5,6 +5,13 @@ Importing this package must register every model on `Base.metadata`; Alembic's
 """
 
 from app.db.models.base import Base, ULIDPrimaryKeyMixin, new_ulid
+from app.db.models.chat import (
+    Chat,
+    ChatMessage,
+    ChatMessageRole,
+    ChatPreference,
+    PreferenceFirmness,
+)
 from app.db.models.chunk import Chunk
 from app.db.models.manufacturer import Manufacturer
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
@@ -17,6 +24,10 @@ from app.db.models.user import User, UserRole
 
 __all__ = [
     "Base",
+    "Chat",
+    "ChatMessage",
+    "ChatMessageRole",
+    "ChatPreference",
     "Chunk",
     "ImageStatus",
     "Manufacturer",
@@ -26,6 +37,7 @@ __all__ = [
     "MotorbikeStatus",
     "Operation",
     "OperationStatus",
+    "PreferenceFirmness",
     "Session",
     "SourceDocument",
     "SourceType",
