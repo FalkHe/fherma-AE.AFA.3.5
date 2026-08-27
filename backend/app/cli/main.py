@@ -12,6 +12,7 @@ from app.cli import (
     llm,
     openapi,
     operations,
+    retrieval,
     users,
 )
 
@@ -30,6 +31,7 @@ app.add_typer(jobs.app, name="jobs")
 app.add_typer(llm.app, name="llm")
 app.add_typer(openapi.app, name="openapi")
 app.add_typer(operations.app, name="operations")
+app.add_typer(retrieval.app, name="retrieval")
 app.add_typer(users.app, name="users")
 
 

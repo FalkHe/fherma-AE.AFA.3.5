@@ -574,3 +574,45 @@ depend on. 1–3 bullets per step, no prose.
   link shows the page spinner for ~7 s (TanStack default backoff) before the
   not-found gate, exactly as on the admin review screen. `health.*` i18n keys
   were deleted along with `HealthStatus`.
+
+### Step 3.7 (hybrid retrieval service)
+
+- **`retrieval_service.search(session, query_text, *, motorbike_ids=None,
+  limit=DEFAULT_LIMIT) -> list[RetrievedChunk]`** is the only retrieval entry
+  point (3.8/3.9/`retrieve_bike_knowledge` call it, never the SQL): signature
+  exactly as pinned, `DEFAULT_LIMIT = 10` a module constant, `motorbike_ids=[]`
+  and a blank/whitespace query return `[]` **without** a gateway call or a
+  statement, and the service commits nothing. It embeds the query itself via
+  `llm_embeddings.get_embeddings().aembed_query(...)` — so it raises
+  `MissingApiKeyError` (callers report it) and `retrieval_service.
+  StaleEmbeddingsError` (wraps `embedding_service.DimensionMismatchError`, its
+  message keeps the migration text and adds `app embeddings rebuild`).
+  `RetrievedChunk` is a frozen Pydantic model with the pinned provenance set
+  (`chunk_id, motorbike_id, text, score, source_document_id, source_url,
+  source_title, heading_path, page_number, sequence`) and **snake_case** fields —
+  camelCase aliasing for the pinned `sources[]` JSONB shape is 3.13's job.
+- **The SQL is one statement built in `_build_statement` and never re-sorted or
+  re-filtered in Python:** CTEs `lexical` (`ts_rank` over `text_tsv` +
+  `text_tsv @@ plainto_tsquery('english', …)`) and `semantic`
+  (`embedding <=> :vector`), each `row_number()`-ranked by its own ordering and
+  `LIMIT settings.retrieval_candidates_per_leg`, `FULL OUTER JOIN`ed into
+  `fused` with score `coalesce(1.0/(RRF_K+lexical.rank),0)+coalesce(1.0/
+  (RRF_K+semantic.rank),0)` cast to double precision, then joined to `chunks` +
+  `source_documents` and ordered `score DESC, chunks.id`. Both legs carry all
+  four filters (`motorbikes.status='approved'` via a join on `motorbikes`,
+  `embedding IS NOT NULL`, `embedding_model = settings.embedding_model`,
+  optional `motorbike_id IN`) — a later filter must be added to **both** legs,
+  not to the outer select. New config: `RRF_K=60`,
+  `RETRIEVAL_CANDIDATES_PER_LEG=50` (unchanged after the tuning pass; with ~49
+  embedded chunks the per-leg cap is not yet binding).
+- **Test convention for CTE-shaped SQL:** `tests/services/conftest.py`'s
+  `FakeAsyncSession` cannot interpret this statement, so
+  `tests/services/test_retrieval_service.py` defines a local `RecordingSession`
+  (records statements, replays scripted `result.mappings()` rows) and asserts
+  the **compiled** SQL (`postgresql.dialect()`, no `literal_binds` — the
+  `REGCONFIG` `'english'` argument has no literal renderer; parameters are
+  normalised to `?` and checked via `compiled.params`). Reuse that stub for the
+  retrieval tool tests instead of extending the fake session. No CLI test file
+  (`app retrieval search` touches the DB — the 2.19 precedent); live proof:
+  top hit for "comfortable touring bike" scored `0.03279 = 2/(60+1)`, i.e. rank
+  1 in both legs, and `--bike <ulid>` returned that model's chunks only.

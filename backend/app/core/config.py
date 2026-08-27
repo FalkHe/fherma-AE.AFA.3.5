@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     chunk_size_chars: int = 3_200
     chunk_overlap_chars: int = 400
 
+    # Hybrid retrieval: the Reciprocal Rank Fusion constant (larger flattens the
+    # advantage of the top ranks) and how many candidates each of the two legs
+    # contributes before fusion.
+    rrf_k: int = 60
+    retrieval_candidates_per_leg: int = 50
+
 
 @lru_cache
 def get_settings() -> Settings:
