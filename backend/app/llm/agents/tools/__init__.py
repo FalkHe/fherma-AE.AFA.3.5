@@ -250,16 +250,19 @@ def tool_specs() -> tuple[ToolSpec, ...]:
 
     The imports are in-function on purpose (the enqueue-seam precedent): the tool
     modules import this convention module, so importing them at the top would be
-    a cycle. Step 3.14 extends this tuple; the registry order is the order the
-    model sees the tools in — the reading order of a consultation: find
-    candidates, compare them, check them against the customer, cost them, read
-    what has been written about them, and finally put the cards on the table.
+    a cycle. The tuple is complete at eight (the pinned tool set); the registry
+    order is the order the model sees the tools in — the reading order of a
+    consultation: find candidates, compare them, check them against the customer,
+    cost them, read what has been written about them, note what was learned and
+    what the catalogue is missing, and finally put the cards on the table.
     """
     from app.llm.agents.tools import (
         catalogue_search,
         cost_estimator,
+        flag_unknown_bike,
         licence_fit_check,
         present_recommendations,
+        record_preference,
         retrieve_bike_knowledge,
         spec_comparison,
     )
@@ -270,6 +273,8 @@ def tool_specs() -> tuple[ToolSpec, ...]:
         licence_fit_check.TOOL,
         cost_estimator.TOOL,
         retrieve_bike_knowledge.TOOL,
+        record_preference.TOOL,
+        flag_unknown_bike.TOOL,
         present_recommendations.TOOL,
     )
 

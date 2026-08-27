@@ -945,3 +945,39 @@ depend on. 1–3 bullets per step, no prose.
   function schema (verified against the installed version, live-proven with
   `present_recommendations`' list of objects), so 3.8's nested-`additionalProperties`
   finding stays a *structured-output* rule only.
+
+### Step 3.14 (preference capture & unknown-bike flagging)
+
+- **Registry complete at 8**, order `… retrieve_bike_knowledge, record_preference,
+  flag_unknown_bike, present_recommendations`. `record_preference` **normalizes the
+  attribute** (lower-case, runs of whitespace/`_`/`-` collapsed to single spaces,
+  truncated to `ATTRIBUTE_LENGTH`) because supersession matches on the exact string —
+  `"Budget"`, `"use_case"` and `"Use Case"` would otherwise stay active side by side;
+  the *value* is stored as the model phrased it (truncated to `VALUE_LENGTH`) because
+  the prompt block shows it verbatim. The ack returns the **normalized** attribute.
+  Args carry `firmness: PreferenceFirmness` (the DB StrEnum, no second vocabulary);
+  result fields are plain `str` mapped with `.value`, per 3.12's convention. No chat in
+  the context (the `app tools run` harness) raises
+  `record_preference.MissingChatError` → recorded `failed` entry, and in the CLI a Rich
+  traceback whose last line is the message (deliberately not wired into `_fail`:
+  `cli/tools.py` already documents that a chat-scoped write tool "has to say so").
+- **`flag_unknown_bike` dedup identity is the catalogue's slug and nothing else**:
+  `product_service.create_backlog` + `except DuplicateModelError` → `already_known`,
+  which covers every status (`get_by_slug` is status-agnostic). Documented boundary,
+  test-pinned: a name whose slug differs ("Honda CB 500 F" vs. approved "Honda CB500F",
+  or a bare "GSR600" vs. "Suzuki GSR600") **does** create a second backlog row — no
+  fuzzier identity was invented (no `pg_trgm`, and `resolve_name`'s ILIKE is not
+  reachable from the fake session), so the worst case is a redundant backlog row an
+  admin discards. A name that slugifies to nothing (`"???"`) is a `ValidationError`.
+- **Prompt (`advisor_system.md`) now owns the capture policy**: a "Record what you
+  learn, while you learn it" block in *The interview* (attribute vocabulary, firmness
+  mapping, "a changed mind is a new call with the same attribute"), both tools in *Your
+  tools*, `record_preference` as decision **1** of the continue-the-interview list
+  (others renumbered 2–4), and the `unknownBike` rule now ends with "offer to note the
+  model … if the customer would like that, call `flag_unknown_bike`" — flagging is
+  **consent-gated**, so a live proof needs the customer's yes. Live: 3 captures in one
+  turn, `budget` superseded on correction (1 active + 1 superseded row), the next turn's
+  system prompt rendering exactly the active ones, `queued` then `already_known` for the
+  same bike, one backlog row. Observed model quirk: it sometimes re-records an unchanged
+  preference, which is a third row with one active — by design (`tool_calls` records
+  what happened), not a bug.

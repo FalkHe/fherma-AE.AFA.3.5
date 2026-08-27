@@ -34,8 +34,10 @@ from app.llm.agents import tools
 from app.llm.agents.tools import (
     catalogue_search,
     cost_estimator,
+    flag_unknown_bike,
     licence_fit_check,
     present_recommendations,
+    record_preference,
     retrieve_bike_knowledge,
     spec_comparison,
 )
@@ -133,11 +135,12 @@ def test_the_registry_holds_this_step_s_tools_and_rejects_an_unknown_name() -> N
         licence_fit_check.NAME,
         cost_estimator.NAME,
         retrieve_bike_knowledge.NAME,
+        record_preference.NAME,
+        flag_unknown_bike.NAME,
         present_recommendations.NAME,
     ]
-    # Step 3.14's two write tools are not registered yet.
     with pytest.raises(KeyError):
-        tools.get_tool_spec("record_preference")
+        tools.get_tool_spec("book_a_test_ride")
 
 
 def test_every_registered_tool_has_a_described_camel_aliased_args_schema() -> None:

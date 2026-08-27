@@ -30,7 +30,7 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolM
 from app.api.schemas.chat_messages import Recommendation, ToolCall
 from app.core.config import get_settings
 from app.db.models.chat import Chat, PreferenceFirmness
-from app.db.models.motorbike import MotorbikeStatus
+from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus
 from app.llm.agents import advisor, tools
 from app.llm.agents.tools import present_recommendations, retrieve_bike_knowledge
@@ -325,6 +325,91 @@ def test_the_context_injects_the_active_preferences_and_not_the_superseded_ones(
     assert "licence" in system
     # The superseded answer is gone, not merely outranked.
     assert "5000 EUR" not in system
+
+
+def test_a_preference_captured_by_the_tool_reaches_the_next_turns_prompt(
+    fake_session: FakeAsyncSession, model: ScriptedModel, catalogue: Any
+) -> None:
+    """Step 3.14's end-to-end proof: capture in one turn, memory in the next.
+
+    Three turns, the whole loop each time: the advisor records a budget, the
+    customer corrects it, and the third turn's system prompt carries the
+    correction as a must-have with no trace of the first answer. Nothing but the
+    stored rows connects the turns — which is the point of persistence-as-memory.
+    """
+    chat = _chat(fake_session)
+    asyncio.run(chat_service.append_user_message(fake_session, chat, "Budget roughly 6300 €."))
+    model.answers.extend(
+        [
+            _tool_call(
+                "record_preference",
+                {"attribute": "budget", "value": "roughly 6300 €", "firmness": "soft"},
+            ),
+            AIMessage("Roughly 6300 € it is. Which licence do you hold?"),
+        ]
+    )
+
+    first = _run(fake_session, chat)
+    asyncio.run(
+        chat_service.append_assistant_message(
+            fake_session, chat, first.body, tool_calls=first.tool_calls
+        )
+    )
+    asyncio.run(chat_service.append_user_message(fake_session, chat, "Actually, max 5200 €."))
+    model.answers.extend(
+        [
+            _tool_call(
+                "record_preference",
+                {"attribute": "Budget", "value": "max 5200 €", "firmness": "hard"},
+                call_id="call_2",
+            ),
+            AIMessage("Understood — 5200 € is the ceiling."),
+        ]
+    )
+
+    second = _run(fake_session, chat)
+    # The second turn already saw the first capture (two invocations per turn).
+    assert "roughly 6300 €" in model.invocations[2].messages[0].text
+    asyncio.run(
+        chat_service.append_assistant_message(
+            fake_session, chat, second.body, tool_calls=second.tool_calls
+        )
+    )
+    asyncio.run(chat_service.append_user_message(fake_session, chat, "What do you suggest?"))
+
+    _run(fake_session, chat)
+
+    third_prompt = model.invocations[4].messages[0].text
+    assert "max 5200 €" in third_prompt
+    assert "must-have" in third_prompt
+    # The corrected answer is not merely outranked — it is not in the prompt.
+    assert "roughly 6300 €" not in third_prompt
+    assert [
+        (row.attribute, row.value, row.firmness.value)
+        for row in asyncio.run(chat_service.active_preferences(fake_session, chat.id))
+    ] == [("budget", "max 5200 €", "hard")]
+
+
+def test_the_advisor_flags_an_unknown_bike_once_per_conversation(
+    fake_session: FakeAsyncSession, model: ScriptedModel, catalogue: Any
+) -> None:
+    """The other permitted write, through the loop: two mentions, one backlog row."""
+    model.answers.extend(
+        [
+            _tool_call("flag_unknown_bike", {"name": "Kawasaki Z650 RS"}),
+            _tool_call("flag_unknown_bike", {"name": "Kawasaki Z650 RS"}, call_id="call_2"),
+            AIMessage("I have noted the Z650 RS for our buyers."),
+        ]
+    )
+    chat = _chat(fake_session)
+
+    result = _run(fake_session, chat)
+
+    assert [entry["result"]["status"] for entry in result.tool_calls] == [
+        "queued",
+        "already_known",
+    ]
+    assert [row.slug for row in fake_session.rows(Motorbike)] == ["kawasaki-z650-rs"]
 
 
 def test_the_loop_asks_for_the_configured_advisor_model(
