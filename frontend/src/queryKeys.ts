@@ -47,4 +47,18 @@ export const queryKeys = {
     /** `GET /api/product-images?filter[product]=…`. */
     byProduct: (productId: string) => ["productImages", productId] as const,
   },
+  chats: {
+    /** Invalidation prefix: the consultation list and every chat detail. */
+    all: ["chats"] as const,
+    /** `GET /api/chats` — the signed-in user's consultations, last activity first. */
+    list: () => ["chats", "list"] as const,
+    /** `GET /api/chats/{id}` — carries `activeOperationId`, i.e. the turn state. */
+    detail: (id: string) => ["chats", "detail", id] as const,
+  },
+  chatMessages: {
+    /** Invalidation prefix: every chat's timeline. */
+    all: ["chatMessages"] as const,
+    /** `GET /api/chat-messages?filter[chat]=…`, oldest → newest. */
+    byChat: (chatId: string) => ["chatMessages", chatId] as const,
+  },
 } as const;

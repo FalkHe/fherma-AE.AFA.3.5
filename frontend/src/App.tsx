@@ -1,10 +1,11 @@
-import { Route, Routes } from "react-router";
+import { Navigate, Route, Routes } from "react-router";
 
 import { AdminLayout } from "./components/AdminLayout";
 import { AppLayout } from "./components/AppLayout";
 import { AdminBacklogRoute } from "./routes/admin/AdminBacklogRoute";
 import { AdminModelReviewRoute } from "./routes/admin/AdminModelReviewRoute";
-import { HomeRoute } from "./routes/HomeRoute";
+import { ConsultationChatRoute } from "./routes/ConsultationChatRoute";
+import { ConsultationsRoute } from "./routes/ConsultationsRoute";
 import { LoginRoute } from "./routes/LoginRoute";
 import { RegisterRoute } from "./routes/RegisterRoute";
 import { RequireAdmin } from "./routes/RequireAdmin";
@@ -18,8 +19,11 @@ import { RequireAuth } from "./routes/RequireAuth";
  * the AppBar and theme toggle never disappear; `AppLayout` decides for itself
  * whether to show the nav and account block. The guards are layout routes, so
  * every screen nested under them inherits the loading spinner and the redirect
- * without repeating either. Phase 1 adds the consultation and catalogue
- * branches under `RequireAuth`.
+ * without repeating either.
+ *
+ * `/consultations` is the authenticated home; the index route is a plain
+ * redirect so the list has exactly one canonical URL and the login flow's
+ * `navigate(from ?? "/")` keeps working unchanged.
  */
 export default function App() {
   return (
@@ -28,7 +32,11 @@ export default function App() {
         <Route path="login" element={<LoginRoute />} />
         <Route path="register" element={<RegisterRoute />} />
         <Route element={<RequireAuth />}>
-          <Route index element={<HomeRoute />} />
+          <Route index element={<Navigate to="/consultations" replace />} />
+          <Route path="consultations">
+            <Route index element={<ConsultationsRoute />} />
+            <Route path=":chatId" element={<ConsultationChatRoute />} />
+          </Route>
           <Route element={<RequireAdmin />}>
             <Route path="admin" element={<AdminLayout />}>
               <Route index element={<AdminBacklogRoute />} />

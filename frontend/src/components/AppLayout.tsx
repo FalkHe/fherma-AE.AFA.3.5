@@ -77,8 +77,8 @@ export function AppLayout() {
           </Typography>
           {user !== null && (
             <Box sx={{ display: "flex", gap: 1, mr: 1 }}>
-              <Button color="inherit" component={RouterLink} to="/">
-                {t("nav.home")}
+              <Button color="inherit" component={RouterLink} to="/consultations">
+                {t("nav.consultations")}
               </Button>
               {user.role === "admin" && (
                 <Button color="inherit" component={RouterLink} to="/admin">

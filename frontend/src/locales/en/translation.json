@@ -4,7 +4,7 @@
     "tagline": "Advice from a curated catalogue, not from marketing copy."
   },
   "nav": {
-    "home": "Home",
+    "consultations": "Consultations",
     "admin": "Admin"
   },
   "common": {
@@ -14,6 +14,9 @@
     "yes": "Yes",
     "no": "No",
     "unknown": "Unknown",
+    "live": {
+      "disconnected": "Live updates interrupted — reconnecting…"
+    },
     "errors": {
       "serverError": "Something went wrong. Please try again."
     }
@@ -57,9 +60,6 @@
     "title": "Admin",
     "tabs": {
       "backlog": "Backlog"
-    },
-    "live": {
-      "disconnected": "Live updates interrupted — reconnecting…"
     },
     "status": {
       "backlog": "Backlog",
@@ -211,21 +211,97 @@
       }
     }
   },
+  "consultations": {
+    "list": {
+      "title": "Consultations",
+      "listLabel": "Your consultations",
+      "newConsultation": "Ask the advisor",
+      "untitled": "New consultation",
+      "replying": "Advisor is replying…",
+      "loadError": "Could not load your consultations",
+      "emptyTitle": "Ask the advisor",
+      "emptyBody": "The advisor interviews you about your experience, licence, budget and how you ride — then recommends motorcycles from our verified catalogue.",
+      "createError": "Could not start a consultation. Please try again.",
+      "delete": "Delete consultation",
+      "deleteConfirmTitle": "Delete this consultation?",
+      "deleteConfirmBody": "“{{title}}” and its conversation will be removed from your list.",
+      "deleteConfirm": "Delete"
+    },
+    "chat": {
+      "back": "Consultations",
+      "timelineLabel": "Conversation",
+      "notFoundTitle": "Consultation not found",
+      "notFoundBody": "This consultation does not exist or was removed.",
+      "loadError": "Could not load this consultation",
+      "introTitle": "Tell the advisor about yourself",
+      "introBody": "Start with anything — your riding experience, what you want a bike for, or a model you're curious about. The advisor will guide the conversation from there.",
+      "composerLabel": "Message",
+      "composerPlaceholder": "Tell the advisor…",
+      "send": "Send",
+      "messageTooLong": "This message is too long.",
+      "sending": "Sending…",
+      "seen": "Seen",
+      "sendFailed": "Not sent.",
+      "sendRetry": "Send again",
+      "sendDiscard": "Discard",
+      "typing": "The advisor is typing…",
+      "turnFailed": "The advisor could not finish this reply — please send your message again.",
+      "sourcesToggle": "Sources ({{count}})",
+      "sourcesLabel": "Sources"
+    },
+    "tools": {
+      "catalogueSearch": {
+        "title": "Catalogue search",
+        "noResults": "No matching models.",
+        "more": "+ {{count}} more"
+      },
+      "specComparison": {
+        "title": "Spec comparison",
+        "tableLabel": "Spec comparison",
+        "attribute": "Spec"
+      },
+      "licenceFitCheck": {
+        "title": "Licence & fit check",
+        "verdict": {
+          "pass": "Pass",
+          "fail": "Fail",
+          "unknown": "Unknown"
+        }
+      },
+      "costEstimator": {
+        "title": "Cost estimate",
+        "estimate": "Estimate",
+        "total": "Total",
+        "assumptions": "Assumptions ({{count}})"
+      },
+      "preferenceNoted": "Preference noted — {{attribute}}: {{value}} ({{firmness}})",
+      "firmness": {
+        "hard": "must-have",
+        "soft": "nice-to-have",
+        "exploring": "exploring"
+      },
+      "unknownBikeFlagged": "“{{name}}” isn't in our catalogue yet — noted for research."
+    },
+    "recommendations": {
+      "heading": "Recommended for you"
+    },
+    "specFields": {
+      "category": "Category",
+      "powerKw": "Power",
+      "wetWeightKg": "Wet weight",
+      "seatHeightMm": "Seat height"
+    },
+    "specUnits": {
+      "kw": "kW",
+      "kg": "kg",
+      "mm": "mm"
+    }
+  },
   "themeMode": {
     "menuLabel": "Colour theme",
     "buttonLabel": "Change colour theme",
     "system": "System",
     "light": "Light",
     "dark": "Dark"
-  },
-  "home": {
-    "heading": "Welcome",
-    "body": "The consultation experience is not built yet. This is the application shell."
-  },
-  "health": {
-    "checking": "Checking backend…",
-    "ok": "Backend: OK",
-    "unreachable": "Backend: unreachable",
-    "unreachableHint": "The API did not answer. Check that the backend is running."
   }
 }
