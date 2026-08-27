@@ -14,7 +14,9 @@ and nothing else:
 * `render_extraction_prompt` — the prompt assembly, including the fencing of
   document text as **untrusted data**.
 * `build_extraction_chain` / `extract_spec` — the chain: the 2.16 factory plus
-  `with_structured_output(..., method="json_schema")`, nothing else.
+  `with_structured_output(..., method="json_schema")`, nothing else. The one
+  provider concession lives on the schema itself, not in the chain: see
+  `ExtractedSpec.model_json_schema`.
 
 Which documents go in, in which order, and how much of them, is the caller's
 decision (`app.services.spec_extraction_service`). Writing the result is the
@@ -337,6 +339,28 @@ class ExtractedSpec(BaseModel):
     """
 
     model_config = ConfigDict(extra="ignore")
+
+    @classmethod
+    def model_json_schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Return the schema with every field named in `required`.
+
+        OpenAI and Azure reject a `json_schema` response format whose `required`
+        does not list *every* key in `properties` — even when `strict` is not
+        passed ("'required' is required to be supplied and to be an array
+        including every key in properties"). They expect optionality to be
+        expressed as a `null` union instead, which every field of this schema
+        already is, so listing all of them changes nothing about what the model
+        may answer: a field it cannot fill comes back as `null`.
+
+        What is *not* added is `additionalProperties: false`: the schema has to
+        stay open for `extra` and `source_hints`, and — verified live through
+        OpenRouter against both providers — a non-strict `json_schema` format is
+        accepted without it. This is why the pinned method still carries the
+        frozen field set.
+        """
+        schema = super().model_json_schema(*args, **kwargs)
+        schema["required"] = list(schema["properties"])
+        return schema
 
     category: Annotated[
         ExtractedCategory | None, BeforeValidator(_vocabulary_validator(SPEC_CATEGORIES))

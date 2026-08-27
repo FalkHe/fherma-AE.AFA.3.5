@@ -335,7 +335,12 @@ def test_the_chain_constrains_the_answer_to_the_json_schema() -> None:
 
     response_format = chain.steps[0].kwargs["response_format"]
     assert response_format["type"] == "json_schema"
-    assert set(response_format["json_schema"]["schema"]["properties"]) == set(SPEC_FIELDS)
+    schema = response_format["json_schema"]["schema"]
+    assert set(schema["properties"]) == set(SPEC_FIELDS)
+    # OpenAI/Azure reject a response format whose `required` misses a property,
+    # even without `strict`; optionality is the null union on every field.
+    assert set(schema["required"]) == set(SPEC_FIELDS)
+    assert "additionalProperties" not in schema
 
 
 def test_the_json_schema_is_the_frozen_column_set() -> None:

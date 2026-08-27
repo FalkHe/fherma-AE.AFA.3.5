@@ -413,7 +413,10 @@ to `backlog`.
   `get_chat_model(model: str | None = None)` returning
   `langchain_openrouter.ChatOpenRouter` (official langchain-ai package, pin
   `langchain-openrouter>=0.2.8,<0.3`; supports `.with_structured_output()`
-  — use `method="json_schema"` — and tool calling; auth via
+  — use `method="json_schema"`, and **list every property in the schema's
+  `required`** (see the 2.17 landed decision: OpenAI/Azure reject a
+  `json_schema` response format with an incomplete `required`, even without
+  `strict`; optionality must be a `null` union) — and tool calling; auth via
   `OPENROUTER_API_KEY`; pass `app_url`/`app_title` instead of manual
   `HTTP-Referer`/`X-Title` headers). **Never the OpenAI API directly.** If
   OpenRouter cannot serve a needed capability, stop and report — do not wire
@@ -1096,7 +1099,10 @@ depend on. 1–3 bullets per step, no prose.
   `render_extraction_prompt(name, documents)`, `build_extraction_chain(model=None)`
   (`with_structured_output(…, method="json_schema")`, `strict` deliberately not
   passed — the open `extra`/`source_hints` objects would be illegal in strict
-  mode) and `await extract_spec(name, documents, model=None)`. Every field has a
+  mode; `ExtractedSpec.model_json_schema` is overridden to list **every**
+  property in `required`, which the providers demand even without `strict` —
+  see the live-fix bullet below) and `await extract_spec(name, documents,
+  model=None)`. Every field has a
   `BeforeValidator`: units normalized from the number's *adjacent* unit only
   ("72 kW (98 hp)" is kW; hp 0.7457 vs PS 0.7355), values outside a
   motorcycle-wide plausibility window in `_QUANTITIES` → `None`, vocabulary
@@ -1301,3 +1307,32 @@ depend on. 1–3 bullets per step, no prose.
   now serves `/api/documents` + `/api/product-images` fixtures from its
   `stubFetch` API (component sources unchanged), and `useProductReview.test.ts`
   covers ordering, newest-image, merge-before-PATCH, 422 `loc` and invalidations.
+
+### Live fix: 2.17 spec extraction through OpenRouter (key now set)
+
+- **Root cause of the 400:** OpenAI *and* Azure reject a `json_schema` response
+  format whose `required` does not name every key in `properties` — even when
+  `strict` is not passed (`invalid_json_schema`: "'required' is required to be
+  supplied and to be an array including every key in properties"). **Fix:
+  `ExtractedSpec.model_json_schema()` is overridden to set `required = list
+  (properties)`**; optionality stays expressed as the `null` union Pydantic
+  already emits for `T | None`. The pinned
+  `with_structured_output(ExtractedSpec, method="json_schema")` and the
+  Pydantic-parsed chain output are therefore **unchanged** — no amendment to
+  the method pin was needed, and `method="function_calling"` was *not* adopted.
+- **`additionalProperties: false` is deliberately NOT added** — a non-strict
+  `json_schema` format is accepted without it, so the open-ended
+  `extra`/`source_hints` dicts stay legal. Verified live on both upstream
+  providers by pinning `openrouter_provider={"order": ["openai"|"azure"],
+  "allow_fallbacks": False}`: patched-`required` json_schema succeeded on both
+  (`function_calling` also succeeded on both — the fallback if a future
+  provider demands the closed schema).
+- **Live evidence (`CHAT_MODEL=openai/gpt-4.1-mini`):** `app ingest
+  extract-specs suzuki-gsr600` → 10 fields, `category=naked engine_cc=599
+  cylinders=4 power_kw=71.5 torque_nm=65.0 seat_height_mm=785
+  tank_capacity_l=16.5 top_speed_kmh=250` + 12–14 `extra` entries + per-field
+  `source_hints`; run twice → still exactly one `draft` row (same id, only
+  `extracted_at` moved). Full worker path re-proved on a throwaway "Honda
+  CB500F" (worker recreated): operation `succeeded` at 100 % with only the
+  Tavily warning, draft `471 cc / 35.0 kW / 43.0 Nm / 785 mm / ABS true`, 11/11
+  chunks embedded (1536 dims) — bike, files and operation deleted afterwards.
