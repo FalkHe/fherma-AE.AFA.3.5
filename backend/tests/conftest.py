@@ -6,10 +6,13 @@ FastAPI's dependency overrides, so `app.db.session.get_engine()` is never
 called — which also side-steps the `lru_cache`'d-engine / event-loop pitfall
 described in `docs/qa-checklist.md`.
 
-The same holds for Redis: adding a product auto-starts its ingestion, so the
-`enqueue_ingestion` seam of `product_service` is replaced for **every** test by
-the autouse `recorded_enqueues` fixture. A test that wants to prove the enqueue
-happened simply requests that fixture and reads the recorded ids.
+The same holds for Redis: adding a product auto-starts its ingestion and
+starting a consultation auto-starts the advisor's greeting, so the
+`enqueue_ingestion` seam of `product_service` and the `enqueue_chat_response`
+seam of `chat_service` are replaced for **every** test by the autouse
+`recorded_enqueues` / `recorded_chat_enqueues` fixtures. A test that wants to
+prove an enqueue happened simply requests the fixture and reads the recorded
+ids.
 """
 
 from collections.abc import Callable, Iterator
@@ -21,7 +24,7 @@ from fastapi.testclient import TestClient
 from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.main import create_app
-from app.services import product_service
+from app.services import chat_service, product_service
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -54,6 +57,21 @@ def recorded_enqueues(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
         calls.append((motorbike_id, operation_id))
 
     monkeypatch.setattr(product_service, "enqueue_ingestion", record)
+    return calls
+
+
+@pytest.fixture(autouse=True)
+def recorded_chat_enqueues(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    """Record `chat.respond` enqueues instead of pushing them onto Redis.
+
+    Returns the `(chat_id, operation_id)` pairs, in order.
+    """
+    calls: list[tuple[str, str]] = []
+
+    async def record(chat_id: str, operation_id: str) -> None:
+        calls.append((chat_id, operation_id))
+
+    monkeypatch.setattr(chat_service, "enqueue_chat_response", record)
     return calls
 
 

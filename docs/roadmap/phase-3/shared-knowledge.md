@@ -616,3 +616,85 @@ depend on. 1–3 bullets per step, no prose.
   (`app retrieval search` touches the DB — the 2.19 precedent); live proof:
   top hit for "comfortable touring bike" scored `0.03279 = 2/(60+1)`, i.e. rank
   1 in both legs, and `--bike <ulid>` returned that model's chunks only.
+
+### Step 3.8 (query translation & spec-filter resolution)
+
+- **`app/llm/query_translation.py` is the one definition of the filter surface**
+  (3.9/3.11 import from there, never restate it): `TranslatedQuery`
+  (`search_queries` ≤ `MAX_SEARCH_QUERIES = 3`, deduped/trimmed/≤200 chars each ·
+  `spec_filters` · `target_motorbike_names` ≤ 5, ≤ `motorbikes.name` length) and
+  `SpecFilters` (`categories[]`, `engine_cc_min/max`, `power_kw_min/max`,
+  `wet_weight_kg_max`, `seat_height_mm_max`, `a2_eligible`, `price_bands[]`) plus
+  `values()` (plain values, enums unwrapped) and `is_empty()` (tested against
+  `None`/`[]`, **not** falsiness — `a2_eligible=False` is a constraint).
+  `FILTERABLE_SPEC_FIELDS` + `UNFILTERED_SPEC_FIELDS` = exactly `SPEC_FIELDS` and
+  `FILTER_FIELD_COLUMNS` maps every filter field → its frozen column; the drift
+  guard asserts all three, so a new spec column forces a decision. Units are
+  extraction's: `query_translation` imports `_quantity_validator` /
+  `_vocabulary_validator` / `_normalize_flag` from `app/llm/extraction.py` rather
+  than restating the conversion tables. `ActivePreference(attribute, value,
+  firmness)` is the prompt's preference value object (callers map the ORM rows;
+  this module stays DB-free); the prompt renders history + preferences as
+  optional blocks and fences all of it as untrusted data.
+- **New provider finding on the 2.17 pattern (proven live, 3.8):** a **nested**
+  object in a `json_schema` response format must carry
+  `additionalProperties: false` — without it OpenAI *and* Azure answer 400
+  `invalid_json_schema` ("In context=('properties', 'spec_filters'),
+  'additionalProperties' is required to be supplied and to be false"). The
+  **root** object stays open exactly as 2.17 pinned it. `_require_every_property`
+  therefore walks `$defs`, adds every property to `required` everywhere and
+  closes nested objects only — Pydantic never calls the nested model's
+  `model_json_schema`, and LangChain inlines the `$def` afterwards, carrying
+  both. Any later nested structured-output schema needs the same walk.
+- **`catalogue_search_service.find_motorbike_ids(session, filters)`** is the
+  structured-retrieval entry point (3.11's `catalogue_search` tool reuses it, no
+  refactor): one statement, `motorbikes` ⨝ `motorbike_specs` with
+  `status='approved'` + `kind='verified'` + one clause per stated bound (minima
+  `>=`, maxima `<=`, vocabularies `IN`, `a2_eligible IS true/false`), ordered
+  `motorbikes.name, motorbikes.id`, ids only, nothing committed, no Python-side
+  post-filter. **A bike whose verified spec value is `NULL` never matches a
+  filter on that column** (SQL three-valued logic, deliberate: a filter is a
+  claim, and the project never guesses a spec to keep a bike in the list); an
+  empty `SpecFilters` matches every approved bike **that has a verified spec**
+  (inner join). Tests follow 3.7's convention — a local `RecordingSession` +
+  compiled-SQL assertions, since `FakeAsyncSession` cannot interpret the join.
+
+### Step 3.5 (minimal chat responder job)
+
+- **The seam trio, names 3.13 must keep:**
+  `chat_response_service.generate(session, chat, operation)` (system prompt
+  `advisor_system.md` rendered with the single variable **`is_opening`** =
+  empty timeline, then the full history as Human/AI messages body-only, one
+  `get_chat_model(settings.advisor_model).ainvoke`, persisted through
+  `append_assistant_message`; a blank answer raises
+  `chat_response_service.EmptyAnswerError` instead of storing an empty bubble),
+  `chat_service.start_response(session, chat) -> Operation` (operation →
+  pointer + `_touch` → commit → `enqueue_chat_response`, the 2.14 seam;
+  autouse `recorded_chat_enqueues` in `tests/conftest.py`), and
+  `chat_service.get_chat(session, chat_id)` — the **worker's** loader
+  (live chat, no ownership check; routes keep `get_owned_chat`). Constants:
+  `chat_service.RESPONSE_OPERATION_TYPE = "chat.response"`,
+  `operation_service.CHAT_ENTITY_TYPE = "chat"`,
+  `chat_service.STALE_TURN_SECONDS = 150` (module constant with a TODO naming
+  3.13), `chat_service.TIMED_OUT_ERROR = "Response timed out."`.
+- **Healing runs *before* `append_user_message`, not after** (step-file order
+  reversed on purpose; shared-knowledge's "accept the message" wins): a 409
+  must leave nothing behind, because an in-flight turn built its context before
+  the request arrived, so a message stored next to it would never be answered.
+  `heal_stale_turn(session, chat) -> bool` owns the whole matrix (terminal /
+  vanished operation / older than 150 s → clear, `True`; else `False`) and the
+  route turns `False` into `409 response-pending`. **Only
+  `POST /api/chat-messages` documents 409** — `POST /api/chats` cannot produce
+  it (contrary to 3.3's note), so its `responses=` list stayed untouched.
+- **The trap in `chat.respond`'s failure path, live-found:**
+  `await session.rollback()` **expires every ORM instance**, so the apology
+  path may not touch the `chat`/`operation` objects it was holding — reading
+  `chat.id` after the rollback is implicit IO (`MissingGreenlet`), which cost
+  the customer the apology and left the operation `running`.
+  `_apologize(session, chat_id, operation_id, error)` therefore takes **ids**
+  and re-loads both rows (chat first, operation last, so a second rollback
+  cannot re-expire it). Any post-rollback bookkeeping in a future job must do
+  the same. Transient set: `TRANSIENT_GATEWAY_ERRORS =
+  (EdgeNetworkTimeoutResponseError, RequestTimeoutResponseError)` from
+  `openrouter.errors` — timeouts only, everything else becomes the apology
+  (`job.APOLOGY`) + `failed`; the job does **not** re-raise after apologising.

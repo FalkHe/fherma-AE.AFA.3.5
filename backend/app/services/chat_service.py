@@ -18,6 +18,17 @@ Four rules live here and nowhere else:
   chat already knows inserts the new row and points the old one at it, in one
   transaction; `superseded_by_id IS NULL` is the current answer.
 
+Two more rules arrived with the response turn:
+
+* **`start_response` is the only way a turn begins.** Operation row first, then
+  the pointer, then the task — each committed before the next, so a worker can
+  never pick up a turn the API cannot yet see.
+* **A stale pointer heals instead of blocking.** `heal_stale_turn` is what makes
+  a killed worker recoverable: a pointer at a finished operation, or at one that
+  has been queued or running for longer than a turn can possibly take, is
+  cleared (the latter after failing that operation), and the consultation is
+  free again. Only a genuinely live turn refuses a second message.
+
 The `chat.message.created` announcement is published by
 `append_assistant_message` **after** its commit, through
 `operation_service.notify` — the project's only `app_events` writer, and the
@@ -26,7 +37,7 @@ already knows, and the SPA's own mutation invalidates its caches.
 """
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select, update
@@ -41,7 +52,24 @@ from app.db.models.chat import (
     ChatPreference,
     PreferenceFirmness,
 )
+from app.db.models.operation import Operation, OperationStatus
 from app.services import operation_service
+
+# `operations.type` of one response turn.
+RESPONSE_OPERATION_TYPE = "chat.response"
+
+# How long a turn may be queued or running before it is considered lost. The
+# frontend mirrors it as `CHAT_TURN_STALE_SECONDS`, so the composer re-opens at
+# the same moment the API starts accepting messages again.
+# TODO(3.13): read `AGENT_TIMEOUT_SECONDS` (120) + 30 from settings once the
+# agent configuration keys land; this constant is that sum.
+STALE_TURN_SECONDS = 150
+
+# What an admin reads on an operation this healing gave up on.
+TIMED_OUT_ERROR = "Response timed out."
+
+# The two statuses a turn cannot come back from.
+_TERMINAL_STATUSES = frozenset({OperationStatus.SUCCEEDED, OperationStatus.FAILED})
 
 
 async def create_chat(session: AsyncSession, user_id: str) -> Chat:
@@ -68,6 +96,21 @@ async def get_owned_chat(session: AsyncSession, chat_id: str, user_id: str) -> C
             Chat.user_id == user_id,
             Chat.deleted_at.is_(None),
         )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_chat(session: AsyncSession, chat_id: str) -> Chat | None:
+    """Return the live consultation `chat_id`, whoever owns it, or `None`.
+
+    The worker's loader: a task is enqueued with ids and has no signed-in
+    account to check them against. Deleted consultations are still excluded —
+    there is nobody left to answer — so `None` also means "do not bother".
+    HTTP routes use `get_owned_chat` instead; this function performs no
+    ownership check at all.
+    """
+    result = await session.execute(
+        select(Chat).where(Chat.id == chat_id, Chat.deleted_at.is_(None))
     )
     return result.scalar_one_or_none()
 
@@ -154,6 +197,87 @@ async def append_assistant_message(
     await session.commit()
     await _announce_message(session, chat.id, message.id)
     return message
+
+
+async def start_response(session: AsyncSession, chat: Chat) -> Operation:
+    """Begin a response turn for `chat`: operation row, pointer, task.
+
+    The ordering is the pinned one and the reason this function exists: the
+    `queued` operation commits, the pointer that makes the UI show the advisor
+    typing commits, and only then is the task enqueued. A worker therefore never
+    picks up a turn whose state is not yet visible — and if the enqueue itself is
+    lost, the pointer heals on the next message instead of blocking forever.
+
+    Callers check first: a chat with a live turn must not start a second one (see
+    `heal_stale_turn`).
+    """
+    operation = await operation_service.create(
+        session,
+        RESPONSE_OPERATION_TYPE,
+        entity_type=operation_service.CHAT_ENTITY_TYPE,
+        entity_id=chat.id,
+    )
+    chat.active_operation_id = operation.id
+    _touch(chat)
+    await session.commit()
+    await enqueue_chat_response(chat.id, operation.id)
+    return operation
+
+
+async def enqueue_chat_response(chat_id: str, operation_id: str) -> None:
+    """Push `chat.respond` onto the queue — ids only, after both commits.
+
+    The task module is imported inside the function on purpose: it pulls in the
+    broker and, through the response service, this module — a top-level import
+    would be circular and would drag the Redis wiring into every importer of the
+    chat service. This is also the seam the test suite replaces, so no test ever
+    needs Redis.
+    """
+    from app.jobs.chat import respond as chat_respond
+
+    await chat_respond.kiq(chat_id, operation_id)
+
+
+async def heal_stale_turn(session: AsyncSession, chat: Chat) -> bool:
+    """Report whether `chat` may start a new turn, clearing a stale pointer.
+
+    This is the kill-the-worker recovery: the pointer is a claim that somebody
+    is answering, and this function is where that claim is checked instead of
+    trusted.
+
+    * No pointer, or one at an operation that no longer exists → free.
+    * Pointer at a `succeeded`/`failed` operation → the turn is over; the
+      pointer is cleared and the consultation is free.
+    * Pointer at a `queued`/`running` operation older than
+      `STALE_TURN_SECONDS` → nobody is coming back for it: the operation is
+      failed with `TIMED_OUT_ERROR`, the pointer is cleared, and the
+      consultation is free.
+    * Anything else → a turn is genuinely in flight; the caller answers 409.
+
+    Returns:
+        `True` when a new turn may start, `False` while one is in flight.
+    """
+    if chat.active_operation_id is None:
+        return True
+
+    operation = await operation_service.get(session, chat.active_operation_id)
+    if operation is None:
+        # A pointer at nothing: there is no turn and nothing to report into.
+        await _clear_active_operation(session, chat)
+        return True
+
+    if operation.status in _TERMINAL_STATUSES:
+        # The turn ended without the reply that would have cleared the pointer
+        # (a crash between the two commits, or a `failed` operation).
+        await _clear_active_operation(session, chat)
+        return True
+
+    if datetime.now(UTC) - operation.created_at > timedelta(seconds=STALE_TURN_SECONDS):
+        await operation_service.fail(session, operation, TIMED_OUT_ERROR)
+        await _clear_active_operation(session, chat)
+        return True
+
+    return False
 
 
 async def list_messages(session: AsyncSession, chat_id: str) -> list[ChatMessage]:
@@ -252,6 +376,17 @@ def _new_message(
         sources=list(sources),
         recommendations=list(recommendations),
     )
+
+
+async def _clear_active_operation(session: AsyncSession, chat: Chat) -> None:
+    """Release the typing indicator of a turn that will not deliver a reply.
+
+    Nothing is announced: the only client that cares is the one asking for this
+    check, and its own request is what re-reads the consultation.
+    """
+    chat.active_operation_id = None
+    _touch(chat)
+    await session.commit()
 
 
 def _touch(chat: Chat) -> None:

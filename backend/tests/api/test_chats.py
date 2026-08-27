@@ -19,7 +19,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.db.models.chat import Chat
+from app.db.models.operation import Operation, OperationStatus
 from app.db.session import get_db_session
+from app.services import chat_service, operation_service
 from tests.services.conftest import FakeAsyncSession
 
 CHAT_ATTRIBUTES = {"title", "activeOperationId", "createdAt", "updatedAt"}
@@ -220,19 +222,46 @@ def test_get_deleted_consultation_returns_404(
 # --- POST /api/chats ----------------------------------------------------------
 
 
-def test_post_creates_an_empty_consultation(
+def test_post_creates_a_consultation_the_advisor_opens(
     customer: Account, fake_session: FakeAsyncSession
 ) -> None:
+    """The advisor speaks first: the 201 already carries the greeting turn.
+
+    Only the turn, though — the title still comes from the first *user* message,
+    so a fresh consultation is unnamed.
+    """
     response = _create(customer.client)
 
     assert response.status_code == 201, response.text
     resource = response.json()["data"]
     assert set(resource["attributes"]) == CHAT_ATTRIBUTES
     assert resource["attributes"]["title"] is None
-    assert resource["attributes"]["activeOperationId"] is None
+    assert resource["attributes"]["activeOperationId"] is not None
     stored = fake_session.store(Chat)[resource["id"]]
     assert stored.user_id == customer.user_id
     assert stored.deleted_at is None
+
+
+def test_post_enqueues_the_greeting_turn(
+    customer: Account,
+    fake_session: FakeAsyncSession,
+    recorded_chat_enqueues: list[tuple[str, str]],
+) -> None:
+    """One `chat.respond` task per created consultation, pointing at its operation."""
+    response = _create(customer.client)
+
+    assert response.status_code == 201, response.text
+    chat_id = response.json()["data"]["id"]
+    operation_id = response.json()["data"]["attributes"]["activeOperationId"]
+    assert recorded_chat_enqueues == [(chat_id, operation_id)]
+
+    operation = fake_session.store(Operation)[operation_id]
+    assert (operation.type, operation.entity_type, operation.entity_id) == (
+        chat_service.RESPONSE_OPERATION_TYPE,
+        operation_service.CHAT_ENTITY_TYPE,
+        chat_id,
+    )
+    assert operation.status is OperationStatus.QUEUED
 
 
 def test_post_rejects_an_invented_attribute(customer: Account) -> None:

@@ -12,8 +12,13 @@ every consultation. Ordering is the pinned timeline (`created_at ASC, id ASC`,
 owned by `chat_service`) — the reverse of the admin lists, because a
 conversation reads top to bottom.
 
-`POST` persists the customer's message and nothing else: no response is started
-yet, so `activeOperationId` stays null until step 3.5 wires `start_response`.
+`POST` persists the customer's message **and starts the advisor's turn**, so the
+response carries the stored message while `activeOperationId` is set on the
+consultation. A second message while a turn is genuinely in flight is
+`409 response-pending`; a turn that was lost (a killed worker, a crash between
+two commits) heals instead of blocking — see `chat_service.heal_stale_turn`. The
+check runs *before* the message is stored: a rejected message must not stay
+behind as a question the advisor will never see.
 """
 
 from typing import Annotated
@@ -137,21 +142,32 @@ async def list_chat_messages(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(csrf_protect)],
     summary="Send a message to the advisor",
-    responses=jsonapi.error_responses(status.HTTP_404_NOT_FOUND),
+    responses=jsonapi.error_responses(status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT),
 )
 async def create_chat_message(
     session: SessionDep, user: UserDep, payload: ChatMessageCreateRequest
 ) -> ChatMessageDocument:
-    """Persist the customer's message in one of their own consultations.
+    """Persist the customer's message and start the advisor's answer.
 
     The body arrives stripped, non-empty and bounded from the request schema —
     `chat_service.append_user_message` stores it verbatim and names the
-    consultation from it when it is still unnamed. No response turn is started
-    here yet (step 3.5), so the answer is the stored message alone.
+    consultation from it when it is still unnamed.
+
+    The stale-turn check comes first, because its refusal is a refusal of the
+    message: an in-flight turn built its context before this request arrived, so
+    a message stored next to it would never be answered.
     """
     attributes = payload.data.attributes
     chat = await _owned_chat_or_404(session, user, attributes.chat_id)
+    if not await chat_service.heal_stale_turn(session, chat):
+        raise jsonapi.JsonApiError(
+            status_code=status.HTTP_409_CONFLICT,
+            code="response-pending",
+            detail="The advisor is still answering the previous message.",
+        )
+
     message = await chat_service.append_user_message(session, chat, attributes.body)
+    await chat_service.start_response(session, chat)
     # `created_at` is a server default: read it back rather than risking
     # implicit IO while rendering.
     await session.refresh(message)

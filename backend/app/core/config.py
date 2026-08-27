@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     chat_model: str = "openai/gpt-4.1-mini"
 
+    # The advisor's own model: the customer-facing responder and, from step
+    # 3.13, its agent loop. Split from `chat_model` (ingestion, extraction and
+    # utility calls) so the conversation can be moved to a stronger model
+    # without changing what the catalogue pipeline costs.
+    advisor_model: str = "openai/gpt-4.1-mini"
+
     # Embeddings: the model the knowledge base is vectorised with and the width
     # of the vectors it returns. `embedding_dimensions` must match the `vector`
     # column of `chunks` — a mismatch is a loud failure, never a truncation.

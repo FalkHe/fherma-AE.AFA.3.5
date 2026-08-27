@@ -4,13 +4,15 @@ Focus areas the dev suite does not already nail down: the write route requires
 a session too, the guard really is `current_user` and not `current_admin`,
 `extra="forbid"` holds at the resource-object and top-level envelope (not just
 inside `attributes`), pagination beyond the end of the timeline degrades to an
-empty page with the same `totalCount` rather than an error, `POST` truly emits
-no `app_events` notification and creates no `Operation` row (the "no enqueue in
-this step" pin), and — the sharpest one — the read-validation contract: a
+empty page with the same `totalCount` rather than an error, `POST` creates
+exactly one `Operation` row and announces exactly that one event (rewritten in
+step 3.5, which turned "no turn yet" into a real one), and — the sharpest one —
+the read-validation contract: a
 message row whose JSONB trace is missing a pinned key fails loudly (500, no
 leaked traceback) instead of silently rendering a gap.
 """
 
+import json
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -235,23 +237,60 @@ def test_list_a_page_past_the_end_of_the_timeline_is_empty_with_the_full_total(
     assert body["meta"] == {"totalCount": 3}
 
 
-# --- No enqueue in this step: verified independently of the activeOperationId --
+# --- The turn this route starts, verified independently of activeOperationId ---
 
 
-def test_post_creates_no_operation_and_emits_no_notification(
+def test_post_creates_exactly_one_operation_and_announces_only_that(
     customer: Account, fake_session: FakeAsyncSession
 ) -> None:
-    """Belt-and-braces alongside the dev's `activeOperationId` check: no
-    `Operation` row is created and `app_events` receives nothing at all — the
-    typing indicator has nothing to ever turn on from this route in this step.
+    """Rewritten in step 3.5 (was: no operation and no notification at all).
+
+    Belt-and-braces alongside the dev's `activeOperationId` check: exactly one
+    `Operation` row is created for the turn, and the only thing announced is its
+    `operation.updated` — the customer's own message emits nothing, and
+    `chat.message.created` belongs to the worker's reply.
     """
     chat = _seed_chat(fake_session, customer.user_id)
 
     response = _send(customer.client, chat.id, "Hello?")
 
     assert response.status_code == 201, response.text
+    operations = fake_session.rows(Operation)
+    assert len(operations) == 1
+    events = [json.loads(payload) for _channel, payload in fake_session.notifications]
+    assert [event["event"] for event in events] == ["operation.updated"]
+    assert events[0]["operationId"] == operations[0].id
+    assert events[0]["entityType"] == "chat"
+    assert events[0]["entityId"] == chat.id
+
+
+def test_post_that_fails_validation_enqueues_nothing(
+    customer: Account,
+    fake_session: FakeAsyncSession,
+    recorded_chat_enqueues: list[tuple[str, str]],
+) -> None:
+    """A 422 must not start a turn: the dev suite proves the message and the
+    body are rejected together, but never that rejection also means no
+    operation, no pointer and no enqueue — a request that never became a
+    stored message must not silently start the advisor typing anyway."""
+    chat = _seed_chat(fake_session, customer.user_id)
+
+    response = customer.client.post(
+        "/api/chat-messages",
+        json={
+            "data": {
+                "type": "chat-messages",
+                "attributes": {"chatId": chat.id, "body": "   "},
+            }
+        },
+        headers=_csrf(customer.client),
+    )
+
+    assert response.status_code == 422, response.text
     assert fake_session.rows(Operation) == []
-    assert fake_session.notifications == []
+    assert fake_session.rows(ChatMessage) == []
+    assert chat.active_operation_id is None
+    assert recorded_chat_enqueues == []
 
 
 # --- Read validation: a writer that skips a pinned key fails loudly ------------

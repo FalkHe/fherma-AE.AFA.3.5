@@ -16,6 +16,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.db.models.chat import Chat
+from app.db.models.operation import Operation
 from app.db.models.user import UserRole
 from app.db.session import get_db_session
 from tests.services.conftest import FakeAsyncSession
@@ -167,3 +169,28 @@ def test_list_page_size_below_one_is_rejected(customer: Account) -> None:
     response = customer.client.get("/api/chats", params={"page[size]": 0})
 
     assert response.status_code == 422
+
+
+# --- Step 3.5: a rejected POST must not start a turn ---------------------------
+
+
+def test_post_that_fails_validation_enqueues_nothing(
+    customer: Account,
+    fake_session: FakeAsyncSession,
+    recorded_chat_enqueues: list[tuple[str, str]],
+) -> None:
+    """The dev suite proves an invented attribute is a 422; it does not prove
+    that the row it would have created never got as far as a greeting turn —
+    `start_response` runs after `create_chat` in the route, so a validation
+    failure raised by FastAPI before the handler body executes must leave no
+    `Chat`, no `Operation` and no enqueue behind."""
+    response = customer.client.post(
+        "/api/chats",
+        json={"data": {"type": "chats", "attributes": {"title": "Invented"}}},
+        headers=_csrf(customer.client),
+    )
+
+    assert response.status_code == 422, response.text
+    assert fake_session.rows(Chat) == []
+    assert fake_session.rows(Operation) == []
+    assert recorded_chat_enqueues == []

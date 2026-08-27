@@ -39,6 +39,7 @@ services:
         "app.jobs.demo",
         "app.jobs.ingestion",
         "app.jobs.embeddings",
+        "app.jobs.chat",
       ]
     depends_on:
       postgres:

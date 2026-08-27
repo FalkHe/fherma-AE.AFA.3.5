@@ -112,15 +112,21 @@ async def get_chat(session: SessionDep, user: UserDep, chat_id: ChatIdDep) -> Ch
 async def create_chat(
     session: SessionDep, user: UserDep, payload: ChatCreateRequest
 ) -> ChatDocument:
-    """Create an empty consultation for the signed-in account.
+    """Create an empty consultation for the signed-in account and let the advisor open it.
 
     The request body carries an empty attributes object: there is nothing to
     supply, the title is derived later from the first user message, and a
     consultation is only ever created by an explicit request — never on page
     load. The payload is therefore never read — validating it is the point, so
     an invented attribute is a 422 instead of a silently ignored key.
+
+    The advisor speaks first: a response turn is started immediately, so the
+    201 already carries `activeOperationId` and the greeting arrives over SSE as
+    an ordinary assistant message. It does not name the consultation — the title
+    still comes from the first *user* message.
     """
     chat = await chat_service.create_chat(session, user.id)
+    await chat_service.start_response(session, chat)
     # Both timestamps are server defaults: read them back from the database
     # rather than risking implicit IO while rendering.
     await session.refresh(chat)

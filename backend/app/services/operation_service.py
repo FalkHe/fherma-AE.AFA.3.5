@@ -43,6 +43,10 @@ EVENT_CHANNEL = "app_events"
 # joins its progress cells on (this, motorbike id).
 MOTORBIKE_ENTITY_TYPE = "motorbike"
 
+# `entity_type` of an operation answering a consultation turn. The chat UI reads
+# it off the `operation.updated` event to know an event concerns a conversation.
+CHAT_ENTITY_TYPE = "chat"
+
 
 async def notify(session: AsyncSession, payload: Mapping[str, Any]) -> None:
     """Publish `payload` on `app_events` — call this **after** the commit.

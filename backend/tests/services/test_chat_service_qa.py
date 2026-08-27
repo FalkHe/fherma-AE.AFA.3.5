@@ -15,13 +15,21 @@ adds the pinned edges that file leaves unexercised:
   soft-deleted (the dev file proves each condition separately) — a
   security-critical existence-leak guard worth confirming directly rather than
   inferring from independent WHERE clauses.
+
+Step 3.5 additions (QA, independent of the dev's own healing coverage which
+lives entirely behind the `POST /api/chat-messages` route in
+`tests/api/test_chat_messages.py`): `heal_stale_turn` exercised directly at the
+service seam, including the exact-boundary second the API-level tests do not
+touch (they use threshold-5s and threshold+1s, never the threshold itself).
 """
 
 import asyncio
+import inspect
 from datetime import UTC, datetime, timedelta
 
 from app.db.models.chat import Chat
-from app.services import chat_service
+from app.db.models.operation import Operation, OperationStatus
+from app.services import chat_service, operation_service
 from tests.services.conftest import FakeAsyncSession
 
 USER_ID = "0" * 22 + "USER"
@@ -105,3 +113,153 @@ def test_chat_model_has_no_status_column() -> None:
     """Deliberate omission pinned in shared-knowledge: `deleted_at` is the
     only lifecycle flag."""
     assert "status" not in Chat.__table__.columns
+
+
+# --- Step 3.5: `heal_stale_turn`, exercised directly at the service seam ------
+
+
+def _pointed_chat(
+    session: FakeAsyncSession, *, status: OperationStatus, age_seconds: float
+) -> tuple[Chat, Operation]:
+    chat = asyncio.run(chat_service.create_chat(session, USER_ID))
+    operation = asyncio.run(
+        operation_service.create(
+            session,
+            chat_service.RESPONSE_OPERATION_TYPE,
+            entity_type=operation_service.CHAT_ENTITY_TYPE,
+            entity_id=chat.id,
+        )
+    )
+    operation.status = status
+    operation.created_at = datetime.now(UTC) - timedelta(seconds=age_seconds)
+    chat.active_operation_id = operation.id
+    return chat, operation
+
+
+def test_heal_stale_turn_is_a_noop_when_no_pointer_is_set(fake_session: FakeAsyncSession) -> None:
+    chat = asyncio.run(chat_service.create_chat(fake_session, USER_ID))
+
+    assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is True
+    assert chat.active_operation_id is None
+
+
+def test_heal_stale_turn_clears_a_pointer_at_a_vanished_operation(
+    fake_session: FakeAsyncSession,
+) -> None:
+    chat = asyncio.run(chat_service.create_chat(fake_session, USER_ID))
+    chat.active_operation_id = "9" * 26
+
+    assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is True
+    assert chat.active_operation_id is None
+
+
+def test_heal_stale_turn_clears_a_pointer_at_a_succeeded_operation(
+    fake_session: FakeAsyncSession,
+) -> None:
+    chat, operation = _pointed_chat(fake_session, status=OperationStatus.SUCCEEDED, age_seconds=0)
+
+    assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is True
+    assert chat.active_operation_id is None
+    # A terminal operation is left exactly as it was — healing only moves the pointer.
+    assert operation.status is OperationStatus.SUCCEEDED
+    assert operation.error is None
+
+
+def test_heal_stale_turn_clears_a_pointer_at_a_failed_operation(
+    fake_session: FakeAsyncSession,
+) -> None:
+    chat, operation = _pointed_chat(fake_session, status=OperationStatus.FAILED, age_seconds=0)
+    operation.error = "some earlier failure"
+
+    assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is True
+    assert chat.active_operation_id is None
+    assert operation.error == "some earlier failure"
+
+
+def test_heal_stale_turn_refuses_a_fresh_live_turn(fake_session: FakeAsyncSession) -> None:
+    chat, operation = _pointed_chat(fake_session, status=OperationStatus.RUNNING, age_seconds=5)
+
+    assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is False
+    # Nothing moved: a genuinely live turn is untouched, not just refused.
+    assert chat.active_operation_id == operation.id
+    assert operation.status is OperationStatus.RUNNING
+    assert operation.error is None
+
+
+def test_heal_stale_turn_times_out_a_queued_turn_older_than_the_threshold(
+    fake_session: FakeAsyncSession,
+) -> None:
+    chat, operation = _pointed_chat(
+        fake_session,
+        status=OperationStatus.QUEUED,
+        age_seconds=chat_service.STALE_TURN_SECONDS + 1,
+    )
+
+    assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is True
+    assert chat.active_operation_id is None
+    assert operation.status is OperationStatus.FAILED
+    assert operation.error == chat_service.TIMED_OUT_ERROR
+    assert operation.finished_at is not None
+
+
+def test_heal_stale_turn_times_out_a_running_turn_older_than_the_threshold(
+    fake_session: FakeAsyncSession,
+) -> None:
+    chat, operation = _pointed_chat(
+        fake_session,
+        status=OperationStatus.RUNNING,
+        age_seconds=chat_service.STALE_TURN_SECONDS + 1,
+    )
+
+    assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is True
+    assert operation.status is OperationStatus.FAILED
+    assert operation.error == chat_service.TIMED_OUT_ERROR
+
+
+def test_heal_stale_turn_a_fraction_of_a_second_under_the_threshold_is_still_in_flight(
+    fake_session: FakeAsyncSession,
+) -> None:
+    """The boundary itself: `>` STALE_TURN_SECONDS, not `>=`.
+
+    Note: asserting the exact threshold second (`age_seconds ==
+    STALE_TURN_SECONDS`) is not a meaningful test — by the time
+    `heal_stale_turn` calls `datetime.now(UTC)`, strictly more than
+    `STALE_TURN_SECONDS` has elapsed since `created_at` was stamped in this
+    fixture, so that case always times out (confirmed while writing this test:
+    it failed with `True != False`). A margin safely below the threshold but
+    far tighter than the API-level tests' 5 s margin is the honest way to prove
+    the comparison is strict."""
+    chat, operation = _pointed_chat(
+        fake_session,
+        status=OperationStatus.RUNNING,
+        age_seconds=chat_service.STALE_TURN_SECONDS - 0.5,
+    )
+
+    assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is False
+    assert chat.active_operation_id == operation.id
+    assert operation.status is OperationStatus.RUNNING
+
+
+def test_heal_stale_turn_one_second_over_the_threshold_times_out(
+    fake_session: FakeAsyncSession,
+) -> None:
+    """The other side of the same boundary, for contrast with the test above."""
+    chat, operation = _pointed_chat(
+        fake_session,
+        status=OperationStatus.RUNNING,
+        age_seconds=chat_service.STALE_TURN_SECONDS + 1,
+    )
+
+    assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is True
+    assert operation.status is OperationStatus.FAILED
+
+
+def test_stale_turn_seconds_carries_a_todo_naming_3_13() -> None:
+    """Landed-decisions/shared-knowledge pin: the healing threshold is a module
+    constant with a TODO naming step 3.13 (where `AGENT_TIMEOUT_SECONDS` lands),
+    not a bare magic number nobody will remember to revisit."""
+    assert chat_service.STALE_TURN_SECONDS == 150
+    source = inspect.getsource(chat_service)
+    todo_index = source.index("STALE_TURN_SECONDS = 150")
+    preceding = source[:todo_index]
+    assert "TODO(3.13)" in preceding or "TODO(3.13)" in source[todo_index - 400 : todo_index]
