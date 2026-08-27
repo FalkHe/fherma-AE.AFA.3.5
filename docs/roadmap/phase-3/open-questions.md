@@ -28,6 +28,13 @@ path; unit-tested only). Before the M4/M5 demos, verifying a price band on
 at least one approved model (owner action or the Phase-2 curation flow)
 would make the demo materially stronger. Not a code defect.
 
+**N2 (non-blocking polish, from the 3.17 acceptance walk, 2026-08-28).**
+For **admin-role** accounts at a 390 px viewport, the AppBar's four toolbar
+items (title + Consultations/Admin nav + theme toggle + account button)
+overflow horizontally (`scrollWidth` 435 vs 390). Plain customer accounts
+are clean; the Phase-3 chat surfaces themselves are responsive. Pre-existing
+admin-nav layout, not a Phase-3 regression — route to Phase 5 polish.
+
 ---
 
 *(previously: no open questions, 2026-08-27)*
