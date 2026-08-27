@@ -6,6 +6,7 @@ Importing this package must register every model on `Base.metadata`; Alembic's
 
 from app.db.models.base import Base, ULIDPrimaryKeyMixin, new_ulid
 from app.db.models.chunk import Chunk
+from app.db.models.manufacturer import Manufacturer
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus, MotorbikeImage
 from app.db.models.motorbike_spec import MotorbikeSpec, SpecKind
@@ -18,6 +19,7 @@ __all__ = [
     "Base",
     "Chunk",
     "ImageStatus",
+    "Manufacturer",
     "Motorbike",
     "MotorbikeImage",
     "MotorbikeSpec",

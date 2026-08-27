@@ -288,6 +288,22 @@ async def transition_image(
     return image
 
 
+async def assign_manufacturer(
+    session: AsyncSession, motorbike: Motorbike, manufacturer_id: str | None
+) -> Motorbike:
+    """Point `motorbike` at a manufacturer row, or at none, and announce it.
+
+    Callers resolve the brand first (`manufacturer_service.get_or_create`) and
+    pass its id; `None` clears the reference. The announcement is
+    `product.updated` because the admin backlog renders the brand name with the
+    row.
+    """
+    motorbike.manufacturer_id = manufacturer_id
+    await session.commit()
+    await _announce(session, motorbike.id)
+    return motorbike
+
+
 async def upsert_draft_spec(
     session: AsyncSession, motorbike_id: str, values: Mapping[str, Any]
 ) -> MotorbikeSpec:

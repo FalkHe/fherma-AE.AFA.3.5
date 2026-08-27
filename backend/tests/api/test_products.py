@@ -13,6 +13,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.db.models.manufacturer import Manufacturer
+from app.db.models.motorbike import Motorbike
 from app.db.models.operation import Operation, OperationStatus
 from app.db.models.user import UserRole
 from app.db.session import get_db_session
@@ -99,6 +101,20 @@ def _create(client: TestClient, name: str = "Suzuki GSR 600"):
         json={"data": {"type": "products", "attributes": {"name": name}}},
         headers=_csrf(client),
     )
+
+
+def _assign_manufacturer(
+    fake_session: FakeAsyncSession, product_id: str, name: str = "Suzuki"
+) -> Manufacturer:
+    """Give a stored catalogue row a brand, as extraction or the CLI would.
+
+    The attribute is derived since Phase 2b: only the foreign key is stored, so
+    a fixture has to create the `manufacturers` row it points at.
+    """
+    manufacturer = Manufacturer(name=name, slug=name.lower())
+    fake_session.add(manufacturer)
+    fake_session.store(Motorbike)[product_id].manufacturer_id = manufacturer.id
+    return manufacturer
 
 
 def _patch(client: TestClient, product_id: str, attributes: dict):
@@ -278,6 +294,23 @@ def test_get_returns_the_product(admin_client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json()["data"]["id"] == created["id"]
+
+
+def test_manufacturer_is_the_related_rows_name_and_null_without_one(
+    admin_client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    created = _create(admin_client).json()["data"]
+    # A fresh row has no brand yet.
+    assert created["attributes"]["manufacturer"] is None
+
+    _assign_manufacturer(fake_session, created["id"])
+
+    detail = admin_client.get(f"/api/products/{created['id']}").json()["data"]
+    listed = admin_client.get("/api/products").json()["data"][0]
+    assert detail["attributes"]["manufacturer"] == "Suzuki"
+    assert listed["attributes"]["manufacturer"] == "Suzuki"
+    # Still the pinned attribute set — no relationships, no extra attribute.
+    assert set(detail["attributes"]) == PRODUCT_ATTRIBUTES
 
 
 def test_get_unknown_id_returns_404_in_the_error_document_shape(admin_client: TestClient) -> None:

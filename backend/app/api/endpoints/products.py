@@ -10,7 +10,7 @@ here — only `product_service.transition` may change one, so the legal matrix
 cannot be bypassed through the API.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Path, Query, status
@@ -28,10 +28,11 @@ from app.api.schemas.products import (
     ProductResource,
     SpecAttributes,
 )
+from app.db.models.manufacturer import Manufacturer
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_spec import MotorbikeSpec, SpecKind
 from app.db.session import get_db_session
-from app.services import product_service
+from app.services import manufacturer_service, product_service
 
 router = APIRouter(
     prefix="/products",
@@ -62,14 +63,46 @@ def _spec_attributes(spec: MotorbikeSpec | None) -> SpecAttributes | None:
     return None if spec is None else SpecAttributes.model_validate(spec)
 
 
-def _resource(motorbike: Motorbike, specs: Mapping[SpecKind, MotorbikeSpec]) -> ProductResource:
+def _manufacturer_name(
+    motorbike: Motorbike, manufacturers: Mapping[str, Manufacturer]
+) -> str | None:
+    """Return the display name of a row's brand, or `None` when it has none.
+
+    `manufacturer` is a derived attribute since Phase 2b: the catalogue row
+    carries only the foreign key, and the wire shape carries only the name.
+    """
+    if motorbike.manufacturer_id is None:
+        return None
+    manufacturer = manufacturers.get(motorbike.manufacturer_id)
+    return None if manufacturer is None else manufacturer.name
+
+
+async def _manufacturers_of(
+    session: AsyncSession, motorbikes: Sequence[Motorbike]
+) -> Mapping[str, Manufacturer]:
+    """Load the brands of a whole page of catalogue rows in one query."""
+    return await manufacturer_service.get_by_ids(
+        session,
+        [
+            motorbike.manufacturer_id
+            for motorbike in motorbikes
+            if motorbike.manufacturer_id is not None
+        ],
+    )
+
+
+def _resource(
+    motorbike: Motorbike,
+    specs: Mapping[SpecKind, MotorbikeSpec],
+    manufacturers: Mapping[str, Manufacturer],
+) -> ProductResource:
     """Project a catalogue row plus its specifications onto a resource object."""
     return ProductResource(
         id=motorbike.id,
         attributes=ProductAttributes(
             name=motorbike.name,
             slug=motorbike.slug,
-            manufacturer=motorbike.manufacturer,
+            manufacturer=_manufacturer_name(motorbike, manufacturers),
             model_name=motorbike.model_name,
             year_from=motorbike.year_from,
             year_to=motorbike.year_to,
@@ -85,7 +118,8 @@ def _resource(motorbike: Motorbike, specs: Mapping[SpecKind, MotorbikeSpec]) -> 
 async def _document(session: AsyncSession, motorbike: Motorbike) -> ProductDocument:
     """Build the single-resource document for one catalogue row."""
     specs = await product_service.get_specs(session, [motorbike.id])
-    return ProductDocument(data=_resource(motorbike, specs.get(motorbike.id, {})))
+    manufacturers = await _manufacturers_of(session, [motorbike])
+    return ProductDocument(data=_resource(motorbike, specs.get(motorbike.id, {}), manufacturers))
 
 
 async def _get_or_404(session: AsyncSession, product_id: str) -> Motorbike:
@@ -136,9 +170,13 @@ async def list_products(
         session, statuses=statuses, limit=page.limit, offset=page.offset
     )
     specs = await product_service.get_specs(session, [motorbike.id for motorbike in motorbikes])
+    manufacturers = await _manufacturers_of(session, motorbikes)
 
     return ProductListDocument(
-        data=[_resource(motorbike, specs.get(motorbike.id, {})) for motorbike in motorbikes],
+        data=[
+            _resource(motorbike, specs.get(motorbike.id, {}), manufacturers)
+            for motorbike in motorbikes
+        ],
         meta=jsonapi.Meta(total_count=total),
     )
 

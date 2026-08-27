@@ -3,14 +3,13 @@
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, Enum, SmallInteger, String, func
+from sqlalchemy import DateTime, Enum, ForeignKey, SmallInteger, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.models.base import Base, ULIDPrimaryKeyMixin
+from app.db.models.base import ULID_LENGTH, Base, ULIDPrimaryKeyMixin
 
 NAME_LENGTH = 160
 SLUG_LENGTH = 160
-MANUFACTURER_LENGTH = 64
 MODEL_NAME_LENGTH = 128
 
 
@@ -33,15 +32,22 @@ class Motorbike(ULIDPrimaryKeyMixin, Base):
 
     `name` keeps the display form an admin typed ("Suzuki GSR 600"); `slug` is
     the derived, unique identity used to reject duplicates. Structured fields
-    (`manufacturer`, `model_name`, years) stay NULL until extraction or an admin
-    fills them in.
+    (`manufacturer_id`, `model_name`, years) stay NULL until extraction or an
+    admin fills them in.
+
+    The brand lives in the `manufacturers` table, referenced by id: there is no
+    relationship, so callers resolve it through `manufacturer_service`.
     """
 
     __tablename__ = "motorbikes"
 
     name: Mapped[str] = mapped_column(String(NAME_LENGTH))
     slug: Mapped[str] = mapped_column(String(SLUG_LENGTH), unique=True)
-    manufacturer: Mapped[str | None] = mapped_column(String(MANUFACTURER_LENGTH))
+    # No `ondelete`: nothing ever deletes a manufacturer, so the default NO
+    # ACTION is the guard against a dangling reference.
+    manufacturer_id: Mapped[str | None] = mapped_column(
+        String(ULID_LENGTH), ForeignKey("manufacturers.id"), index=True
+    )
     model_name: Mapped[str | None] = mapped_column(String(MODEL_NAME_LENGTH))
     year_from: Mapped[int | None] = mapped_column(SmallInteger)
     year_to: Mapped[int | None] = mapped_column(SmallInteger)

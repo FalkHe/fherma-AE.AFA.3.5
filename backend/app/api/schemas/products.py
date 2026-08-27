@@ -4,6 +4,11 @@ Wire shape is pinned by `docs/roadmap/phase-2/shared-knowledge.md`: resource
 type `products`, camelCase attributes, specification objects mirroring the
 frozen column set (`null` when the model has no such revision).
 
+`manufacturer` is the one attribute that is **derived** rather than a column: it
+carries the name of the related `manufacturers` row (`null` when the model has
+no brand assigned), which the endpoint resolves — see
+`docs/roadmap/phase-2b/shared-knowledge.md`. The shape is unchanged by that.
+
 Two specification models on purpose:
 
 * `SpecAttributes` is what a specification looks like on the way *out* — no
@@ -79,6 +84,7 @@ class ProductAttributes(JsonApiModel):
 
     name: str
     slug: str
+    # Derived: the related manufacturer's name, `null` when none is assigned.
     manufacturer: str | None
     model_name: str | None
     year_from: int | None
