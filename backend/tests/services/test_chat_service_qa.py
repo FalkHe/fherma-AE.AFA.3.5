@@ -27,6 +27,9 @@ import asyncio
 import inspect
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
+from app.core.config import get_settings
 from app.db.models.chat import Chat
 from app.db.models.operation import Operation, OperationStatus
 from app.services import chat_service, operation_service
@@ -192,7 +195,7 @@ def test_heal_stale_turn_times_out_a_queued_turn_older_than_the_threshold(
     chat, operation = _pointed_chat(
         fake_session,
         status=OperationStatus.QUEUED,
-        age_seconds=chat_service.STALE_TURN_SECONDS + 1,
+        age_seconds=chat_service.stale_turn_seconds() + 1,
     )
 
     assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is True
@@ -208,7 +211,7 @@ def test_heal_stale_turn_times_out_a_running_turn_older_than_the_threshold(
     chat, operation = _pointed_chat(
         fake_session,
         status=OperationStatus.RUNNING,
-        age_seconds=chat_service.STALE_TURN_SECONDS + 1,
+        age_seconds=chat_service.stale_turn_seconds() + 1,
     )
 
     assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is True
@@ -232,7 +235,7 @@ def test_heal_stale_turn_a_fraction_of_a_second_under_the_threshold_is_still_in_
     chat, operation = _pointed_chat(
         fake_session,
         status=OperationStatus.RUNNING,
-        age_seconds=chat_service.STALE_TURN_SECONDS - 0.5,
+        age_seconds=chat_service.stale_turn_seconds() - 0.5,
     )
 
     assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is False
@@ -247,19 +250,26 @@ def test_heal_stale_turn_one_second_over_the_threshold_times_out(
     chat, operation = _pointed_chat(
         fake_session,
         status=OperationStatus.RUNNING,
-        age_seconds=chat_service.STALE_TURN_SECONDS + 1,
+        age_seconds=chat_service.stale_turn_seconds() + 1,
     )
 
     assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is True
     assert operation.status is OperationStatus.FAILED
 
 
-def test_stale_turn_seconds_carries_a_todo_naming_3_13() -> None:
-    """Landed-decisions/shared-knowledge pin: the healing threshold is a module
-    constant with a TODO naming step 3.13 (where `AGENT_TIMEOUT_SECONDS` lands),
-    not a bare magic number nobody will remember to revisit."""
-    assert chat_service.STALE_TURN_SECONDS == 150
+def test_stale_turn_seconds_is_derived_from_the_agent_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Step 3.13 resolved the interim constant: the threshold is
+    `AGENT_TIMEOUT_SECONDS` + the grace period, read at call time — so the
+    healing window cannot drift away from the time a turn is actually given, and
+    the pinned 150 s the SPA mirrors is what the default configuration yields."""
+    settings = get_settings()
+    assert settings.agent_timeout_seconds == 120
+    assert chat_service.STALE_TURN_GRACE_SECONDS == 30
+    assert chat_service.stale_turn_seconds() == 150
+    # Derived, not a coincidence: a reconfigured timeout moves the threshold with it.
+    monkeypatch.setattr(settings, "agent_timeout_seconds", 300)
+    assert chat_service.stale_turn_seconds() == 330
     source = inspect.getsource(chat_service)
-    todo_index = source.index("STALE_TURN_SECONDS = 150")
-    preceding = source[:todo_index]
-    assert "TODO(3.13)" in preceding or "TODO(3.13)" in source[todo_index - 400 : todo_index]
+    assert "STALE_TURN_SECONDS = 150" not in source

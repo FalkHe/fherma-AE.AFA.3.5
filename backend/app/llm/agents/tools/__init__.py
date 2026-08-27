@@ -38,7 +38,7 @@ the error it is.
 
 import json
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -63,6 +63,11 @@ FAILED = "failed"
 # How much of a failed call's error reaches the recorded entry: one line, not a
 # gateway response body (the `rag_pipeline_service` cap, same reason).
 MAX_ERROR_CHARS = 200
+
+# How many `sources[]` entries one assistant message carries (the pinned cap):
+# the collapsible source list is provenance for an answer, not a bibliography,
+# and a turn that retrieved four times would otherwise cite forty documents.
+MAX_SOURCES = 8
 
 
 class ToolModel(BaseModel):
@@ -92,13 +97,29 @@ class UnknownBikeResult(ToolModel):
 class ToolCallCollector:
     """Per-turn capture of everything the tools did.
 
-    Lives for one agent run. `tool_calls` is already in the pinned persisted
-    shape (camelCase arguments and results included), so step 3.13 stores it
-    verbatim; later steps add their own capture lists (sources from
-    `retrieve_bike_knowledge`, recommendation snapshots) beside it.
+    Lives for one agent run and holds all three persisted traces of the
+    assistant message, each already in its pinned camelCase shape:
+
+    * `tool_calls` — every executed call, successes and failures alike;
+    * the **sources**, contributed by `retrieve_bike_knowledge` and read back
+      through `sources()`, which owns the pinned dedupe/order/cap;
+    * the **recommendations**, contributed by `present_recommendations` and read
+      back through `recommendations()`.
+
+    The two read-back methods exist because both lists have rules the writer
+    must not have to know: sources are deduplicated by `sourceDocumentId`
+    keeping the best score, and a bike recommended twice in one turn is one
+    card. `tool_calls` needs no such rule — a call executed twice happened
+    twice.
     """
 
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    # Keyed by `sourceDocumentId`: one entry per cited document, the
+    # best-scoring chunk of it.
+    _sources: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Keyed by `motorbikeId`, in insertion order: the advisor's own presentation
+    # order is the card order.
+    _recommendations: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def record(self, tool: str, arguments: dict[str, Any], result: dict[str, Any]) -> None:
         """Record a call that returned a result."""
@@ -133,6 +154,47 @@ class ToolCallCollector:
                 "error": f"{type(error).__name__}: {error}"[:MAX_ERROR_CHARS],
             }
         )
+
+    def record_sources(self, sources: Iterable[dict[str, Any]]) -> None:
+        """Add cited chunks to the turn, keeping the best one per document.
+
+        `sources` are already in the pinned `sources[]` shape. Two chunks of the
+        same source document are one citation: the customer is shown *where* an
+        answer comes from, and the same brochure listed twice says nothing more
+        than once. The higher score wins, because that is the chunk the answer
+        most likely rests on.
+        """
+        for source in sources:
+            key = source["sourceDocumentId"]
+            best = self._sources.get(key)
+            if best is None or source["score"] > best["score"]:
+                self._sources[key] = source
+
+    def sources(self) -> list[dict[str, Any]]:
+        """Return the cited sources in the pinned order, capped at `MAX_SOURCES`.
+
+        Score descending, `chunkId` as the tiebreaker so the list is stable for
+        equal scores (the retrieval services' tiebreaker, for the same reason).
+        """
+        ordered = sorted(
+            self._sources.values(), key=lambda source: (-source["score"], source["chunkId"])
+        )
+        return ordered[:MAX_SOURCES]
+
+    def record_recommendations(self, recommendations: Iterable[dict[str, Any]]) -> None:
+        """Add recommendation snapshots to the turn, one card per model.
+
+        Already in the pinned `recommendations[]` shape. The **first** snapshot
+        of a bike wins: a second `present_recommendations` call naming it again
+        is the same card, and the rationale the advisor gave first is the one the
+        prose around it explains.
+        """
+        for recommendation in recommendations:
+            self._recommendations.setdefault(recommendation["motorbikeId"], recommendation)
+
+    def recommendations(self) -> list[dict[str, Any]]:
+        """Return the recommendation snapshots in presentation order."""
+        return list(self._recommendations.values())
 
 
 @dataclass(slots=True)
@@ -188,14 +250,17 @@ def tool_specs() -> tuple[ToolSpec, ...]:
 
     The imports are in-function on purpose (the enqueue-seam precedent): the tool
     modules import this convention module, so importing them at the top would be
-    a cycle. Steps 3.13–3.14 extend this tuple; the registry order is the order
-    the model sees the tools in — the reading order of a consultation: find
-    candidates, compare them, check them against the customer, then cost them.
+    a cycle. Step 3.14 extends this tuple; the registry order is the order the
+    model sees the tools in — the reading order of a consultation: find
+    candidates, compare them, check them against the customer, cost them, read
+    what has been written about them, and finally put the cards on the table.
     """
     from app.llm.agents.tools import (
         catalogue_search,
         cost_estimator,
         licence_fit_check,
+        present_recommendations,
+        retrieve_bike_knowledge,
         spec_comparison,
     )
 
@@ -204,6 +269,8 @@ def tool_specs() -> tuple[ToolSpec, ...]:
         spec_comparison.TOOL,
         licence_fit_check.TOOL,
         cost_estimator.TOOL,
+        retrieve_bike_knowledge.TOOL,
+        present_recommendations.TOOL,
     )
 
 

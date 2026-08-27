@@ -463,18 +463,23 @@ def test_qa_blank_or_whitespace_utterance_never_reaches_translation_or_search(
 # --- Criterion 6: not wired into the chat responder / job path ----------------
 
 
-def test_qa_rag_pipeline_service_is_imported_only_by_the_cli_and_its_tests() -> None:
+def test_qa_rag_pipeline_service_is_imported_only_by_the_cli_and_the_retrieval_tool() -> None:
     """Static-scan the whole `backend/app` tree: `rag_pipeline_service` may be
-    imported only by `app/cli/rag.py` (and, transitively, its own module).
-    This is the independent proof behind the "not wired into the responder"
-    risk note — a grep is not enough because a future import could be
-    disguised as `from app.services import rag_pipeline_service` deep inside
-    an unrelated module; this walks every `.py` file's AST.
+    imported only by `app/cli/rag.py` and, since step 3.13, by the one tool that
+    wraps it (`retrieve_bike_knowledge`) — the pinned "consumed exactly once"
+    rule. A grep is not enough because a future import could be disguised as
+    `from app.services import rag_pipeline_service` deep inside an unrelated
+    module; this walks every `.py` file's AST. The responder itself still reaches
+    the pipeline only through the tool, never directly.
     """
     app_root = Path(__file__).resolve().parents[2] / "app"
     assert app_root.is_dir()
 
-    allowed = {app_root / "cli" / "rag.py", app_root / "services" / "rag_pipeline_service.py"}
+    allowed = {
+        app_root / "cli" / "rag.py",
+        app_root / "services" / "rag_pipeline_service.py",
+        app_root / "llm" / "agents" / "tools" / "retrieve_bike_knowledge.py",
+    }
     offenders: list[str] = []
 
     for path in app_root.rglob("*.py"):

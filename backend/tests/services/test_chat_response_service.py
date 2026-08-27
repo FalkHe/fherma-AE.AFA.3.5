@@ -1,51 +1,95 @@
-"""`app/services/chat_response_service.py` — the one model call of a turn.
+"""`app/services/chat_response_service.py` — the seam between the job and the agent.
 
-The in-memory `FakeAsyncSession` stands in for the database and a recording stub
-for the chat model, so no gateway is ever dialled. What is under test is the
-seam's contract: which messages one call receives (system prompt plus the
-persisted timeline, body only) and that the reply is persisted through
-`chat_service.append_assistant_message` — which ends the turn and announces it.
+Since step 3.13 the seam is thin on purpose: it runs the agent loop and persists
+what came back. So this file replaces the agent loop with a recorder (the loop
+itself is covered in `tests/llm/agents/test_advisor.py`) and asserts only what
+this module owns:
+
+* the loop is asked for **this** chat, with no model override — production always
+  uses the configured advisor model;
+* all four parts of the result are persisted, the three traces verbatim and in
+  their pinned camelCase shapes, through `append_assistant_message` (which ends
+  the turn and announces the message);
+* an answer with no text is refused instead of stored as an empty bubble.
+
+The in-memory `FakeAsyncSession` stands in for the database; no gateway is ever
+dialled.
 """
 
 import asyncio
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-from app.core.config import get_settings
 from app.db.models.chat import Chat, ChatMessage, ChatMessageRole
 from app.db.models.operation import Operation, OperationStatus
+from app.llm.agents import advisor
 from app.services import chat_response_service, chat_service, operation_service
 from tests.services.conftest import FakeAsyncSession
 
 USER_ID = "0" * 22 + "USER"
 
+TOOL_CALL = {
+    "id": "01J0TOOLCALL00000000000001",
+    "tool": "catalogue_search",
+    "arguments": {"a2Eligible": True},
+    "result": {"results": [], "totalCount": 0},
+    "status": "succeeded",
+    "error": None,
+}
+SOURCE = {
+    "chunkId": "01J0CHUNK000000000000000001",
+    "motorbikeId": "01J0BIKE0000000000000000AA",
+    "sourceDocumentId": "01J0DOC00000000000000000001",
+    "sourceUrl": "https://example.test/review",
+    "sourceTitle": "CB500F review",
+    "headingPath": "Honda CB500F > Verdict",
+    "score": 0.032,
+}
+RECOMMENDATION = {
+    "motorbikeId": "01J0BIKE0000000000000000AA",
+    "name": "Honda CB500F",
+    "imageUrl": None,
+    "rationale": "Fits your A2 licence and your commute.",
+    "matchedPreferences": ["licence"],
+    "keySpecs": {
+        "category": "naked",
+        "engineCc": 471,
+        "powerKw": 35.0,
+        "wetWeightKg": 189.0,
+        "seatHeightMm": 785,
+        "priceBand": "mid",
+    },
+}
 
-class StubModel:
-    """Records the model id it was built for, the prompts it saw, and answers."""
 
-    def __init__(self, answer: str = "Welcome! What will you use the bike for?") -> None:
-        self.answer = answer
-        self.requested: list[str | None] = []
-        self.prompts: list[list[BaseMessage]] = []
+class RecordedTurn:
+    """Stands in for the agent loop: records its arguments, returns a result."""
 
-    async def ainvoke(self, prompt: list[BaseMessage], **_kwargs: Any) -> AIMessage:
-        self.prompts.append(list(prompt))
-        return AIMessage(self.answer)
+    def __init__(self, result: advisor.AdvisorResult) -> None:
+        self.result = result
+        self.calls: list[tuple[Any, Chat, Any]] = []
+
+    async def __call__(
+        self, session: Any, chat: Chat, *, model: Any = None
+    ) -> advisor.AdvisorResult:
+        self.calls.append((session, chat, model))
+        return self.result
 
 
 @pytest.fixture
-def stub_model(monkeypatch: pytest.MonkeyPatch) -> StubModel:
-    """Replace the chat-model factory the service imported by name."""
-    model = StubModel()
-
-    def factory(name: str | None = None) -> StubModel:
-        model.requested.append(name)
-        return model
-
-    monkeypatch.setattr(chat_response_service, "get_chat_model", factory)
-    return model
+def turn(monkeypatch: pytest.MonkeyPatch) -> RecordedTurn:
+    """Replace the agent loop the service imported, keeping a full result."""
+    recorder = RecordedTurn(
+        advisor.AdvisorResult(
+            body="Welcome! What will you use the bike for?",
+            tool_calls=[TOOL_CALL],
+            sources=[SOURCE],
+            recommendations=[RECOMMENDATION],
+        )
+    )
+    monkeypatch.setattr(advisor, "run_advisor_turn", recorder)
+    return recorder
 
 
 def _chat(session: FakeAsyncSession) -> Chat:
@@ -64,7 +108,7 @@ def _operation(session: FakeAsyncSession, chat: Chat) -> Operation:
 
 
 def test_generate_persists_the_reply_and_ends_the_turn(
-    fake_session: FakeAsyncSession, stub_model: StubModel
+    fake_session: FakeAsyncSession, turn: RecordedTurn
 ) -> None:
     chat = _chat(fake_session)
     operation = _operation(fake_session, chat)
@@ -73,7 +117,7 @@ def test_generate_persists_the_reply_and_ends_the_turn(
     message = asyncio.run(chat_response_service.generate(fake_session, chat, operation))
 
     assert message.role is ChatMessageRole.ASSISTANT
-    assert message.body == stub_model.answer
+    assert message.body == turn.result.body
     assert fake_session.rows(ChatMessage) == [message]
     # `append_assistant_message` owns both: the pointer and the announcement.
     assert chat.active_operation_id is None
@@ -83,70 +127,42 @@ def test_generate_persists_the_reply_and_ends_the_turn(
     assert chat.title is None
 
 
-def test_generate_asks_for_the_configured_advisor_model(
-    fake_session: FakeAsyncSession, stub_model: StubModel
+def test_generate_runs_the_agent_loop_for_this_chat_without_a_model_override(
+    fake_session: FakeAsyncSession, turn: RecordedTurn
 ) -> None:
-    """The model id is a configuration value, never a literal in the code."""
+    """Production never picks the model here — the loop reads `ADVISOR_MODEL`."""
     chat = _chat(fake_session)
 
     asyncio.run(chat_response_service.generate(fake_session, chat, _operation(fake_session, chat)))
 
-    assert stub_model.requested == [get_settings().advisor_model]
+    assert turn.calls == [(fake_session, chat, None)]
 
 
-def test_generate_opens_the_conversation_when_the_timeline_is_empty(
-    fake_session: FakeAsyncSession, stub_model: StubModel
+def test_generate_stores_the_three_traces_verbatim(
+    fake_session: FakeAsyncSession, turn: RecordedTurn
 ) -> None:
+    """The pinned camelCase shapes reach the JSONB columns unchanged.
+
+    Nothing in this module may re-map them: the read path validates them against
+    the frozen `ToolCall`/`MessageSource`/`Recommendation` models, and the writer
+    of those shapes is the agent, not the responder.
+    """
     chat = _chat(fake_session)
 
-    asyncio.run(chat_response_service.generate(fake_session, chat, _operation(fake_session, chat)))
-
-    prompt = stub_model.prompts[0]
-    # System prompt only: there is nothing yet to replay.
-    assert len(prompt) == 1
-    assert isinstance(prompt[0], SystemMessage)
-    assert "open the conversation" in prompt[0].text.lower()
-
-
-def test_generate_replays_the_whole_timeline_body_only(
-    fake_session: FakeAsyncSession, stub_model: StubModel
-) -> None:
-    chat = _chat(fake_session)
-    asyncio.run(chat_service.append_user_message(fake_session, chat, "I ride to work daily."))
-    asyncio.run(
-        chat_service.append_assistant_message(
-            fake_session,
-            chat,
-            "How far is your commute?",
-            tool_calls=[{"tool": "catalogue_search"}],
-        )
+    message = asyncio.run(
+        chat_response_service.generate(fake_session, chat, _operation(fake_session, chat))
     )
-    asyncio.run(chat_service.append_user_message(fake_session, chat, "About 20 km."))
 
-    asyncio.run(chat_response_service.generate(fake_session, chat, _operation(fake_session, chat)))
-
-    prompt = stub_model.prompts[0]
-    assert [type(message) for message in prompt] == [
-        SystemMessage,
-        HumanMessage,
-        AIMessage,
-        HumanMessage,
-    ]
-    assert [message.text for message in prompt[1:]] == [
-        "I ride to work daily.",
-        "How far is your commute?",
-        "About 20 km.",
-    ]
-    # Past tool traffic is deliberately not replayed.
-    assert "catalogue_search" not in "\n".join(message.text for message in prompt)
-    assert "continue the interview" in prompt[0].text.lower()
+    assert message.tool_calls == [TOOL_CALL]
+    assert message.sources == [SOURCE]
+    assert message.recommendations == [RECOMMENDATION]
 
 
 def test_generate_refuses_to_store_an_empty_answer(
-    fake_session: FakeAsyncSession, stub_model: StubModel
+    fake_session: FakeAsyncSession, turn: RecordedTurn
 ) -> None:
     """An empty bubble would look like a delivered answer; the job apologises instead."""
-    stub_model.answer = "   \n "
+    turn.result = advisor.AdvisorResult(body="", tool_calls=[TOOL_CALL])
     chat = _chat(fake_session)
     operation = _operation(fake_session, chat)
     chat.active_operation_id = operation.id

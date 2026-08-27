@@ -85,6 +85,14 @@ class Settings(BaseSettings):
     rrf_k: int = 60
     retrieval_candidates_per_leg: int = 50
 
+    # The advisor's agent loop: how many tool rounds one turn may spend before it
+    # has to answer with what it has, and how long the whole turn may take. The
+    # timeout is also the basis of the stale-turn threshold
+    # (`chat_service.stale_turn_seconds()`), so the API starts accepting messages
+    # again shortly after a turn can no longer be alive.
+    agent_max_tool_steps: int = 8
+    agent_timeout_seconds: float = 120
+
 
 @lru_cache
 def get_settings() -> Settings:

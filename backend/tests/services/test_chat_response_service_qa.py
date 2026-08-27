@@ -24,6 +24,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from app.core.config import get_settings
 from app.db.models.chat import Chat
 from app.db.models.operation import Operation
+from app.llm.agents import advisor
 from app.services import chat_response_service, chat_service, operation_service
 from tests.services.conftest import FakeAsyncSession
 
@@ -35,6 +36,10 @@ class StubModel:
         self.answer = answer
         self.requested: list[str | None] = []
         self.prompts: list[list[BaseMessage]] = []
+
+    def bind_tools(self, _tools: Any) -> "StubModel":
+        """The agent loop binds the advisor's tools; this stub answers either way."""
+        return self
 
     async def ainvoke(self, prompt: list[BaseMessage], **_kwargs: Any) -> AIMessage:
         self.prompts.append(list(prompt))
@@ -49,7 +54,8 @@ def stub_model(monkeypatch: pytest.MonkeyPatch) -> StubModel:
         model.requested.append(name)
         return model
 
-    monkeypatch.setattr(chat_response_service, "get_chat_model", factory)
+    # Step 3.13 moved the factory into the agent loop the service delegates to.
+    monkeypatch.setattr(advisor, "get_chat_model", factory)
     return model
 
 

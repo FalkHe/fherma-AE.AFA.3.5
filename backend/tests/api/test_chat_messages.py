@@ -584,7 +584,7 @@ def test_post_fails_a_timed_out_turn_and_accepts_the_message(
     """The killed-worker case: an unfinished turn older than the threshold is lost."""
     chat = _seed_chat(fake_session, customer.user_id)
     lost = _seed_operation(
-        fake_session, chat, status=status, age_seconds=chat_service.STALE_TURN_SECONDS + 1
+        fake_session, chat, status=status, age_seconds=chat_service.stale_turn_seconds() + 1
     )
 
     response = _send(customer.client, chat.id, "Hello? Anybody?")
@@ -633,7 +633,7 @@ def test_post_while_a_turn_is_in_flight_returns_409_response_pending(
 
 def test_the_stale_threshold_matches_the_constant_the_spa_mirrors() -> None:
     """150 s = the pinned `AGENT_TIMEOUT_SECONDS` (120) + 30, mirrored in the UI."""
-    assert chat_service.STALE_TURN_SECONDS == 150
+    assert chat_service.stale_turn_seconds() == 150
 
 
 def test_post_just_below_the_stale_threshold_is_still_pending(
@@ -645,7 +645,7 @@ def test_post_just_below_the_stale_threshold_is_still_pending(
         fake_session,
         chat,
         status=OperationStatus.RUNNING,
-        age_seconds=chat_service.STALE_TURN_SECONDS - 5,
+        age_seconds=chat_service.stale_turn_seconds() - 5,
     )
 
     assert _send(customer.client, chat.id, "Hello?").status_code == 409

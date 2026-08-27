@@ -26,6 +26,7 @@ from app.db.models.chat import Chat, ChatMessage, ChatMessageRole
 from app.db.models.operation import Operation, OperationStatus
 from app.jobs import TransientJobError
 from app.jobs import chat as job
+from app.llm.agents import advisor
 from app.services import chat_response_service, chat_service, operation_service
 from tests.services.conftest import FakeAsyncSession
 
@@ -100,10 +101,16 @@ def test_an_empty_llm_answer_still_apologises_through_the_real_service(
     not a stand-in exception chosen to resemble it."""
 
     class BlankModel:
+        def bind_tools(self, _tools: Any) -> "BlankModel":
+            """The agent loop binds its tools before invoking; this model has none."""
+            return self
+
         async def ainvoke(self, *_args: Any, **_kwargs: Any) -> AIMessage:
             return AIMessage("   \n\t  ")
 
-    monkeypatch.setattr(chat_response_service, "get_chat_model", lambda *_a, **_k: BlankModel())
+    # Since step 3.13 the model is built by the agent loop, which the (real)
+    # response service delegates to; the seam moved, the assertion did not.
+    monkeypatch.setattr(advisor, "get_chat_model", lambda *_a, **_k: BlankModel())
 
     chat = _chat(fake_session)
     operation = _turn(fake_session, chat)

@@ -897,3 +897,51 @@ depend on. 1–3 bullets per step, no prose.
   `SPEC_CATEGORIES` / `PRICE_BANDS` — bump the version whenever a coefficient
   changes. **Dev-DB gap for whoever demos this:** no approved model has a verified
   `msrp_eur` or `price_band`, so the live estimate has no purchase-price line.
+
+### Step 3.13 (advisor agent loop)
+
+- **`advisor.run_advisor_turn(session, chat, *, model=None) -> AdvisorResult(body,
+  tool_calls, sources, recommendations)`** is the whole turn and the only caller of
+  `build_advisor_tools`; `chat_response_service.generate` is now three lines around
+  it (empty `body` still raises `EmptyAnswerError`) and **the model factory moved
+  into `advisor`** — anything stubbing the advisor's model must patch
+  `advisor.get_chat_model`, and a stub needs a `bind_tools` returning the runnable
+  (three existing test files were repointed). `build_context(history, preferences)`
+  renders `advisor_system.md` with **two** variables now (`is_opening`,
+  `preferences` — a list of `{attribute, value, firmness}` dicts; StrictUndefined,
+  so both are mandatory). One round = one tool-bound `ainvoke` + all its calls;
+  after `AGENT_MAX_TOOL_STEPS` rounds one **tools-unbound** invoke preceded by an
+  appended `SystemMessage(advisor.WRAP_UP_INSTRUCTION)` ends the turn with prose
+  (proven live at `AGENT_MAX_TOOL_STEPS=1`: 3 calls in one round, then an answer,
+  operation `succeeded`). A failing tool, an unregistered tool name and a
+  `ValidationError` all become an `error` `ToolMessage` for the model, never an
+  exception — so only a gateway failure or `asyncio.timeout` ends a turn (live:
+  `AGENT_TIMEOUT_SECONDS=1` → `TimeoutError` → apology row + `failed` operation +
+  cleared pointer).
+- **`ToolCallCollector` now owns all three traces:** `tool_calls` (list, unchanged),
+  plus `record_sources(...)`/`sources()` (dedupe by `sourceDocumentId` keeping the
+  best score, order `-score, chunkId`, cap `tools.MAX_SOURCES = 8`) and
+  `record_recommendations(...)`/`recommendations()` (dedupe by `motorbikeId`,
+  **first** snapshot wins, presentation order). Writers push pinned camelCase dicts
+  and know none of those rules. Registry is now 6, order
+  `… cost_estimator, retrieve_bike_knowledge, present_recommendations` — 3.14
+  inserts `record_preference`/`flag_unknown_bike` **before**
+  `present_recommendations`. `retrieve_bike_knowledge` wraps
+  `rag_pipeline_service.retrieve` (`MAX_SNIPPETS = 6`, `limit` = that, passes the
+  chat's active preferences, one `KnowledgeSnippet` model serving both the result's
+  full `text` and, minus `text`, the `sources[]` entry); `present_recommendations`
+  resolves per item (skips the unknown/unapproved instead of stopping like
+  `resolve_references`), enriches `keySpecs` from `get_verified_specs` and `imageUrl`
+  from the **newest approved** image via `app.api.schemas.images.variant_urls(...)
+  .card` (the LLM layer deliberately reuses the API layer's URL formula rather than
+  copying it), and answers `{presented, skipped, message}`.
+- **Config:** `AGENT_MAX_TOOL_STEPS=8`, `AGENT_TIMEOUT_SECONDS=120` (`config.py` +
+  `.env.dist`). 3.5's interim `chat_service.STALE_TURN_SECONDS = 150` is **gone** —
+  it is now `chat_service.stale_turn_seconds()` = `agent_timeout_seconds +
+  STALE_TURN_GRACE_SECONDS (30)`, a function so settings are read at call time (an
+  import-time constant would freeze the developer's `.env` into the test process).
+  The frontend's `CHAT_TURN_STALE_SECONDS = 150` still mirrors the default sum.
+  Nested tool-arg models are safe: LangChain **inlines `$defs`/`$ref`** into the
+  function schema (verified against the installed version, live-proven with
+  `present_recommendations`' list of objects), so 3.8's nested-`additionalProperties`
+  finding stays a *structured-output* rule only.

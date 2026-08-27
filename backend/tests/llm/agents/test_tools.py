@@ -35,6 +35,8 @@ from app.llm.agents.tools import (
     catalogue_search,
     cost_estimator,
     licence_fit_check,
+    present_recommendations,
+    retrieve_bike_knowledge,
     spec_comparison,
 )
 from app.llm.query_translation import SpecFilters
@@ -130,9 +132,12 @@ def test_the_registry_holds_this_step_s_tools_and_rejects_an_unknown_name() -> N
         spec_comparison.NAME,
         licence_fit_check.NAME,
         cost_estimator.NAME,
+        retrieve_bike_knowledge.NAME,
+        present_recommendations.NAME,
     ]
+    # Step 3.14's two write tools are not registered yet.
     with pytest.raises(KeyError):
-        tools.get_tool_spec("present_recommendations")
+        tools.get_tool_spec("record_preference")
 
 
 def test_every_registered_tool_has_a_described_camel_aliased_args_schema() -> None:

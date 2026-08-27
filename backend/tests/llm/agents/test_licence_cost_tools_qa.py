@@ -115,7 +115,9 @@ def _execute(name: str, ctx: tools.ToolContext, arguments: dict[str, Any]) -> di
 
 
 def test_both_new_tools_are_registered_after_the_311_tools_in_reading_order() -> None:
-    assert tools.tool_names() == [
+    # Step 3.13 appended `retrieve_bike_knowledge` and `present_recommendations`
+    # behind these four; the 3.12 tools keep their reading-order position.
+    assert tools.tool_names()[:4] == [
         catalogue_search.NAME,
         spec_comparison.NAME,
         licence_fit_check.NAME,

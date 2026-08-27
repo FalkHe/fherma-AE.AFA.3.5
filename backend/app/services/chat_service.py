@@ -43,6 +43,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.db.models.base import new_ulid
 from app.db.models.chat import (
     TITLE_LENGTH,
@@ -58,18 +59,31 @@ from app.services import operation_service
 # `operations.type` of one response turn.
 RESPONSE_OPERATION_TYPE = "chat.response"
 
-# How long a turn may be queued or running before it is considered lost. The
-# frontend mirrors it as `CHAT_TURN_STALE_SECONDS`, so the composer re-opens at
-# the same moment the API starts accepting messages again.
-# TODO(3.13): read `AGENT_TIMEOUT_SECONDS` (120) + 30 from settings once the
-# agent configuration keys land; this constant is that sum.
-STALE_TURN_SECONDS = 150
+# The grace period added to one turn's own time budget before the API gives up
+# on it: the agent loop is cancelled at `AGENT_TIMEOUT_SECONDS`, and the job
+# still has to store the apology and fail the operation after that.
+STALE_TURN_GRACE_SECONDS = 30
 
 # What an admin reads on an operation this healing gave up on.
 TIMED_OUT_ERROR = "Response timed out."
 
 # The two statuses a turn cannot come back from.
 _TERMINAL_STATUSES = frozenset({OperationStatus.SUCCEEDED, OperationStatus.FAILED})
+
+
+def stale_turn_seconds() -> float:
+    """Return how long a turn may be queued or running before it is considered lost.
+
+    `AGENT_TIMEOUT_SECONDS` (what the agent loop gives itself) plus the grace
+    period above — derived rather than configured, so the two can never drift
+    apart. The frontend mirrors the sum as `CHAT_TURN_STALE_SECONDS`, so the
+    composer re-opens at the same moment the API starts accepting messages
+    again; changing `AGENT_TIMEOUT_SECONDS` means changing that constant too.
+
+    A function, not a module constant: settings are read at call time, so a
+    process that configures the timeout does not depend on import order.
+    """
+    return get_settings().agent_timeout_seconds + STALE_TURN_GRACE_SECONDS
 
 
 async def create_chat(session: AsyncSession, user_id: str) -> Chat:
@@ -249,7 +263,7 @@ async def heal_stale_turn(session: AsyncSession, chat: Chat) -> bool:
     * Pointer at a `succeeded`/`failed` operation → the turn is over; the
       pointer is cleared and the consultation is free.
     * Pointer at a `queued`/`running` operation older than
-      `STALE_TURN_SECONDS` → nobody is coming back for it: the operation is
+      `stale_turn_seconds()` → nobody is coming back for it: the operation is
       failed with `TIMED_OUT_ERROR`, the pointer is cleared, and the
       consultation is free.
     * Anything else → a turn is genuinely in flight; the caller answers 409.
@@ -272,7 +286,7 @@ async def heal_stale_turn(session: AsyncSession, chat: Chat) -> bool:
         await _clear_active_operation(session, chat)
         return True
 
-    if datetime.now(UTC) - operation.created_at > timedelta(seconds=STALE_TURN_SECONDS):
+    if datetime.now(UTC) - operation.created_at > timedelta(seconds=stale_turn_seconds()):
         await operation_service.fail(session, operation, TIMED_OUT_ERROR)
         await _clear_active_operation(session, chat)
         return True
