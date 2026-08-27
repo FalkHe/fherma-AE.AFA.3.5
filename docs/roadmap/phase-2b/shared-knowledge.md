@@ -219,3 +219,31 @@ here** — phase-3's `shared-knowledge.md` and `step-3.1.md` reference it.
   `tests/cli/test_users.py` rather than sharing it; the live re-extraction moved
   the Suzuki's **draft** `seat_height_mm` 800 → 785 (model variance) — the
   `verified` row and therefore the API payload are untouched.
+
+### Step 2b.3 (`/api/manufacturers` read endpoints)
+
+- **The resource is live as pinned.** `app/api/schemas/manufacturers.py`
+  (`MANUFACTURER_TYPE = "manufacturers"`, `ManufacturerAttributes` with
+  `ConfigDict(from_attributes=True)` and no request model at all — the
+  `SpecAttributes` precedent) plus `app/api/endpoints/manufacturers.py`
+  (`GET ""`, `GET "/{manufacturer_id}"`, router-level `Depends(current_admin)`,
+  no `csrf_protect` because there is nothing to protect). Generated client
+  operation ids: `list_manufacturers_api_manufacturers_get` and
+  `get_manufacturer_api_manufacturers__manufacturer_id__get`; the
+  `schema.d.ts` diff was purely additive (three hunks, zero deletions, products
+  types byte-identical). Registered in `main.py` between `images` and
+  `operations` (routers stay alphabetical).
+- **No new service function for the detail route.** `_get_or_404` reuses
+  `manufacturer_service.get_by_ids(session, [id]).get(id)`, so the 2b.1 service
+  contract is unchanged and this module owns no query of its own. A later step
+  that needs a real `get_manufacturer(session, id)` should add it to the service,
+  not query here.
+- **`app/api/endpoints/__init__.py` and `app/api/schemas/__init__.py` were left
+  untouched**: both are docstring-only packages with no re-export registry
+  (`main.py` imports the modules directly), so "register there" was a no-op —
+  adding `__all__` lists would have been a new convention.
+- **Live dev DB state unchanged** (2b.4 can rely on it): 3 manufacturers, 3
+  assigned bikes, 8 source documents, 49 chunks, 49 embeddings, head
+  `485b2042d7f8`. The smoke test used a throw-away account `tmp2b3admin`
+  (registered via `/auth/register`, promoted, then set back to `user` — same
+  precedent as `tmp2b2admin`); no admin session of it is left signed in.

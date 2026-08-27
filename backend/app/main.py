@@ -13,7 +13,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api.endpoints import auth, documents, events, health, images, operations, products
+from app.api.endpoints import (
+    auth,
+    documents,
+    events,
+    health,
+    images,
+    manufacturers,
+    operations,
+    products,
+)
 from app.api.endpoints.events import LISTENER_STATE_ATTRIBUTE
 from app.api.jsonapi import JsonApiError, json_api_error_handler
 from app.core.config import Settings, get_settings
@@ -89,6 +98,7 @@ def create_app() -> FastAPI:
     app.include_router(events.router, prefix="/api")
     app.include_router(documents.router, prefix="/api")
     app.include_router(images.router, prefix="/api")
+    app.include_router(manufacturers.router, prefix="/api")
     app.include_router(operations.router, prefix="/api")
     app.include_router(products.router, prefix="/api")
 

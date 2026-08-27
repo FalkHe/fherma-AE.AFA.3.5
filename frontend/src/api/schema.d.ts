@@ -223,6 +223,46 @@ export interface paths {
         patch: operations["update_product_image_api_product_images__image_id__patch"];
         trace?: never;
     };
+    "/api/manufacturers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List manufacturers
+         * @description Return one page of the brand list, alphabetically by name.
+         */
+        get: operations["list_manufacturers_api_manufacturers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/manufacturers/{manufacturer_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a manufacturer
+         * @description Return one manufacturer.
+         */
+        get: operations["get_manufacturer_api_manufacturers__manufacturer_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/operations": {
         parameters: {
             query?: never;
@@ -475,6 +515,61 @@ export interface components {
              * @default false
              */
             rememberMe: boolean;
+        };
+        /**
+         * ManufacturerAttributes
+         * @description The pinned attribute set of a manufacturer.
+         */
+        ManufacturerAttributes: {
+            /** Name */
+            name: string;
+            /** Slug */
+            slug: string;
+            /** Description */
+            description: string | null;
+            /** Logopath */
+            logoPath: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /**
+         * ManufacturerDocument
+         * @description Body of `GET /api/manufacturers/{id}`.
+         */
+        ManufacturerDocument: {
+            data: components["schemas"]["ManufacturerResource"];
+        };
+        /**
+         * ManufacturerListDocument
+         * @description Body of `GET /api/manufacturers`.
+         */
+        ManufacturerListDocument: {
+            /** Data */
+            data: components["schemas"]["ManufacturerResource"][];
+            meta: components["schemas"]["Meta"];
+        };
+        /**
+         * ManufacturerResource
+         * @description A manufacturer resource object.
+         */
+        ManufacturerResource: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default manufacturers
+             * @constant
+             */
+            type: "manufacturers";
+            attributes: components["schemas"]["ManufacturerAttributes"];
         };
         /**
          * Meta
@@ -1172,6 +1267,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+        };
+    };
+    list_manufacturers_api_manufacturers_get: {
+        parameters: {
+            query?: {
+                /** @description 1-based page number. */
+                "page[number]"?: number;
+                /** @description Rows per page (maximum 100). */
+                "page[size]"?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManufacturerListDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_manufacturer_api_manufacturers__manufacturer_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description ULID of the manufacturer. */
+                manufacturer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManufacturerDocument"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
