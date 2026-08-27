@@ -26,6 +26,7 @@ const CHAT_IDS = {
   interview: "01CHATINTERVIEW00000000001",
   typing: "01CHATTYPING000000000000001",
   stale: "01CHATSTALE0000000000000001",
+  flip: "01CHATFLIP00000000000000001",
   new: "01CHATNEW000000000000000001",
   empty: "01CHATEMPTY0000000000000001",
   gone: "01CHATGONE00000000000000001",
@@ -45,6 +46,20 @@ vi.mock("react-router", async (importOriginal) => {
 
 function minutesAgo(minutes: number): string {
   return new Date(Date.now() - minutes * 60_000).toISOString();
+}
+
+/** `CHAT_TURN_STALE_SECONDS` (module-private in the route) in milliseconds. */
+const STALE_MS = 150_000;
+
+/**
+ * A turn that is *almost* stale, so the route's own timer is the only thing that
+ * has to happen for it to tip over — the flip is observable in real time instead
+ * of 150 s from now.
+ */
+const ALMOST_STALE_MS = STALE_MS - 400;
+
+function msAgo(milliseconds: number): string {
+  return new Date(Date.now() - milliseconds).toISOString();
 }
 
 function chat(
@@ -164,6 +179,13 @@ function installApi() {
         createdAt: new Date().toISOString(),
       }),
     ],
+    [
+      CHAT_IDS.flip,
+      chat(CHAT_IDS.flip, {
+        title: "A turn about to be lost",
+        activeOperationId: "01OPERATIONFLIP00000000001",
+      }),
+    ],
     [CHAT_IDS.empty, chat(CHAT_IDS.empty, {})],
   ]);
 
@@ -183,6 +205,14 @@ function installApi() {
         message("01MESSAGESTALE000000000001", "assistant", "Tell me what you ride today.", minutesAgo(20)),
         // Older than CHAT_TURN_STALE_SECONDS (150 s), so the turn is lost.
         message("01MESSAGESTALE000000000002", "user", "I'm on a 125.", minutesAgo(6)),
+      ],
+    ],
+    [
+      CHAT_IDS.flip,
+      [
+        message("01MESSAGEFLIP0000000000001", "assistant", "What do you ride now?", minutesAgo(9)),
+        // Not stale yet — it becomes stale 400 ms from now, on the route's timer.
+        message("01MESSAGEFLIP0000000000002", "user", "Nothing yet.", msAgo(ALMOST_STALE_MS)),
       ],
     ],
     [CHAT_IDS.new, []],
@@ -351,6 +381,32 @@ describe("ConsultationChatRoute — turn states", () => {
 
     await userEvent.type(composer(), "Trying again");
     expect(sendButton()).toBeEnabled();
+  });
+
+  it("row 4: a waiting turn goes stale on its own timer, even if the timer fires early", async () => {
+    chatIdParam = CHAT_IDS.flip;
+
+    // Chromium fires a long `setTimeout` a few milliseconds *early* — observed
+    // 9 ms short of the real 150 s timer while verifying step 3.15. A frozen
+    // clock models exactly that: the callback runs while `Date.now()` is still
+    // behind the deadline. Recording `Date.now()` as the tick used to wedge this
+    // state for good — the comparison failed and, `deadline` never changing, the
+    // effect never re-armed, so the turn stayed "typing" as long as the page did.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
+
+    renderWithProviders(<ConsultationChatRoute />);
+
+    expect(
+      await screen.findByRole("status", { name: "The advisor is typing…" }),
+    ).toBeInTheDocument();
+
+    // Nothing on the network moves; only the route's own timer does.
+    expect(
+      await screen.findByText(/The advisor could not finish this reply/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("status", { name: "The advisor is typing…" }),
+    ).not.toBeInTheDocument();
   });
 
   it("an empty idle chat shows the intro hint instead of a timeline", async () => {

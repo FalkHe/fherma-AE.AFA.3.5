@@ -92,6 +92,12 @@ function SubtleToolRow({ glyph, text }: { glyph: string; text: string }) {
 function GenericToolResult({ result }: { result: ToolCall["result"] }) {
   const entries = Object.entries(result);
 
+  // A failed call carries `result: {}` by convention — an empty table frame
+  // would be chrome around nothing; the error note below it is the content.
+  if (entries.length === 0) {
+    return null;
+  }
+
   return (
     <Table size="small">
       <TableBody>
@@ -106,10 +112,16 @@ function GenericToolResult({ result }: { result: ToolCall["result"] }) {
             </TableCell>
             <TableCell sx={{ borderBottom: 0, py: 0.25 }}>
               {typeof value === "object" && value !== null ? (
+                // `pre-wrap` alone breaks only at whitespace, and serialized
+                // tool output routinely holds a single unbreakable token far
+                // wider than a phone (an escaped multi-line snippet, a URL).
+                // Without `anywhere` that token pushes the whole *document*
+                // sideways instead of wrapping inside the bubble — ui-spec §13's
+                // long-content rule, verified at 390 px.
                 <Typography
                   variant="caption"
                   component="pre"
-                  sx={{ m: 0, whiteSpace: "pre-wrap" }}
+                  sx={{ m: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
                 >
                   {JSON.stringify(value, null, 2)}
                 </Typography>
@@ -212,6 +224,20 @@ export function ToolResultBlock({ toolCall }: { toolCall: ToolCall }) {
   return (
     <ToolResultFrame glyph="build" label={toolCall.tool}>
       <GenericToolResult result={result} />
+      {/* A failed call has an empty result, so without the note the block would
+          be a label over nothing — the reader could not tell "the tool found
+          nothing" from "the tool broke". The message is server-composed English
+          rendered verbatim, the same i18n exemption as operation failures. */}
+      {toolCall.status === "failed" && toolCall.error !== null && (
+        <Stack
+          direction="row"
+          spacing={0.75}
+          sx={{ alignItems: "flex-start", color: "error.main" }}
+        >
+          <Icon fontSize="inherit">error</Icon>
+          <Typography variant="caption">{toolCall.error}</Typography>
+        </Stack>
+      )}
     </ToolResultFrame>
   );
 }

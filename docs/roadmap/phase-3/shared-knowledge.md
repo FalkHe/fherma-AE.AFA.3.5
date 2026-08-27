@@ -981,3 +981,47 @@ depend on. 1–3 bullets per step, no prose.
   same bike, one backlog row. Observed model quirk: it sometimes re-records an unchanged
   preference, which is a third row with one active — by design (`tool_calls` records
   what happened), not a bug.
+
+### Step 3.15 (advisor UI wired live, S2 closed)
+
+- **Regenerated types are byte-identical** (`openapi.json` and `src/api/schema.d.ts`
+  both unchanged) — the surface frozen at 3.3 held, and every pinned JSONB/tool shape
+  matched the real persisted rows with no renderer adaptation. **Three renderer bugs
+  fixed, all found only against real data:** (1) `useTurnIsStale` recorded
+  `setTick(Date.now())`, but Chromium fires a long `setTimeout` a few ms *early*
+  (measured 9 ms short of the 150 s timer) — the strict `deadline <= tick` then failed
+  and, `deadline` never changing, the effect never re-armed, so **a lost turn stayed
+  "typing" forever while the page stayed open**; the tick is now `setTick(deadline)`,
+  which means "the timer for this deadline fired". Any later derived-from-tick timer
+  must record the deadline, never the observed clock. (2) The chat breadcrumb needed
+  `"& .MuiBreadcrumbs-li": { minWidth: 0 }` — a flex item's automatic minimum is its
+  min-content width, which under the spec's `noWrap` is the whole 160-char title, so
+  the *document* scrolled sideways at 390 px instead of the title ellipsizing.
+  (3) §8.6's `<pre>` gained `overflowWrap: "anywhere"` (ui-spec §13's rule): `pre-wrap`
+  breaks only at whitespace and serialized tool output carries single unbreakable
+  tokens far wider than a phone. Both (2) and (3) are the same class as 3.10's
+  `maxWidth: "100%"` pin — **check `documentElement.scrollWidth` at 390 px, not just
+  that it looks right at desktop width.**
+- **3.10's "the error is not rendered" reading is superseded** (step-3.15 asks for
+  "generic fallback + error note"): `GenericToolResult` returns `null` for an empty
+  result and the fallback frame renders `toolCalls[].error` verbatim as an
+  `error.main` caption when `status === "failed"` — otherwise a failed call was a
+  label over nothing and "found nothing" was indistinguishable from "broke". Nothing
+  else about the dispatch changed; `retrieve_bike_knowledge` and
+  `present_recommendations` still land in the generic table by design (they are not in
+  ui-spec §8.1's table), which is what proves the unknown-tool path live.
+- **Live-proven, no code needed:** all four styled renderers, both subtle rows, the
+  `{"unknownBike": …}` → generic fallback, source de-dup with working external links
+  (200), cards with real `/media` images (`VITE_API_URL` → `localhost:8000`, thumb
+  picked by `srcSet`, non-interactive), resume-after-close (browser killed mid-turn →
+  reopen shows typing + "Seen" → reply arrives over SSE, no reload), and the whole
+  kill-the-worker story (worker stopped **and the redis task purged**, else a restarted
+  worker just drains the queue and there is nothing to heal → stale row at 150 s →
+  next send marks the abandoned operation `failed`/"Response timed out." and answers).
+  **Two advisor-quality findings for 3.16, not UI bugs:** the model invents
+  slug-like ids for `motorbikeId`/`motorbikeName` (`"honda_cb500f"`,
+  `"bmw_s_1000_xr_999cc_121kw"`) instead of reusing the ULIDs `catalogue_search`
+  returned, so `spec_comparison`/`licence_fit_check`/`cost_estimator`/
+  `present_recommendations` answer `unknownBike` until told the exact catalogue name;
+  and a stated budget makes `catalogue_search` return nothing, because no approved
+  model has a verified `price_band` (open-questions N1).

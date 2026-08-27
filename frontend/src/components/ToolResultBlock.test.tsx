@@ -88,7 +88,7 @@ describe("ToolResultBlock", () => {
     expect(screen.getByText('"Bimota Tesi H2"')).toBeInTheDocument();
   });
 
-  it("keeps a failed call visible", () => {
+  it("keeps a failed call visible, and says what went wrong", () => {
     const failed: ToolCall = {
       id: "01TOOLCALLFAILED",
       tool: "cost_estimator",
@@ -102,5 +102,17 @@ describe("ToolResultBlock", () => {
 
     expect(screen.getByText("cost_estimator")).toBeInTheDocument();
     expect(screen.queryByText("Cost estimate")).not.toBeInTheDocument();
+    // A failed call carries `result: {}`, so without the note the block would be
+    // a label over nothing and the reader could not tell "found nothing" from
+    // "broke". The message is server-composed and rendered verbatim.
+    expect(screen.getByText("Cost coefficients unavailable.")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("shows no error note on a succeeded call", () => {
+    renderWithProviders(<ToolResultBlock toolCall={unknownToolCall} />);
+
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.queryByText(/unavailable/)).not.toBeInTheDocument();
   });
 });

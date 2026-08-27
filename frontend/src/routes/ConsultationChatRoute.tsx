@@ -72,6 +72,14 @@ function nextLocalId(): string {
  * in flight) disarms it. The stale verdict is *derived* from the last tick rather
  * than stored as a boolean, which is what keeps a newer turn from inheriting an
  * older turn's staleness without a reset-in-effect.
+ *
+ * The tick is set to the `deadline`, **not** to `Date.now()`: Chromium fires a
+ * long `setTimeout` a few milliseconds *early* (observed 9 ms short of a 150 s
+ * timer), and with a `Date.now()` tick the strict comparison below then fails —
+ * for good, because `deadline` never changes, so the effect never re-arms and the
+ * turn stays "typing" forever. Recording the deadline makes the comparison mean
+ * exactly what it should: *the timer for this deadline has fired*. A newer turn
+ * still cannot inherit staleness, because its deadline is later than this tick.
  */
 function useTurnIsStale(since: string | null): boolean {
   const [tick, setTick] = useState(() => Date.now());
@@ -89,7 +97,7 @@ function useTurnIsStale(since: string | null): boolean {
       return;
     }
 
-    const timer = window.setTimeout(() => setTick(Date.now()), remaining);
+    const timer = window.setTimeout(() => setTick(deadline), remaining);
 
     return () => {
       window.clearTimeout(timer);
@@ -344,7 +352,13 @@ export function ConsultationChatRoute() {
 
   return (
     <>
-      <Breadcrumbs sx={{ mb: 2 }}>
+      {/* `minWidth: 0` on the crumbs is load-bearing, not decoration: the title is
+          the first user message truncated to 160 characters, and a flex item's
+          automatic minimum size is its *min-content* width — which, under the
+          spec's `noWrap`, is the whole untruncated line. Without this the crumb
+          never shrinks and the document itself scrolls sideways on a phone
+          (verified at 390 px), instead of the title ellipsizing. */}
+      <Breadcrumbs sx={{ mb: 2, "& .MuiBreadcrumbs-li": { minWidth: 0 } }}>
         <Link component={RouterLink} to="/consultations">
           {t("consultations.chat.back")}
         </Link>
