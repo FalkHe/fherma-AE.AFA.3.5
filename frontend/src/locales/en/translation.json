@@ -287,14 +287,28 @@
     },
     "specFields": {
       "category": "Category",
+      "engineCc": "Engine displacement",
+      "cylinders": "Cylinders",
       "powerKw": "Power",
+      "torqueNm": "Torque",
       "wetWeightKg": "Wet weight",
-      "seatHeightMm": "Seat height"
+      "seatHeightMm": "Seat height",
+      "tankCapacityL": "Tank capacity",
+      "topSpeedKmh": "Top speed",
+      "abs": "ABS",
+      "a2Eligible": "A2 eligible",
+      "priceBand": "Price band",
+      "msrpEur": "List price"
     },
     "specUnits": {
+      "cc": "cc",
       "kw": "kW",
+      "nm": "Nm",
       "kg": "kg",
-      "mm": "mm"
+      "mm": "mm",
+      "l": "l",
+      "kmh": "km/h",
+      "eur": "€"
     }
   },
   "themeMode": {

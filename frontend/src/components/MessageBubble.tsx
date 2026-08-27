@@ -13,6 +13,10 @@ import remarkGfm from "remark-gfm";
 
 import type { ChatMessage } from "../hooks/useChatMessages";
 
+import { MessageSources } from "./MessageSources";
+import { RecommendationCard } from "./RecommendationCard";
+import { ToolResultBlock } from "./ToolResultBlock";
+
 /**
  * One message in the conversation: the user's own words on the right, the
  * advisor's answer on the left.
@@ -23,6 +27,11 @@ import type { ChatMessage } from "../hooks/useChatMessages";
  * advisor's body goes through the pinned `react-markdown` configuration (GFM
  * tables, raw HTML **off** — never add `rehype-raw`), with links opening in a
  * new tab instead of navigating the SPA.
+ *
+ * The advisor's parts appear in one pinned order (ui-spec §6): what the advisor
+ * *did* (tool blocks), the answer (Markdown body), the payoff (recommendation
+ * cards), the receipts (sources toggle). This component owns that order;
+ * each part owns its own rendering.
  *
  * It is a presentational component: it receives an already-fetched message and
  * translates only its own chrome. The send state arrives as a separate prop
@@ -62,6 +71,19 @@ const MARKDOWN_SX = {
   "& pre": { overflowX: "auto" },
   "& a": { wordBreak: "break-word" },
   "& p": { my: 1 },
+} as const;
+
+/**
+ * `maxWidth: "100%"` is load-bearing, not decoration: without it a wide
+ * comparison table's min-content width pushes the whole bubble past the
+ * viewport on a phone instead of scrolling inside it (ui-spec §8.3 — "the
+ * bubble's maxWidth bounds it").
+ */
+const ASSISTANT_PAPER_SX = {
+  px: 2,
+  py: 1.25,
+  borderRadius: 3,
+  maxWidth: "100%",
 } as const;
 
 /**
@@ -189,15 +211,37 @@ export function MessageBubble({
           </Typography>
         </Paper>
       ) : (
-        <Paper variant="outlined" sx={{ px: 2, py: 1.25, borderRadius: 3 }}>
-          {/* Part slot 1 — tool-call blocks (ui-spec §8), added in step 3.10. */}
+        <Paper variant="outlined" sx={ASSISTANT_PAPER_SX}>
+          {/* What the advisor did — in call order, blocks and subtle rows mixed. */}
+          {message.toolCalls.map((toolCall) => (
+            <ToolResultBlock key={toolCall.id} toolCall={toolCall} />
+          ))}
           <Box sx={MARKDOWN_SX}>
             <Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
               {message.body}
             </Markdown>
           </Box>
-          {/* Part slot 2 — recommendation cards (ui-spec §9), step 3.10. */}
-          {/* Part slot 3 — the sources toggle (ui-spec §7), step 3.10. */}
+          {message.recommendations.length > 0 && (
+            <>
+              <Typography variant="subtitle2" sx={{ mt: 1 }}>
+                {t("consultations.recommendations.heading")}
+              </Typography>
+              <Stack
+                direction={{ xs: "column", sm: "row" }}
+                spacing={2}
+                useFlexGap
+                sx={{ flexWrap: "wrap", my: 1 }}
+              >
+                {message.recommendations.map((recommendation) => (
+                  <RecommendationCard
+                    key={recommendation.motorbikeId}
+                    recommendation={recommendation}
+                  />
+                ))}
+              </Stack>
+            </>
+          )}
+          <MessageSources sources={message.sources} />
         </Paper>
       )}
       <Stack

@@ -3,13 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ChatMessage } from "../hooks/useChatMessages";
+import { kitchenSinkMessage } from "../test/chatFixtures";
 import { renderWithProviders } from "../test/render";
 
 import { MessageBubble } from "./MessageBubble";
 
 /**
  * The two stylings of one component, and the rule that separates them: the
- * advisor's body is Markdown, the user's never is.
+ * advisor's body is Markdown, the user's never is — plus the pinned order of
+ * the advisor's parts (ui-spec §6), proven on the kitchen-sink message.
  */
 
 const EMPTY_PARTS = { toolCalls: [], sources: [], recommendations: [] };
@@ -129,5 +131,55 @@ describe("MessageBubble", () => {
 
     expect(onRetry).toHaveBeenCalledTimes(1);
     expect(onDiscard).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders every part of the kitchen-sink message", () => {
+    renderWithProviders(<MessageBubble message={kitchenSinkMessage} />);
+
+    // All four styled tool blocks, labelled.
+    for (const label of [
+      "Catalogue search",
+      "Spec comparison",
+      "Licence & fit check",
+      "Cost estimate",
+    ]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    // The generic fallback for the tool this build predates.
+    expect(screen.getByText("some_future_tool")).toBeInTheDocument();
+    // Both subtle rows.
+    expect(
+      screen.getByText("Preference noted — budget: up to €7,000 (must-have)"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("“Bimota Tesi H2” isn't in our catalogue yet — noted for research."),
+    ).toBeInTheDocument();
+    // The answer itself.
+    expect(screen.getByText(/here is the shortlist/)).toBeInTheDocument();
+    // Two cards, one of them without an image.
+    expect(screen.getByText("Recommended for you")).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 3 })).toHaveLength(2);
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+    // Three chunks, two of them citing the same page.
+    expect(screen.getByRole("button", { name: /Sources \(2\)/ })).toBeInTheDocument();
+  });
+
+  it("keeps the advisor's parts in the pinned order", () => {
+    renderWithProviders(<MessageBubble message={kitchenSinkMessage} />);
+
+    const order = [
+      screen.getByText("Catalogue search"),
+      screen.getByText(/here is the shortlist/),
+      screen.getByText("Recommended for you"),
+      screen.getByRole("button", { name: /Sources \(2\)/ }),
+    ];
+
+    // What the advisor did → the answer → the payoff → the receipts.
+    for (const [index, node] of order.slice(0, -1).entries()) {
+      expect(
+        node.compareDocumentPosition(order[index + 1]) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
   });
 });
