@@ -502,3 +502,75 @@ depend on. 1–3 bullets per step, no prose.
   Close the browser tab or
   `psql -c "select pg_terminate_backend(pid) from pg_stat_activity where state='idle in transaction'"`
   first.
+
+### Step 3.3 (chat JSON:API endpoints)
+
+- **The frozen message-part schemas live in
+  `backend/app/api/schemas/chat_messages.py`**: `ToolCall`, `ToolCallStatus`
+  (`succeeded`/`failed`), `MessageSource`, `Recommendation`,
+  `RecommendationKeySpecs` (reusing `SpecCategory`/`PriceBand` from
+  `schemas/products.py`, so one vocabulary reaches OpenAPI), plus
+  `BODY_MAX_LENGTH = 4000`. They are **validated on read**
+  (`ChatMessageAttributes.model_validate(row)` over the JSONB columns), so
+  **3.13's writers must emit every key of these models, camelCase, including
+  `error: null` and `result: {}` on a failed call** — a missing key is a 500 on
+  `GET /api/chat-messages`, not a silent gap. `arguments`/`result` stay open
+  objects (real-DB round-trip verified verbatim).
+- **Seams 3.5 wires** (nothing else in these modules needs to move): in
+  `endpoints/chats.py::create_chat`, call `start_response` between
+  `chat_service.create_chat` and the existing `await session.refresh(chat)`; in
+  `endpoints/chat_messages.py::create_chat_message`, after
+  `append_user_message`; both routes then add
+  `status.HTTP_409_CONFLICT` to their `jsonapi.error_responses(...)` list and
+  the stale-turn healing goes into `_owned_chat_or_404`'s caller, not into the
+  ownership helper. Ownership 404 is a per-module helper (`_get_or_404` /
+  `_owned_chat_or_404`) wrapping `chat_service.get_owned_chat` — unknown,
+  foreign and soft-deleted are one answer, and DELETE inherits it (second
+  DELETE → 404).
+- **Two contract details 3.6 builds against:** `POST /api/chats` requires the
+  full strict envelope `{"data":{"type":"chats","attributes":{}}}` (empty
+  attributes object, `extra="forbid"` → 422 for an invented `title`), and
+  `chat_service.list_messages` stayed **unpaginated** — the route slices
+  `messages[offset:offset+limit]` and reports the full timeline length as
+  `meta.totalCount`, so the pinned `createdAt ASC, id ASC` ordering has exactly
+  one owner and the page walk still terminates.
+
+### Step 3.4 (chat shell, UI-only)
+
+- **Stub contract 3.6 must preserve verbatim:** `useChats.ts` exports
+  `useChats() -> UseQueryResult<Chat[]>`, `useChat(id)`,
+  `useCreateChat() -> UseMutationResult<Chat, Error, void>`,
+  `useDeleteChat() -> UseMutationResult<void, Error, {chatId}>` + `Chat`
+  (`{id, title, activeOperationId, createdAt, updatedAt}`);
+  `useChatMessages.ts` exports `useChatMessages(chatId)`,
+  `useSendMessage(chatId) -> UseMutationResult<ChatMessage, Error, {body, localId}>`
+  + `ChatMessage`/`MessageSource`/`ToolCall`/`Recommendation`/`ChatError`
+  (`status` + `code`, `ProductError` shape). `ChatMessage` carries the two
+  **client-only** optimistic fields `localId?` and `state?:
+  "sending"|"sent"|"failed"`; the server echoes `localId` back as the row `id`,
+  which is how a refetch replaces the optimistic entry. `useChats.ts` imports
+  `ChatError` + three stub-only helpers from `useChatMessages.ts` (one
+  direction, no cycle) — the fixture turn table lives with the timers.
+- **Component contracts (written to survive the 3.6 stub deletion):**
+  `MessageBubble({message, state?, onRetry?, onDiscard?})` — `state` is the
+  **effective** send state resolved by the route (`message.state`, or `"sent"`
+  on the newest user message while the turn is in flight), because "seen" is a
+  property of the turn, not of the row; 3.10 fills the three marked part slots
+  inside the assistant `Paper` (tool blocks → markdown body → cards → sources).
+  `TypingIndicator()` and `LiveConnectionAlert()` take no props;
+  `LiveConnectionAlert` is rendered **unconditionally** (it owns the status
+  read + the 5 s grace) and `AdminLayout` now uses it — `admin.live` is gone,
+  `common.live.disconnected` is the key.
+- **Route-level decisions:** `MESSAGE_MAX_LENGTH = 4000` and
+  `CHAT_TURN_STALE_SECONDS = 150` are module-private constants in
+  `ConsultationChatRoute.tsx` (no new shared module; exporting them from a
+  route file would trip `react-refresh/only-export-components`); the stale flag
+  comes from a local `useTurnIsStale(since)` hook (timer armed for the exact
+  remaining moment, verdict *derived* from the last tick — no reset-in-effect)
+  because the composer gating needs it at page level, not only in the timeline;
+  discarding a failed send is a route-owned `queryClient.setQueryData` on
+  `queryKeys.chatMessages.byChat(chatId)`. Deliberate omissions: no part
+  renderers (3.10), no `retry` override on the chat queries — so a 404 deep
+  link shows the page spinner for ~7 s (TanStack default backoff) before the
+  not-found gate, exactly as on the admin review screen. `health.*` i18n keys
+  were deleted along with `HealthStatus`.

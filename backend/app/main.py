@@ -15,6 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from app import __version__
 from app.api.endpoints import (
     auth,
+    chat_messages,
+    chats,
     documents,
     events,
     health,
@@ -96,6 +98,8 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/auth")
     # Plain SSE, not JSON:API, but part of the credentials-allowing /api surface.
     app.include_router(events.router, prefix="/api")
+    app.include_router(chat_messages.router, prefix="/api")
+    app.include_router(chats.router, prefix="/api")
     app.include_router(documents.router, prefix="/api")
     app.include_router(images.router, prefix="/api")
     app.include_router(manufacturers.router, prefix="/api")
