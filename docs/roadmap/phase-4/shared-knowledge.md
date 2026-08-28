@@ -463,3 +463,40 @@ depend on. 1–3 bullets per step, no prose.
   check-then-act split across a commit.** Fixing 4.5 requires relaxing (2) or
   (3) — plus a seam for `operation_service.create`'s internal commit — which is
   a pin change, i.e. a coordinator/owner decision, not a dev-agent one.
+
+### Step 4.7 (catalogue list on stubs)
+
+- **Hook contracts 4.9 must preserve verbatim** (`useCatalogueModels.ts` is
+  deleted wholesale): `PAGE_SIZE = 24` is exported **from that file** (the
+  route imports it to derive `pageCount`), `useCatalogueModels(filters:
+  CatalogueFilters) -> UseQueryResult<CatalogueModelPage>` with
+  `placeholderData: keepPreviousData`, `useManufacturers() ->
+  UseQueryResult<Manufacturer[]>` (`staleTime` 5 min), types
+  `CatalogueModelPage = {items, totalCount}`, `Manufacturer = {id, name}` and
+  `CatalogueListItem = {motorbikeId, name, manufacturer, category, priceBand,
+  engineCc, powerKw, wetWeightKg, seatHeightMm, image: {card, thumb} | null}`
+  — **id field is `motorbikeId`, not `id`**, and the hook (not the card) owns
+  the `_card.webp` → `_thumb.webp` swap + `VITE_API_URL` prefix. `msrpEur` /
+  `a2Eligible` are deliberately absent from the row (nothing renders them;
+  the server filters and sorts on them).
+- **`useCatalogueFilters.ts` is the only URL logic** (survives 4.9): exports
+  `parseCatalogueFilters`, `countActiveFilters`, `useCatalogueFilters()` →
+  `{filters, setFilter, setPage, clearFilters, activeFilterCount}` plus the
+  pinned vocabularies `SPEC_CATEGORY_VALUES` / `PRICE_BAND_VALUES` /
+  `CATALOGUE_SORT_VALUES` and the types `CatalogueFilters` /
+  `CatalogueSort` / `SpecCategory` / `PriceBand`. `setPage` is an **addition**
+  to the ui-spec §3.3 return set (the page write must omit the default and use
+  `replace: true` like every other write — duplicating that in the route would
+  put URL logic outside this module); `setFilter` still always deletes `page`.
+- **Landed conventions for 4.8/4.9:** `formatSpecEnum(t, "category" |
+  "priceBand", value)` in `components/specFields.ts` over the hoisted
+  `common.specEnums.*` (R9 done — `admin.review.specs.*Values` deleted,
+  `ModelSpecsPanel` re-pointed); `queryKeys.catalogue.{all,list(filters),
+  detail(id)}` + `queryKeys.manufacturers.{all,list()}`; **all** §9 i18n keys
+  incl. the unused `catalogue.detail.*` block are already merged (4.8 adds no
+  strings); `renderWithProviders(ui, {initialEntries})` now seeds the
+  `MemoryRouter` (how a URL-driven screen is mounted in tests); route table
+  has `catalogue` as a nested route whose only child is the index — 4.8 adds
+  the `:motorbikeId` child. Card/route DOM notes: card links are found by
+  `a[href^="/catalogue/"]`, not by accessible name (name resolution over 24
+  cards costs seconds).

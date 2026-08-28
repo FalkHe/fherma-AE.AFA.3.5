@@ -5,6 +5,7 @@
   },
   "nav": {
     "consultations": "Consultations",
+    "catalogue": "Catalogue",
     "admin": "Admin"
   },
   "common": {
@@ -16,6 +17,27 @@
     "unknown": "Unknown",
     "live": {
       "disconnected": "Live updates interrupted — reconnecting…"
+    },
+    "specEnums": {
+      "priceBand": {
+        "budget": "Budget (under €5,000)",
+        "mid": "Mid (€5,000–10,000)",
+        "upper": "Upper (€10,000–15,000)",
+        "premium": "Premium (over €15,000)"
+      },
+      "category": {
+        "naked": "Naked",
+        "sport": "Sport",
+        "sport_touring": "Sport touring",
+        "touring": "Touring",
+        "adventure": "Adventure",
+        "cruiser": "Cruiser",
+        "classic": "Classic",
+        "scrambler": "Scrambler",
+        "enduro": "Enduro",
+        "supermoto": "Supermoto",
+        "scooter": "Scooter"
+      }
     },
     "errors": {
       "serverError": "Something went wrong. Please try again."
@@ -154,25 +176,6 @@
           "kg": "kg",
           "mm": "mm"
         },
-        "priceBandValues": {
-          "budget": "Budget (under €5,000)",
-          "mid": "Mid (€5,000–10,000)",
-          "upper": "Upper (€10,000–15,000)",
-          "premium": "Premium (over €15,000)"
-        },
-        "categoryValues": {
-          "naked": "Naked",
-          "sport": "Sport",
-          "sport_touring": "Sport touring",
-          "touring": "Touring",
-          "adventure": "Adventure",
-          "cruiser": "Cruiser",
-          "classic": "Classic",
-          "scrambler": "Scrambler",
-          "enduro": "Enduro",
-          "supermoto": "Supermoto",
-          "scooter": "Scooter"
-        },
         "errors": {
           "numberInvalid": "Enter a positive number."
         }
@@ -209,6 +212,70 @@
         "unsavedWarning": "You have unsaved spec edits — approval publishes the last saved draft, not your current changes.",
         "actionError": "The action failed. Please try again."
       }
+    }
+  },
+  "catalogue": {
+    "list": {
+      "title": "Catalogue",
+      "gridLabel": "Catalogue models",
+      "loadingLabel": "Updating results",
+      "resultCount_one": "{{count}} model",
+      "resultCount_other": "{{count}} models",
+      "loadError": "Could not load the catalogue",
+      "emptyTitle": "The catalogue is empty",
+      "emptyBody": "No motorcycles have been published yet. Ask the advisor about a model — it gets researched, verified and added here.",
+      "emptyAction": "Ask the advisor",
+      "noMatchTitle": "No models match these filters",
+      "noMatchBody": "Try widening a range or clearing the filters.",
+      "clearFilters": "Clear filters"
+    },
+    "sort": {
+      "label": "Sort by",
+      "nameAsc": "Name (A–Z)",
+      "nameDesc": "Name (Z–A)",
+      "priceAsc": "Price (low to high)",
+      "priceDesc": "Price (high to low)"
+    },
+    "filters": {
+      "title": "Filters",
+      "open": "Filters",
+      "close": "Close filters",
+      "showResults_one": "Show {{count}} model",
+      "showResults_other": "Show {{count}} models",
+      "category": "Category",
+      "priceBand": "Price band",
+      "manufacturer": "Manufacturer",
+      "manufacturerAll": "All manufacturers",
+      "engineCc": "Engine displacement (cc)",
+      "powerKw": "Power (kW)",
+      "min": "Min",
+      "max": "Max",
+      "seatHeightMax": "Max seat height (mm)",
+      "weightMax": "Max weight (kg)",
+      "a2Only": "A2-eligible only"
+    },
+    "detail": {
+      "back": "Catalogue",
+      "notFoundTitle": "Model not found",
+      "notFoundBody": "This model does not exist or is not published.",
+      "loadError": "Could not load this model",
+      "aboutHeading": "About this bike",
+      "specsHeading": "Verified specifications",
+      "specsTableLabel": "Verified specifications",
+      "noSpecs": "No verified specifications are available for this model yet.",
+      "groups": {
+        "engine": "Engine & performance",
+        "chassis": "Dimensions & ergonomics",
+        "safety": "Licence & safety",
+        "market": "Classification & price"
+      },
+      "galleryLabel": "Photos of {{name}}",
+      "imageThumbLabel": "Show photo {{index}}",
+      "sourcesHeading": "Sources",
+      "sourcesLabel": "Sources",
+      "sourcesHint": "Specifications and prose on this page are derived from these retrieved documents.",
+      "sourcesEmpty": "No source documents are recorded for this model.",
+      "sourceNoUrl": "Uploaded document"
     }
   },
   "consultations": {

@@ -71,14 +71,27 @@ export function AppLayout() {
             variant="h6"
             component={RouterLink}
             to="/"
-            sx={{ flexGrow: 1, color: "inherit", textDecoration: "none" }}
+            sx={{
+              flexGrow: 1,
+              color: "inherit",
+              textDecoration: "none",
+              // Three nav destinations plus the account block need the whole
+              // width of a phone; the page's own header identifies the app there.
+              display: { xs: "none", sm: "block" },
+            }}
           >
             {t("app.name")}
           </Typography>
+          {/* Stands in for the hidden title, so the right-side controls keep
+              their position at xs. */}
+          <Box sx={{ flexGrow: 1, display: { xs: "block", sm: "none" } }} />
           {user !== null && (
             <Box sx={{ display: "flex", gap: 1, mr: 1 }}>
               <Button color="inherit" component={RouterLink} to="/consultations">
                 {t("nav.consultations")}
+              </Button>
+              <Button color="inherit" component={RouterLink} to="/catalogue">
+                {t("nav.catalogue")}
               </Button>
               {user.role === "admin" && (
                 <Button color="inherit" component={RouterLink} to="/admin">

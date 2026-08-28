@@ -20,6 +20,14 @@
  */
 type StatusFilter = string | undefined;
 
+/**
+ * The catalogue's normalized filter object. Kept structural for the same reason
+ * as `StatusFilter`: this module imports nothing, and the hook passes its own
+ * `CatalogueFilters` type. TanStack Query hashes the object deterministically,
+ * so the key is stable as long as the parsing is.
+ */
+type CatalogueListFilters = object;
+
 export const queryKeys = {
   products: {
     /** Invalidation prefix: every product list and detail query. */
@@ -46,6 +54,24 @@ export const queryKeys = {
     all: ["productImages"] as const,
     /** `GET /api/product-images?filter[product]=…`. */
     byProduct: (productId: string) => ["productImages", productId] as const,
+  },
+  catalogue: {
+    /** Invalidation prefix: every catalogue list and detail query. */
+    all: ["catalogue"] as const,
+    /**
+     * `GET /api/catalogue-models` for one normalized filter object (the parsed
+     * search params — arrays sorted, absent params omitted), so the key is
+     * stable per URL state.
+     */
+    list: (filters: CatalogueListFilters) => ["catalogue", "list", filters] as const,
+    /** `GET /api/catalogue-models/{motorbikeId}`. */
+    detail: (motorbikeId: string) => ["catalogue", "detail", motorbikeId] as const,
+  },
+  manufacturers: {
+    /** Invalidation prefix: the manufacturer options. */
+    all: ["manufacturers"] as const,
+    /** `GET /api/manufacturers` — the filter select's options. */
+    list: () => ["manufacturers", "list"] as const,
   },
   chats: {
     /** Invalidation prefix: the consultation list and every chat detail. */

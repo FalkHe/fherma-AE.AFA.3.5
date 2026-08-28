@@ -4,6 +4,7 @@ import { AdminLayout } from "./components/AdminLayout";
 import { AppLayout } from "./components/AppLayout";
 import { AdminBacklogRoute } from "./routes/admin/AdminBacklogRoute";
 import { AdminModelReviewRoute } from "./routes/admin/AdminModelReviewRoute";
+import { CatalogueRoute } from "./routes/CatalogueRoute";
 import { ConsultationChatRoute } from "./routes/ConsultationChatRoute";
 import { ConsultationsRoute } from "./routes/ConsultationsRoute";
 import { LoginRoute } from "./routes/LoginRoute";
@@ -36,6 +37,9 @@ export default function App() {
           <Route path="consultations">
             <Route index element={<ConsultationsRoute />} />
             <Route path=":chatId" element={<ConsultationChatRoute />} />
+          </Route>
+          <Route path="catalogue">
+            <Route index element={<CatalogueRoute />} />
           </Route>
           <Route element={<RequireAdmin />}>
             <Route path="admin" element={<AdminLayout />}>

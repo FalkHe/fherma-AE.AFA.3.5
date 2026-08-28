@@ -179,7 +179,7 @@ function SpecValueTable({ spec }: { spec: DraftSpec | null }) {
       t("admin.review.specs.fields.priceBand"),
       spec?.priceBand === null || spec?.priceBand === undefined
         ? unknown
-        : t(`admin.review.specs.priceBandValues.${spec.priceBand}`, {
+        : t(`common.specEnums.priceBand.${spec.priceBand}`, {
             defaultValue: spec.priceBand,
           }),
     ],
@@ -187,7 +187,7 @@ function SpecValueTable({ spec }: { spec: DraftSpec | null }) {
       t("admin.review.specs.fields.category"),
       spec?.category === null || spec?.category === undefined
         ? unknown
-        : t(`admin.review.specs.categoryValues.${spec.category}`, {
+        : t(`common.specEnums.category.${spec.category}`, {
             defaultValue: spec.category,
           }),
     ],
@@ -404,7 +404,7 @@ export function ModelSpecsPanel({
                 <MenuItem value="">{t("common.unknown")}</MenuItem>
                 {PRICE_BAND_OPTIONS.map((value) => (
                   <MenuItem key={value} value={value}>
-                    {t(`admin.review.specs.priceBandValues.${value}`, {
+                    {t(`common.specEnums.priceBand.${value}`, {
                       defaultValue: value,
                     })}
                   </MenuItem>
@@ -428,7 +428,7 @@ export function ModelSpecsPanel({
                 <MenuItem value="">{t("common.unknown")}</MenuItem>
                 {CATEGORY_OPTIONS.map((value) => (
                   <MenuItem key={value} value={value}>
-                    {t(`admin.review.specs.categoryValues.${value}`, {
+                    {t(`common.specEnums.category.${value}`, {
                       defaultValue: value,
                     })}
                   </MenuItem>

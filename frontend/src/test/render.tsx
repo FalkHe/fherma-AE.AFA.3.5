@@ -14,8 +14,17 @@ import { theme } from "../theme";
  */
 export function renderWithProviders(
   ui: ReactElement,
-  options?: Omit<RenderOptions, "wrapper">,
+  options?: Omit<RenderOptions, "wrapper"> & {
+    /**
+     * Where the router starts. URL-driven screens (the catalogue's filters live
+     * in search params) need a rendering that begins at a given URL, which is
+     * also the only way to test "reload reproduces the view" as a real mount.
+     */
+    initialEntries?: string[];
+  },
 ): RenderResult {
+  const { initialEntries, ...renderOptions } = options ?? {};
+
   // A cache per render: state from one test must never decide the outcome of
   // the next one.
   const queryClient = new QueryClient({
@@ -27,12 +36,12 @@ export function renderWithProviders(
       <ThemeProvider theme={theme} defaultMode="system">
         <I18nextProvider i18n={i18n}>
           <QueryClientProvider client={queryClient}>
-            <MemoryRouter>{children}</MemoryRouter>
+            <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
           </QueryClientProvider>
         </I18nextProvider>
       </ThemeProvider>
     );
   }
 
-  return render(ui, { wrapper: Providers, ...options });
+  return render(ui, { wrapper: Providers, ...renderOptions });
 }

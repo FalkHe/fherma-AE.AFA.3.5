@@ -67,6 +67,25 @@ export function specFieldUnit(t: TFunction, field: string): string {
 }
 
 /**
+ * The customer-facing label of a `category` / `priceBand` enum value.
+ *
+ * The vocabularies are pinned by the backend, so the labels live in one hoisted
+ * block (`common.specEnums.*`) shared by the admin spec form and the catalogue
+ * screens. A value this frontend predates renders **verbatim** rather than as a
+ * raw i18n key — forward compatibility beats a pretty label.
+ *
+ * Deliberately not used on chat surfaces: tool results render backend values
+ * verbatim (the Phase-3 tool-value exemption, unchanged).
+ */
+export function formatSpecEnum(
+  t: TFunction,
+  field: "category" | "priceBand",
+  value: string,
+): string {
+  return t(`common.specEnums.${field}.${value}`, { defaultValue: value });
+}
+
+/**
  * One spec value as text, or `null` when there is nothing verified to show —
  * the caller renders the em dash, because "unknown" needs its own markup
  * (`aria-label`) in a table cell and none at all in a card line.
