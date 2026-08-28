@@ -56,7 +56,9 @@ export function LoginRoute() {
 
   // Where `RequireAuth` sent us from, carried in router state rather than the
   // URL — no open-redirect surface to police, and it survives the SPA redirect.
-  const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname;
+  const sentFrom = (location.state as { from?: { pathname?: string; search?: string } } | null)
+    ?.from;
+  const from = sentFrom?.pathname ? `${sentFrom.pathname}${sentFrom.search ?? ""}` : undefined;
 
   // Already signed in: the sign-in form has nothing left to offer. Rendered as
   // a redirect rather than an effect so it happens before any paint.
