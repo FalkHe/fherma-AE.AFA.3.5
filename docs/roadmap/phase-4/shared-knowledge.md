@@ -500,3 +500,38 @@ depend on. 1–3 bullets per step, no prose.
   the `:motorbikeId` child. Card/route DOM notes: card links are found by
   `a[href^="/catalogue/"]`, not by accessible name (name resolution over 24
   cards costs seconds).
+
+### Step 4.8 (model detail on stubs)
+
+- **Hook contract 4.9 must preserve verbatim** (`useCatalogueModel.ts` is deleted
+  wholesale): `useCatalogueModel(motorbikeId) ->
+  UseQueryResult<CatalogueModelDetail>` (`enabled: motorbikeId !== ""`, **no
+  `retry` override** — a 404 surfaces after the default backoff, the admin-review
+  precedent), `class CatalogueError extends Error {status, code}` (the
+  `ProductError` shape; the route branches on `status === 404` only), and the
+  types `CatalogueModelDetail {motorbikeId, name, manufacturer, specs, article,
+  sources, images}` / `CatalogueImage {thumb, card, detail, attribution}` (wire
+  variant keys) / `ModelSource {sourceTitle, sourceUrl}`. **`specs` is an inline
+  13-field object on `CatalogueModelDetail`** — components take
+  `CatalogueModelDetail["specs"]`, so no extra type is exported or imported.
+- **Stub fixtures (ids are the 4.7 `stubId()` spelling, so the grid links land):**
+  `01STUBSUZUKIGSR60000000000` fully populated (13/13 specs, 2 images, GFM +
+  `<script>` article, 3 sources incl. a duplicate URL and a URL-less upload),
+  `01STUBHONDAREBEL5000000000` sparse (0 images, `article: null`, "Licence &
+  safety" all-null, 1 source), `01STUBMISSING0000000000000` — and **every other
+  id 404s**, which is also how the unapproved case is demoed.
+- **Landed component conventions:** `ModelSpecTable` owns the
+  `catalogue.detail.specsHeading` heading **and** the private group→field
+  mapping (`msrpEur` via `Intl.NumberFormat(i18n.language, EUR)`, enums via
+  `formatSpecEnum`, everything else `formatSpecValue` + `specFieldUnit`);
+  `ModelImageGallery`/`ModelSpecTable`/`ModelSources` export **only** their
+  component (the `react-refresh/only-export-components` lint rule forbids
+  co-exported constants — the pinned gallery height `{xs:240, md:400}` is
+  therefore spelled in both the gallery and the route skeleton, as ui-spec
+  §4.2/§4.6 spell it); the article's react-markdown config lives in
+  `CatalogueModelRoute` with raw HTML off and markdown headings demoted to
+  `h3`/`h4` (deliberately not shared with `MessageBubble`'s — rule of three).
+  Detail-page tests mount `<Routes><Route path="/catalogue/:motorbikeId" …>` via
+  `renderWithProviders(..., {initialEntries})`; the 404 test wraps the route in a
+  nested `QueryClientProvider` with `retry: false` (the `ConsultationChatRoute`
+  precedent) to skip the ~7 s backoff.
