@@ -18,8 +18,9 @@ but the 409 contract is violated under a deliberate race. Candidate fixes:
 partial unique index on operations (`entity_id WHERE status IN
 ('queued','running') AND type='chat.response'`) — the latter needs a
 migration and 3.1 is pinned as the only Phase-3 migration, so the lock is
-the in-phase option. Owner decision: fix in 3.16's acceptance pass, defer
-to Phase 4, or accept as documented.
+the in-phase option. **Owner decision (2026-08-28): defer to Phase 4 —
+fixed as step 4.5 (the migration-free row lock, least-effort option; see
+Phase-4 `shared-knowledge.md` D7). Remove this entry when 4.5 lands.**
 
 **N1 (demo-data note, from 3.12, 2026-08-27).** No approved model in the
 dev DB carries a verified `msrp_eur` or `price_band`, so live
@@ -27,6 +28,10 @@ dev DB carries a verified `msrp_eur` or `price_band`, so live
 path; unit-tested only). Before the M4/M5 demos, verifying a price band on
 at least one approved model (owner action or the Phase-2 curation flow)
 would make the demo materially stronger. Not a code defect.
+**Resolved 2026-08-28 (owner decision, via Phase-4 OQ2): guessed demo
+prices seeded on all 3 approved models (draft + verified rows); real
+price research deferred past Phase 4 — the values are plausible but
+unverified.**
 
 **N2 (non-blocking polish, from the 3.17 acceptance walk, 2026-08-28).**
 For **admin-role** accounts at a 390 px viewport, the AppBar's four toolbar

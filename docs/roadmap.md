@@ -202,11 +202,32 @@ resumable after closing the browser.
 
 **Goal: the browsable catalogue completing the customer experience.**
 
+Re-sliced 2026-08-28 into two parallel tracks (backend ∥ frontend, max
+effort 4 per step, three milestones) — binding contract:
+`docs/roadmap/phase-4/shared-knowledge.md`; UI:
+`docs/roadmap/phase-4/ui-spec.md`.
+
 - **4.1** *(superseded — moved into Phase 3; see
     `docs/roadmap/phase-4/step-4.1.md` for the mapping).*
-- **4.2 Catalogue browsing** — model list with URL-persisted filters, model
-    detail page (verified specs, prose, sources, images); adds the
-    recommendation-card link (`/catalogue/:productId`) reserved in Phase 3.
+- **4.2** *(split into 4.3–4.11; see `docs/roadmap/phase-4/step-4.2.md`
+    for the mapping).*
+- **4.3 Catalogue browse & image service reads** (backend) — browse query
+    reusing the advisor's filter vocabulary, newest-approved-image read.
+- **4.4 `/api/catalogue-models` endpoints** (backend) — customer-facing
+    read-only resource (slim filtered/sorted list, self-contained detail);
+    `GET /api/manufacturers` relaxed to signed-in users; opens S1.
+- **4.5 Concurrent-turn 409 race fix** (backend) — the Phase-3 Q4 row-lock
+    fix, migration-free (pending owner confirmation, `open-questions.md`).
+- **4.6 Phase-4 UI spec** (design) — done at slicing time (`ui-spec.md`).
+- **4.7 Catalogue list page on stubs** (frontend) — card grid,
+    URL-persisted filter panel, pagination, nav entry.
+- **4.8 Model detail page on stubs** (frontend) — gallery, grouped verified
+    specs, article prose, out-of-chat Sources block.
+- **4.9 Catalogue wired live + recommendation-card link** (frontend, S1) —
+    real hooks, SSE invalidations, the `/catalogue/:motorbikeId` card link
+    reserved in Phase 3.
+- **4.10 Demo-script catalogue chapter** (docs).
+- **4.11 Phase acceptance** (QA) — evidence run; tag `phase-4-done`.
 
 *Done when:* a fresh user filters the catalogue, opens a model detail page
 from a recommendation card, and an unapproved model is unreachable by direct

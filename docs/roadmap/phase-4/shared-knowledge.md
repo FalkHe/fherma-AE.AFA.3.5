@@ -1,0 +1,395 @@
+# Phase 4 — Shared Knowledge (binding contract)
+
+This document is the **single source of truth** for every Phase-4 step. Every
+agent working on a Phase-4 step must read it fully before writing code. When a
+step file and this document disagree, this document wins. Do not deviate from
+anything pinned here — if a deviation seems necessary, stop and report it
+instead of improvising, because a parallel agent is building against the same
+contract.
+
+UI layout/state details live in [`ui-spec.md`](ui-spec.md) (binding for
+frontend steps). Phase-1/2/2b/3 conventions
+([`../phase-1/shared-knowledge.md`](../phase-1/shared-knowledge.md),
+[`../phase-2/shared-knowledge.md`](../phase-2/shared-knowledge.md),
+[`../phase-2b/shared-knowledge.md`](../phase-2b/shared-knowledge.md),
+[`../phase-3/shared-knowledge.md`](../phase-3/shared-knowledge.md), each
+including its Landed decisions) continue to apply — in particular the JSON:API
+layer (`app/api/jsonapi.py`), route → service → SQLAlchemy layering with
+services owning transactions, the compiled-SQL test convention
+(`RecordingSession`, landed in 3.7), the image variant-URL formula
+(`app/api/schemas/images.py`), and every frontend hook/stub/queryKeys
+convention.
+
+**Scope note (2026-08-28):** the former effort-8 step 4.2 was split into
+steps 4.3–4.11 (this document + the step files). `step-4.2.md` remains as a
+mapping marker only. Step 4.1 was superseded into Phase 3 earlier.
+
+---
+
+## Hard rules for every Phase-4 step
+
+- **Zero migrations.** No Phase-4 step may add an Alembic revision (head
+  stays `fb2747f937c4`). A schema need is a stop-and-report.
+- **Zero new dependencies**, on either track. If a step believes it needs
+  one, stop and report.
+- **Zero new config keys.** `PAGE_SIZE = 24` (frontend) and `BrowseSort`
+  are module constants.
+- **No worker-relevant ORM changes** anywhere in this phase → no
+  `docker compose restart app-worker` needed (the 2b.4 operational pin does
+  not bite here).
+- **Dispatch gate:** Phase-4 implementation steps start only after
+  `phase-3-done` is tagged (3.15–3.17 finished). The recommendation-card
+  link (4.9) builds on the card landed live in 3.15.
+
+---
+
+## Parallel-run rule
+
+Two tracks run **concurrently**. Backend agents never touch `frontend/`;
+frontend agents never touch `backend/`.
+
+```text
+backend-dev:  4.3 ─► 4.4 ─► ║S1║ ─► 4.5
+frontend-dev: 4.6✓(ui-ux) ─► 4.7 ─► 4.8 ─► ║S1║ 4.9
+docs-writer:                                     4.10
+qa:                                              4.11 (after 4.5 + 4.9 + 4.10)
+```
+
+**Cross-track sync point (the only one):**
+
+- **S1** — step 4.9 starts only after backend **4.4** is merged (it freezes
+  the new OpenAPI surface). First action: regenerate API types via the
+  landed image-independent sequence — `make generate-api`
+  (`docker compose run --rm -T app-cli app openapi export >
+  frontend/openapi.json`, then `node-cli pnpm exec openapi-typescript …`).
+
+Frontend steps 4.7 and 4.8 need **zero backend code** (stub rule below).
+Backend 4.5 (Q4 race fix) has no frontend counterpart, touches only chat
+files, and may land any time after 4.4 in-track (or in a parallel backend
+session — its files are disjoint from 4.3/4.4).
+
+---
+
+## Milestones (commit & tag points)
+
+**Commit rule:** one commit per finished step (its verification green — lint,
+types, tests). **Milestone rule:** a milestone is reached when all its steps
+are merged on both tracks and its demo criterion passes; tag it
+(`phase-4-m<N>`). Do not start a later milestone's sync step before the
+earlier milestone's demo passes.
+
+| Milestone | Steps (backend ∥ frontend) | Demo criterion (both tracks together) |
+|---|---|---|
+| **M1 — API & shells** | 4.3, 4.4 ∥ 4.6✓, 4.7, 4.8 | Plain-user curl proves the whole read contract (approved-only list, every filter narrows, both sorts, detail payload with specs/article/sources/images, 404 for non-approved ids, `GET /api/manufacturers` 200 as user, `/api/products` still 403); both pages complete on stub data with URL-persisted filters; **S1 open**. Tag `phase-4-m1`. |
+| **M2 — Catalogue live** | 4.5 ∥ 4.9 | The product moment: browse → filter → shareable URL survives reload; a Phase-3 recommendation card clicks through to a real detail page with specs, prose, sources, image; concurrent double-POST on a chat answers exactly one 201 + one 409. Tag `phase-4-m2`. |
+| **M3 — Acceptance** | 4.10 ∥ 4.11 | Demo script (incl. new catalogue chapter) green end-to-end; QA evidence filed. Tag `phase-4-done`. |
+
+---
+
+## Environment prerequisites
+
+- **`phase-3-done` tagged** before dispatching any Phase-4 dev step —
+  **satisfied** (tag verified 2026-08-28).
+- **Demo-data note (N1 carry-over — resolved 2026-08-28):** all 3 approved
+  models now carry an `msrp_eur` + `price_band` on both spec rows —
+  **owner-approved guesses seeded for the demo, not researched prices**
+  (BMW S 1000 XR 18 500 € premium · Honda CB500F 6 800 € mid · Suzuki
+  GSR600 4 200 € budget). Price sort, `filter[priceBand]` and the price
+  line are demoable. Real price research is deferred past Phase 4; 4.10
+  must not describe these values as verified market data. See
+  [`open-questions.md`](open-questions.md) (resolved OQ2).
+- The compose stack must be up for 4.4/4.9/4.11 verifications (`make up`).
+
+---
+
+## Design decisions — final (recorded 2026-08-28)
+
+- **D1 — customer visibility:** customer reads go through a **new read-only
+  resource `catalogue-models`** — `/api/products` stays `current_admin` per
+  the Phase-2 pin ("all Phase-2 endpoints are admin-only, reads included"),
+  so no admin contract, test or hook moves, and customers can never see
+  `draftSpec`. The Phase-3 pin "plain users cannot read `/api/products`"
+  stays literally true; the persisted recommendation snapshots stay as
+  pinned (self-contained, unchanged).
+- **D2 — filters:** the route parses query params into the **3.8
+  `SpecFilters`** (one definition of the filter vocabulary) and reuses
+  `catalogue_search_service`'s clause builder — no duplicated SQL.
+  Manufacturer filtering is **by manufacturer ULID**;
+  **`GET /api/manufacturers` (+detail) relaxes `current_admin` →
+  `current_user`** — exactly the decision Phase 2b reserved for Phase 4;
+  wire shape unchanged, admin UI unaffected.
+- **D3 — sort:** `name` (default) | `-name` | `msrpEur` | `-msrpEur`; price
+  sorts **NULLS LAST in both directions** (a priceless bike never leads),
+  tiebreak `name, id`.
+- **D4 — detail payload:** one endpoint, everything embedded. Prose
+  (`article`) = the **Wikipedia document's `content_markdown` only** —
+  scraped product/magazine pages are *not* served wholesale to customers
+  (marketing-biased, exactly what the project vision avoids); they appear in
+  the `sources` list (title + external URL — the grading requirement
+  satisfied outside the chat). `documents` and `product-images` get **no
+  customer-facing endpoints**.
+- **D5 — URL identity: ULID.** Route param is `:motorbikeId` (matches the
+  Phase-3 reserved href contract; the id already rides along in
+  `RecommendationCard`'s single `recommendation` prop as
+  `recommendation.motorbikeId`; step 4.2's `:productId` spelling is
+  superseded).
+- **D6 — zero migrations** (see hard rules).
+- **D7 — Q4** (Phase-3 concurrent-turn 409 race) is fixed in Phase 4 as its
+  own tiny step **4.5** — migration-free `SELECT … FOR UPDATE` on the chat
+  row in the `POST /api/chat-messages` path. **Owner confirmed 2026-08-28**
+  (former OQ1): the race is rarely reachable, so the least-effort,
+  migration-free lock is the chosen fix — 4.5 stays in the phase. On
+  landing 4.5, remove Q4 from `../phase-3/open-questions.md`.
+
+---
+
+## New JSON:API resource `catalogue-models` — final
+
+Read-only. Whole router `Depends(current_user)` (**not** `current_admin` —
+this is the customer surface; admins are users too). No `csrf_protect`
+(no writes). **Approved models only, always** — for every role. Files:
+`backend/app/api/schemas/catalogue_models.py`,
+`backend/app/api/endpoints/catalogue_models.py`, registered in
+`backend/app/main.py` keeping the existing alphabetical router ordering
+(the 2b.3 precedent).
+
+### List — `GET /api/catalogue-models`
+
+`CatalogueModelSummaryAttributes` (slim, scalars only, all camelCase):
+
+| Attribute | Type | Source |
+|---|---|---|
+| `name` | string | `motorbikes.name` |
+| `manufacturer` | string \| null | derived name via `manufacturer_service.get_by_ids` (the 2b pattern) |
+| `category` | string \| null | verified spec |
+| `engineCc` | number \| null | verified spec |
+| `powerKw` | number \| null | verified spec |
+| `wetWeightKg` | number \| null | verified spec |
+| `seatHeightMm` | number \| null | verified spec |
+| `a2Eligible` | boolean \| null | verified spec |
+| `priceBand` | string \| null | verified spec |
+| `msrpEur` | number \| null | verified spec |
+| `imageUrl` | string \| null | card variant of the **newest approved** image (`variant_urls(...).card`); client derives thumb via the pinned `_card.webp` → `_thumb.webp` suffix swap and prefixes `VITE_API_URL` in dev (3.13/2.20 precedent) |
+
+Deliberately absent: `slug`, `status`, `draftSpec`, `verifiedSpec`,
+timestamps.
+
+**Filters** (comma-separated members = OR within a family; families are
+AND-ed):
+
+| Wire name | Semantics |
+|---|---|
+| `filter[category]` | pinned `SpecCategory` vocabulary; unknown member → **400 `invalid-filter`** |
+| `filter[priceBand]` | pinned `PriceBand` vocabulary; unknown member → **400 `invalid-filter`** |
+| `filter[manufacturer]` | manufacturer ULIDs; an unknown id matches nothing (empty result, **not** an error) |
+| `filter[engineCcMin]` / `filter[engineCcMax]` | typed numeric query params (junk → FastAPI default 422) |
+| `filter[powerKwMin]` / `filter[powerKwMax]` | typed numeric |
+| `filter[wetWeightKgMax]` | typed numeric |
+| `filter[seatHeightMmMax]` | typed numeric |
+| `filter[a2Eligible]` | typed `bool` |
+
+**NULL-spec browse rule (pinned):** a verified-spec value that is NULL never
+matches a stated filter on that column, and a model with **no verified
+revision at all** is excluded by any stated spec filter but **included when
+unfiltered** — outer-join semantics, deliberately different from
+`find_motorbike_ids`' inner join, which stays the advisor's candidate rule
+untouched.
+
+**Sort:** `sort` = `Literal["name","-name","msrpEur","-msrpEur"]`, default
+`name`; price NULLS LAST in both directions. **Exact ORDER BY (pinned for
+4.3's compiled-SQL tests):** `name` → `name ASC, id ASC`; `-name` →
+`name DESC, id ASC`; `msrpEur` → `msrp_eur ASC NULLS LAST, name ASC, id
+ASC`; `-msrpEur` → `msrp_eur DESC NULLS LAST, name ASC, id ASC` — the `id`
+tiebreak is always ASC. Junk → default FastAPI 422, no new error code.
+
+**Pagination:** standard `page[number]`/`page[size]` (default/max 100),
+`meta.totalCount`.
+
+### Detail — `GET /api/catalogue-models/{motorbike_id}`
+
+`CatalogueModelAttributes`:
+
+- `name`, `manufacturer` (derived name | null) — deliberately **not**
+  `modelName`/`yearFrom`/`yearTo`: the ui-spec renders neither, and
+  unconsumed attributes are speculative surface (QA finding, 2026-08-28);
+- `specs` — object with **exactly the 13 frozen camelCase fields**
+  (`COMPARISON_SPEC_FIELDS` via `catalogue_search_service.
+  get_verified_specs`; nulls explicit; **never** `extra`, `source_hints`,
+  `extracted_at` — extraction provenance stays admin-only);
+- `article` — string | null: the Wikipedia document's `content_markdown`
+  (first document with `source_type == 'wikipedia'`), rendered client-side
+  with react-markdown, **raw HTML off** (retrieved web content — this is the
+  named domain security measure);
+- `sources` — `[{sourceTitle, sourceUrl}]`, Wikipedia-first then
+  `createdAt` (`document_service.list_for_motorbike` order verbatim) — no
+  `sourceType` (the UI detects URL-less uploads by null `sourceUrl`); never
+  `contentMarkdown`/`rawPath`;
+- `images` — `[{thumb, card, detail, attribution}]`, **approved only**,
+  newest first, via the pinned `variant_urls` formula (attribution shown —
+  licence compliance).
+
+Unknown / non-approved id → **404 `not-found`** (backlog / in_review /
+rejected / unknown indistinguishable — no existence leak).
+
+**Error codes:** reuse `not-found`, `invalid-filter`. **No new error codes
+in Phase 4.**
+
+### `manufacturers` auth change (4.4)
+
+Router dependency in `backend/app/api/endpoints/manufacturers.py`:
+`current_admin` → `current_user`. Wire shape, sorting, pagination unchanged.
+
+**`useManufacturers()` pagination (pinned):** one request with
+`page[size]=100`, **no page walk** — the table holds a handful of rows; if
+`meta.totalCount` ever exceeds 100 that is a stop-and-report, not a reason
+to add walking.
+
+---
+
+## Service contracts — final (4.3; routes never restate this SQL)
+
+Route → service → SQLAlchemy; nothing here commits.
+
+- **`catalogue_search_service.browse_motorbikes(session, *, filters:
+  SpecFilters, manufacturer_ids: Sequence[str] | None = None, sort:
+  BrowseSort = BrowseSort.NAME, limit: int, offset: int) ->
+  tuple[list[BrowseRow], int]`** — one page statement + one count statement.
+  `SELECT` of `Motorbike.id/name/manufacturer_id` + the 8 summary spec
+  columns, `OUTER JOIN motorbike_specs` with `kind='verified'` **in the ON
+  clause** (the 3.11 `get_verified_specs` precedent), `WHERE
+  status='approved'` + optional `manufacturer_id IN` + the existing private
+  `_clauses(filters)` **reused verbatim** (the 3.8 pin: one filter
+  vocabulary, no duplicated SQL). `BrowseRow` is a frozen dataclass
+  `(motorbike_id, name, manufacturer_id, values: dict)` with `Decimal`
+  unwrapped via the existing `_plain`. `BrowseSort` is a StrEnum in the
+  service. Ordering per D3.
+- **`product_service.newest_approved_images(session, motorbike_ids) ->
+  dict[str, MotorbikeImage]`** — one `DISTINCT ON (motorbike_id)` statement,
+  `status='approved'`, ordered `motorbike_id, created_at DESC, id DESC`
+  (the set-based version of 3.13's per-bike loop in
+  `present_recommendations`; that tool is **not** refactored this phase).
+- **`product_service.list_images`** gains optional `statuses:
+  Sequence[ImageStatus] | None = None` (default `None` = behaviour
+  unchanged) for the detail gallery.
+- **Detail assembly lives in the endpoint** and composes existing reads
+  only: `product_service.get_motorbike` (+ approved check),
+  `catalogue_search_service.get_verified_specs`,
+  `manufacturer_service.get_by_ids`, `document_service.list_for_motorbike`
+  (article = first `wikipedia` document), `list_images(statuses=[APPROVED])`.
+
+**Q4 fix contract (4.5):** `chat_service` gains a locking read (e.g.
+`lock_owned_chat` or `get_owned_chat(..., for_update=True)`) used **only**
+in the `POST /api/chat-messages` path, taking the chat row `WITH FOR
+UPDATE` so `heal_stale_turn`'s check-then-act serializes per chat; the
+second concurrent POST blocks, then sees the fresh `active_operation_id` →
+409 `response-pending`. No wire change, no migration, `GET` paths untouched.
+
+**Test conventions:** compiled-SQL assertions with a local
+`RecordingSession` (the 3.7/3.8 convention — `FakeAsyncSession` cannot
+interpret joins); a drift guard asserting `BrowseRow.values` keys ⊂
+`COMPARISON_SPEC_FIELDS`.
+
+---
+
+## Frontend conventions — delta
+
+File placement, stub pattern, envelope unwrapping, error-type conventions
+and Material-Symbols icons carry over from Phases 1–3 unchanged. Full
+layouts: [`ui-spec.md`](ui-spec.md).
+
+**Routes** (in `frontend/src/App.tsx`, under `RequireAuth`):
+`/catalogue` → `CatalogueRoute` (index), `/catalogue/:motorbikeId` →
+`CatalogueModelRoute`.
+
+**Files:**
+
+| File | Content | Step |
+|---|---|---|
+| `frontend/src/routes/CatalogueRoute.tsx` | list page; owns the URL-param state | 4.7 |
+| `frontend/src/routes/CatalogueModelRoute.tsx` | detail page | 4.8 |
+| `frontend/src/components/CatalogueFilters.tsx` | filter panel bound to `useSearchParams` only — **no duplicate local state** | 4.7 |
+| `frontend/src/components/CatalogueModelCard.tsx` | grid card: image `srcSet`/lazy, name, category, price chip, headline specs | 4.7 |
+| `frontend/src/components/ModelSpecTable.tsx` | grouped 13-field verified-spec table (ui-spec §4.3) | 4.8 |
+| `frontend/src/components/ModelImageGallery.tsx` | gallery with thumbnails + attribution (ui-spec §4.2) | 4.8 |
+| `frontend/src/components/ModelSources.tsx` | out-of-chat provenance block, grading-critical (ui-spec §4.5) | 4.8 |
+| `frontend/src/hooks/useCatalogueFilters.ts` | search-param parse/normalize/write helpers + `parseCatalogueFilters` (never a stub — pure URL logic) | 4.7 |
+| `frontend/src/components/specFields.ts` | **extended** with `formatSpecEnum` (existing exports untouched) | 4.7 |
+
+**Hook files (pinned — one file per replacement step so stubs die
+wholesale):**
+
+| File | Exports | Stubbed in | Made real in |
+|---|---|---|---|
+| `frontend/src/hooks/useCatalogueModels.ts` | `useCatalogueModels(filters)`, `useManufacturers()` + types `CatalogueListItem`, `Manufacturer` | 4.7 | 4.9 (deleted wholesale) |
+| `frontend/src/hooks/useCatalogueModel.ts` | `useCatalogueModel(motorbikeId)` + types `CatalogueModelDetail`, `CatalogueImage`, `ModelSource`, `CatalogueError` (`status` + `code`, `ProductError` shape) | 4.8 | 4.9 (deleted wholesale) |
+
+**Pinned UI-side rules:**
+
+- **SPA URL search params are pinned in ui-spec §3.2** (`category`,
+  `priceBand`, `manufacturer`, `ccMin/ccMax`, `kwMin/kwMax`, `seatMax`,
+  `weightMax`, `a2`, `sort` `name|-name|price|-price`, `page`) — short,
+  shareable, defaults omitted. **The data hook owns the one SPA→wire
+  mapping** (spelled out in the ui-spec preamble; `price` ↔ `msrpEur`);
+  renderers never see wire names. The TanStack Query key derives from the
+  normalized parsed-params object.
+- `PAGE_SIZE = 24` module constant, sent as `page[size]=24`;
+  **server-driven pagination** (MUI `Pagination`) — deliberately *not* the
+  admin walk-all-pages pattern, because `page` lives in the URL.
+- UI filter set = **full wire parity**: manufacturer, category, priceBand,
+  engineCc min/max, powerKw min/max, seatHeightMm max, wetWeightKg max,
+  a2Eligible (reconciliation 2026-08-28 — the designer's panel, ui-spec
+  §3.4).
+- Detail spec table reuses `frontend/src/components/specFields.ts`
+  (`SPEC_FIELD_KEYS`, `specFieldLabel/specFieldUnit/formatSpecValue`) — no
+  second label table.
+- `frontend/src/queryKeys.ts` gains `catalogue.{list(filters), detail(id)}`
+  and `manufacturers.list()` — a **separate `["catalogue", …]` namespace**
+  from the admin `["products", …]` keys (different shape/visibility;
+  invalidation traffic must not churn across surfaces).
+- `frontend/src/hooks/useServerEvents.ts` (in 4.9, not the stub steps):
+  `product.updated` additionally invalidates `["catalogue"]`; reconnect
+  blanket gains `["catalogue"]` + `["manufacturers"]`.
+- i18n: new `catalogue.*` block + `nav.catalogue`; **R9 hoist (approved)**:
+  `admin.review.specs.categoryValues`/`priceBandValues` move verbatim to
+  `common.specEnums.category/priceBand`, the admin spec form is re-pointed
+  (the one admin file 4.7 touches), and catalogue surfaces render enum
+  values through `formatSpecEnum` with verbatim fallback. Chat surfaces
+  keep rendering enum values verbatim (Phase-3 rule unchanged).
+- **Recommendation-card link (4.9):** wrap the card content in
+  `<CardActionArea component={RouterLink}
+  to={`/catalogue/${recommendation.motorbikeId}`}>` — the formula reserved
+  in the **Phase-3** ui-spec §9, spelled out in **Phase-4** ui-spec §6;
+  **nothing else changes** in `RecommendationCard`. In particular its
+  private `imageVariants()` helper stays private — the catalogue hooks
+  implement their own `_card.webp` → `_thumb.webp` swap + `VITE_API_URL`
+  prefix; this duplication is **deliberate** (rule of three — no shared
+  module yet).
+
+---
+
+## Config keys / dependencies
+
+**None.** No new config keys, no new dependencies, on either track (hard
+rules above).
+
+---
+
+## Merge-friction files
+
+Backend: `backend/app/main.py` (router registration, 4.4). Step 4.5 touches
+only `backend/app/services/chat_service.py` +
+`backend/app/api/endpoints/chat_messages.py` — disjoint from 4.3/4.4.
+
+Frontend: `frontend/src/App.tsx` · `frontend/src/queryKeys.ts` ·
+`frontend/src/hooks/useServerEvents.ts` ·
+`frontend/src/locales/en/translation.json` ·
+`frontend/src/components/AppLayout.tsx` (nav entry).
+
+**Single-Alembic-head rule: no Phase-4 migration at all.**
+
+---
+
+## Landed decisions
+
+Appended by implementing agents when a step finishes — decisions later steps
+depend on. 1–3 bullets per step, no prose.
