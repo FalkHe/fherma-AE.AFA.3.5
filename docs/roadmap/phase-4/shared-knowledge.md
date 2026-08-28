@@ -585,3 +585,26 @@ depend on. 1–3 bullets per step, no prose.
   live-verified during 4.10: a filtered `/catalogue?...` URL now survives the
   login redirect. The walkthrough documents this as working; no further
   action needed from a later step.
+
+### Step 4.11 fixes (mobile overflow defects)
+
+- **AppBar nav is icon-only below `sm`** (`AppLayout.tsx`): each destination
+  renders through a local `NavButton` (`to`/`icon`/`label`) that shows a
+  Material Symbols glyph at `xs` (`forum` / `two_wheeler` /
+  `admin_panel_settings`) and the text label from `sm` up, with `aria-label`
+  always carrying the label — a nav entry stays one real `RouterLink` and
+  keeps its accessible name at every width. Only `minWidth` is overridden
+  (`{ xs: 0, sm: 64 }`); padding stays MUI-default so `sm`-and-up widths are
+  byte-for-byte the old ones (137/104/64px). The 4.7 title-hiding tweak alone
+  left 377px of toolbar content at 360px; measured 3 nav glyphs + toggle +
+  account now fit with headroom (admin included). Add future nav entries via
+  `NavButton`, not a bare `Button`.
+- **Retrieved-article tables scroll inside a wrapper**
+  (`CatalogueModelRoute.tsx`): the react-markdown `components` map gains
+  `table: ProseTable`, a `Box` with `maxWidth: "100%"` + `overflowX: "auto"`
+  around the `<table>`. Any future markdown surface rendering GFM tables at
+  full page width needs the same override — the `MARKDOWN_SX` styling alone
+  does not bound a Wikipedia-width table. Chat's `MessageBubble` has no such
+  wrapper (it relies on the bubble's own `maxWidth: "100%"`) and was
+  deliberately left untouched — this fix was scoped to the two reported
+  defects.

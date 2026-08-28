@@ -34,6 +34,34 @@ function ServerEventsConnection() {
 }
 
 /**
+ * Three text labels plus the theme toggle and the account block do not fit a
+ * 360px toolbar (the hidden title alone was not enough — measured 377px of
+ * content), so below `sm` each nav button degrades to its glyph: dropping the
+ * button's 64px `minWidth` turns a ~137px label into a 40px target. The
+ * `aria-label` carries the destination name at every width, so the icon-only
+ * form is still announced and still a real link. Padding stays at the MUI
+ * default, so `sm`-and-up rendering is untouched.
+ */
+const NAV_BUTTON_SX = {
+  minWidth: { xs: 0, sm: 64 },
+} as const;
+
+const NAV_ICON_SX = { display: { xs: "block", sm: "none" } } as const;
+
+const NAV_LABEL_SX = { display: { xs: "none", sm: "inline" } } as const;
+
+function NavButton({ to, icon, label }: { to: string; icon: string; label: string }) {
+  return (
+    <Button color="inherit" component={RouterLink} to={to} aria-label={label} sx={NAV_BUTTON_SX}>
+      <Icon sx={NAV_ICON_SX}>{icon}</Icon>
+      <Box component="span" sx={NAV_LABEL_SX}>
+        {label}
+      </Box>
+    </Button>
+  );
+}
+
+/**
  * Chrome shared by every route: the top bar and the main content container.
  * Routes render into the `Outlet`.
  *
@@ -86,17 +114,15 @@ export function AppLayout() {
               their position at xs. */}
           <Box sx={{ flexGrow: 1, display: { xs: "block", sm: "none" } }} />
           {user !== null && (
-            <Box sx={{ display: "flex", gap: 1, mr: 1 }}>
-              <Button color="inherit" component={RouterLink} to="/consultations">
-                {t("nav.consultations")}
-              </Button>
-              <Button color="inherit" component={RouterLink} to="/catalogue">
-                {t("nav.catalogue")}
-              </Button>
+            <Box sx={{ display: "flex", gap: { xs: 0.5, sm: 1 }, mr: 1 }}>
+              <NavButton to="/consultations" icon="forum" label={t("nav.consultations")} />
+              <NavButton to="/catalogue" icon="two_wheeler" label={t("nav.catalogue")} />
               {user.role === "admin" && (
-                <Button color="inherit" component={RouterLink} to="/admin">
-                  {t("nav.admin")}
-                </Button>
+                <NavButton
+                  to="/admin"
+                  icon="admin_panel_settings"
+                  label={t("nav.admin")}
+                />
               )}
             </Box>
           )}

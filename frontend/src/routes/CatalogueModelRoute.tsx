@@ -70,8 +70,23 @@ function ProseHeading4({ children }: { children?: ReactNode }) {
   );
 }
 
+/**
+ * Retrieved articles carry Wikipedia-width tables whose min-content width is
+ * far past a phone viewport; unwrapped they push the whole page sideways
+ * (ui-spec §10 — "no horizontal page scroll anywhere" at 360px). The wrapper
+ * bounds the table to the column and moves the overflow into its own scroller.
+ */
+function ProseTable({ children }: { children?: ReactNode }) {
+  return (
+    <Box sx={{ maxWidth: "100%", overflowX: "auto" }}>
+      <table>{children}</table>
+    </Box>
+  );
+}
+
 const MARKDOWN_COMPONENTS = {
   a: ExternalLink,
+  table: ProseTable,
   h1: ProseHeading3,
   h2: ProseHeading3,
   h3: ProseHeading4,
@@ -84,7 +99,7 @@ const REMARK_PLUGINS = [remarkGfm];
 
 /**
  * Typography for the rendered article: GFM tables carry no borders of their own
- * and a wide one must scroll rather than push the page sideways. Deliberately
+ * (a wide one scrolls inside the `ProseTable` wrapper above). Deliberately
  * not shared with `MessageBubble`'s bubble-scoped styling — two surfaces, two
  * sets of constraints; a shared module is a rule-of-three decision.
  */

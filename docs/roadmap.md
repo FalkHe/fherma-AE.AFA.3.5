@@ -202,6 +202,11 @@ resumable after closing the browser.
 
 **Goal: the browsable catalogue completing the customer experience.**
 
+**Status: DONE (2026-08-28, tagged `phase-4-done`).** All steps landed and
+QA-proven except 4.5, which was dropped/deferred: the pinned row-lock fix is
+provably insufficient and any working fix changes a Phase-3 pin — owner
+decision pending, see `docs/roadmap/phase-4/open-questions.md` OQ4.
+
 Re-sliced 2026-08-28 into two parallel tracks (backend ∥ frontend, max
 effort 4 per step, three milestones) — binding contract:
 `docs/roadmap/phase-4/shared-knowledge.md`; UI:
@@ -216,8 +221,10 @@ effort 4 per step, three milestones) — binding contract:
 - **4.4 `/api/catalogue-models` endpoints** (backend) — customer-facing
     read-only resource (slim filtered/sorted list, self-contained detail);
     `GET /api/manufacturers` relaxed to signed-in users; opens S1.
-- **4.5 Concurrent-turn 409 race fix** (backend) — the Phase-3 Q4 row-lock
-    fix, migration-free (pending owner confirmation, `open-questions.md`).
+- **4.5 Concurrent-turn 409 race fix** (backend) — *dropped/deferred: the
+    pinned migration-free row lock provably cannot close the race
+    (check-then-act spans commits); owner decision pending in
+    `docs/roadmap/phase-4/open-questions.md` OQ4.*
 - **4.6 Phase-4 UI spec** (design) — done at slicing time (`ui-spec.md`).
 - **4.7 Catalogue list page on stubs** (frontend) — card grid,
     URL-persisted filter panel, pagination, nav entry.
