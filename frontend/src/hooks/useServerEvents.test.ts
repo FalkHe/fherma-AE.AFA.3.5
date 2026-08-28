@@ -137,12 +137,17 @@ describe("useServerEvents", () => {
     ]);
   });
 
-  it("invalidates the products cache on product.updated", () => {
+  it("invalidates the products and catalogue caches on product.updated", () => {
     const { invalidateQueries } = mountHook();
 
     currentSource().emitServerEvent("product.updated", { productId: "p-1" });
 
-    expect(invalidateQueries.mock.calls).toEqual([[{ queryKey: ["products"] }]]);
+    // An approval or an unpublish changes the customer catalogue too, and the
+    // two namespaces are separate caches on purpose.
+    expect(invalidateQueries.mock.calls).toEqual([
+      [{ queryKey: ["products"] }],
+      [{ queryKey: ["catalogue"] }],
+    ]);
   });
 
   it("invalidates documents and products on document.updated", () => {
@@ -179,6 +184,8 @@ describe("useServerEvents", () => {
       [{ queryKey: ["operations"] }],
       [{ queryKey: ["chats"] }],
       [{ queryKey: ["chatMessages"] }],
+      [{ queryKey: ["catalogue"] }],
+      [{ queryKey: ["manufacturers"] }],
     ]);
   });
 

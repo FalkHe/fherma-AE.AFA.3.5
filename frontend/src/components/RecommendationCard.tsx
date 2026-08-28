@@ -1,26 +1,24 @@
 import Box from "@mui/material/Box";
 import Card from "@mui/material/Card";
+import CardActionArea from "@mui/material/CardActionArea";
 import CardContent from "@mui/material/CardContent";
 import CardMedia from "@mui/material/CardMedia";
 import Icon from "@mui/material/Icon";
 import Typography from "@mui/material/Typography";
 import { useTranslation } from "react-i18next";
+import { Link as RouterLink } from "react-router";
 
 import type { Recommendation } from "../hooks/useChatMessages";
 
 import { formatSpecValue, specFieldLabel, specFieldUnit } from "./specFields";
 
 /**
- * One recommended model (ui-spec §9) — the payoff of the conversation.
+ * One recommended model (Phase-3 ui-spec §9) — the payoff of the conversation.
  *
- * The card is a **write-time snapshot**: a customer cannot read the catalogue in
- * this phase, so everything it shows travelled with the message. It is
- * deliberately **non-interactive** — the catalogue detail page does not exist
- * until Phase 4, and a dead link is worse than none. The href contract is
- * reserved: Phase 4 wraps the content in
- * `<CardActionArea component={RouterLink} to={`/catalogue/${motorbikeId}`}>`
- * and changes nothing else, which is why `motorbikeId` already rides along in
- * the prop.
+ * The card is a **write-time snapshot**: everything it shows travelled with the
+ * message, so it needs no catalogue read to render. Since Phase 4 its whole
+ * surface is a real link to that model's catalogue page (Phase-4 ui-spec §6) —
+ * the href contract the `motorbikeId` prop was reserved for.
  */
 
 /** Image height; the no-image fallback matches it so card heights stay stable. */
@@ -78,49 +76,54 @@ export function RecommendationCard({
 
   return (
     <Card variant="outlined" sx={{ width: { xs: "100%", sm: 280 } }}>
-      {variants === null ? (
-        // Models may be published without an approved image.
-        <Box
-          sx={{
-            height: IMAGE_HEIGHT,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            bgcolor: "action.hover",
-          }}
-        >
-          <Icon sx={{ fontSize: 48, color: "text.secondary" }}>two_wheeler</Icon>
-        </Box>
-      ) : (
-        <CardMedia
-          component="img"
-          height={IMAGE_HEIGHT}
-          image={variants.card}
-          srcSet={`${variants.thumb} 320w, ${variants.card} 640w`}
-          sizes="280px"
-          alt={recommendation.name}
-          loading="lazy"
-          sx={{ objectFit: "cover" }}
-        />
-      )}
-      <CardContent>
-        <Typography variant="subtitle1" component="h3">
-          {recommendation.name}
-        </Typography>
-        {specLines.map((line) => (
-          <Typography
-            key={line.field}
-            variant="caption"
-            color="text.secondary"
-            display="block"
+      <CardActionArea
+        component={RouterLink}
+        to={`/catalogue/${recommendation.motorbikeId}`}
+      >
+        {variants === null ? (
+          // Models may be published without an approved image.
+          <Box
+            sx={{
+              height: IMAGE_HEIGHT,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              bgcolor: "action.hover",
+            }}
           >
-            {line.text}
+            <Icon sx={{ fontSize: 48, color: "text.secondary" }}>two_wheeler</Icon>
+          </Box>
+        ) : (
+          <CardMedia
+            component="img"
+            height={IMAGE_HEIGHT}
+            image={variants.card}
+            srcSet={`${variants.thumb} 320w, ${variants.card} 640w`}
+            sizes="280px"
+            alt={recommendation.name}
+            loading="lazy"
+            sx={{ objectFit: "cover" }}
+          />
+        )}
+        <CardContent>
+          <Typography variant="subtitle1" component="h3">
+            {recommendation.name}
           </Typography>
-        ))}
-        <Typography variant="body2" sx={{ mt: 1 }}>
-          {recommendation.rationale}
-        </Typography>
-      </CardContent>
+          {specLines.map((line) => (
+            <Typography
+              key={line.field}
+              variant="caption"
+              color="text.secondary"
+              display="block"
+            >
+              {line.text}
+            </Typography>
+          ))}
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            {recommendation.rationale}
+          </Typography>
+        </CardContent>
+      </CardActionArea>
     </Card>
   );
 }

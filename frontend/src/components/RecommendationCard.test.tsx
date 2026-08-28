@@ -61,10 +61,13 @@ describe("RecommendationCard", () => {
     expect(screen.queryByText(/Seat height/)).not.toBeInTheDocument();
   });
 
-  it("offers no dead controls", () => {
+  it("links its whole surface to the model's catalogue page", () => {
     renderWithProviders(<RecommendationCard recommendation={withImage} />);
 
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    // A real href, so middle-click and copy-link work (Phase-4 ui-spec §6).
+    expect(screen.getByRole("link")).toHaveAttribute(
+      "href",
+      `/catalogue/${withImage.motorbikeId}`,
+    );
   });
 });

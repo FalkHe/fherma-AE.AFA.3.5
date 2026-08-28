@@ -7,22 +7,24 @@ import { useLocation } from "react-router";
 import type { CatalogueFilters } from "../hooks/useCatalogueFilters";
 import type { CatalogueModelPage } from "../hooks/useCatalogueModels";
 import { queryKeys } from "../queryKeys";
+import { catalogueApi } from "../test/catalogueApi";
+import { stubFetch } from "../test/network";
 import { renderWithProviders } from "../test/render";
 
 import { CatalogueRoute } from "./CatalogueRoute";
 
 /**
- * The catalogue list against its stub data (step 4.7).
+ * The catalogue list against a fake catalogue API (`test/catalogueApi.ts`).
  *
  * What is under test is the URL contract: a control writes the search params,
- * the parsed params drive the query key, and a mount at a given URL reproduces
- * both the controls and the results — the "reload/share the view" promise.
+ * the parsed params drive the query key and the request, and a mount at a given
+ * URL reproduces both the controls and the results — the "reload/share the view"
+ * promise.
  *
  * The list hook is wrapped rather than replaced: the fixture catalogue does the
- * filtering, sorting and paging for the happy paths, and only the states the
- * fixtures cannot produce (an empty catalogue, a failed request) are answered
- * with a canned query result. The same wrapper works after step 4.9 makes the
- * hook real.
+ * filtering, sorting and paging for the happy paths (through the real request
+ * path since step 4.9), and only the states the fixtures cannot produce (an
+ * empty catalogue, a failed request) are answered with a canned query result.
  */
 
 /** The filters the route last passed to the data hook — i.e. its query key. */
@@ -94,6 +96,7 @@ function cardLinks(): HTMLElement[] {
 beforeEach(() => {
   observedFilters = null;
   listOverride = null;
+  stubFetch(catalogueApi);
   // jsdom has no layout, so the page-change scroll would log "not implemented".
   vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
 });

@@ -1,25 +1,26 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { Route, Routes } from "react-router";
 
+import { catalogueApi } from "../test/catalogueApi";
+import { stubFetch } from "../test/network";
 import { renderWithProviders } from "../test/render";
 
 import { CatalogueModelRoute } from "./CatalogueModelRoute";
 
 /**
- * The model detail page against its stub fixtures (step 4.8).
+ * The model detail page against a fake catalogue API (`test/catalogueApi.ts`).
  *
- * Nothing is doubled here: the route is mounted at a real URL, the real stub
- * hook answers it, and the three fixture ids stand for the three situations the
- * page has to survive — a fully-populated model, a partially-extracted one, and
- * an id the catalogue does not publish. The same tests keep working after step
- * 4.9 replaces the hook, because they assert what is on screen, not how it got
- * there.
+ * Nothing is doubled here: the route is mounted at a real URL, the real hook
+ * requests it, and the three fixture ids stand for the three situations the page
+ * has to survive — a fully-populated model, a partially-extracted one, and an id
+ * the catalogue does not publish. The assertions are the ones written against
+ * the step-4.8 stub: they describe what is on screen, not how it got there.
  */
 
-/** The stub's fixture ids (`useCatalogueModel.ts`). */
+/** The fixture ids (`test/catalogueApi.ts`). */
 const IDS = {
   full: "01STUBSUZUKIGSR60000000000",
   sparse: "01STUBHONDAREBEL5000000000",
@@ -41,6 +42,10 @@ function renderRoute(motorbikeId: string, children?: ReactNode) {
 function specTable(): HTMLElement {
   return screen.getByRole("table", { name: "Verified specifications" });
 }
+
+beforeEach(() => {
+  stubFetch(catalogueApi);
+});
 
 describe("CatalogueModelRoute", () => {
   it("renders the header, the gallery and the attribution of a full model", async () => {

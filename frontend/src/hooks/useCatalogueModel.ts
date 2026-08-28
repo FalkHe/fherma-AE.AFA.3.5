@@ -1,84 +1,46 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
+import { apiClient } from "../api/client";
+import type { components } from "../api/schema";
 import { queryKeys } from "../queryKeys";
 
-import type { PriceBand, SpecCategory } from "./useCatalogueFilters";
-
 /**
- * STUB — the whole file is replaced wholesale in step 4.9, when
- * `GET /api/catalogue-models/{motorbikeId}` reaches the generated API client.
- * The exported names, the argument shape, the returned detail shape and the
- * query key are pinned by `docs/roadmap/phase-4/shared-knowledge.md`
- * (§Frontend conventions — delta); do not change them, and do not import
- * anything from here that 4.9 will not still export (`useCatalogueModel`,
- * `CatalogueModelDetail`, `CatalogueImage`, `ModelSource`, `CatalogueError`).
+ * One approved model, everything the detail page renders: the verified
+ * specification, the retrieved prose, the documents behind it and its
+ * photographs — one request, one payload.
  *
- * What is real here: the TanStack Query plumbing and the error shape. The hook
- * returns a genuine `useQuery` result — same key, same 404-vs-network branch the
- * route reads — over an in-memory fixture set that answers **404 for every id it
- * does not know**, exactly as the endpoint does for unknown *and* unapproved
- * models (no existence leak, ui-spec R6).
+ * The request goes through the generated `openapi-fetch` client, so every field
+ * is typed from the backend's own schema; the JSON:API envelope is unwrapped
+ * here and nowhere else. The only thing this hook adds to the payload is the
+ * development media prefix on the image URLs.
  *
- * The fixtures stand on their own: `useCatalogueModels.ts` carries a separate
- * list fixture set (both die together in 4.9). The two overlap in one id — the
- * fully-populated Suzuki GSR 600 — so the grid's click-through has a destination
- * that agrees with its card.
+ * An unknown **and** an unpublished id both answer 404 `not-found` — the
+ * backend deliberately cannot tell them apart (no existence leak), so neither
+ * does this hook: the screen gets one not-found state for both.
  */
 
-// --- Contract types (survive 4.9) ------------------------------------------
+// --- Types ------------------------------------------------------------------
 
 /**
- * One approved image, in the wire's own variant keys (`ImageVariants` plus the
- * attribution), so 4.9's generated types replace this declaration without a
- * single edit in `ModelImageGallery`.
+ * One approved image: the three variant URLs plus its attribution, in the wire's
+ * own variant keys, so `ModelImageGallery` reads exactly what the API produced.
  */
-export interface CatalogueImage {
-  thumb: string;
-  card: string;
-  detail: string;
-  /** Licence line; shown verbatim wherever the image is published. */
-  attribution: string | null;
-}
+export type CatalogueImage = components["schemas"]["CatalogueImage"];
 
 /** One retrieved document behind the page — the out-of-chat provenance row. */
-export interface ModelSource {
-  sourceTitle: string;
-  /** `null` for an uploaded document: a row without a link, never a dead one. */
-  sourceUrl: string | null;
-}
+export type ModelSource = components["schemas"]["CatalogueSource"];
 
 /**
- * Everything the detail page renders (ui-spec §4.6 "data needs").
+ * Everything the detail page renders (ui-spec §4.6 "data needs"): the resource
+ * id merged with its attributes.
  *
  * `specs` holds the **13 frozen fields**, every one of them explicitly nullable:
  * an approved model without a verified revision answers 13 nulls, and the table
  * omits what it does not know rather than guessing it.
  */
-export interface CatalogueModelDetail {
+export type CatalogueModelDetail = {
   motorbikeId: string;
-  name: string;
-  manufacturer: string | null;
-  specs: {
-    category: SpecCategory | null;
-    engineCc: number | null;
-    cylinders: number | null;
-    powerKw: number | null;
-    torqueNm: number | null;
-    wetWeightKg: number | null;
-    seatHeightMm: number | null;
-    tankCapacityL: number | null;
-    topSpeedKmh: number | null;
-    abs: boolean | null;
-    a2Eligible: boolean | null;
-    priceBand: PriceBand | null;
-    msrpEur: number | null;
-  };
-  /** The Wikipedia document's markdown, or `null` when there is no prose. */
-  article: string | null;
-  sources: ModelSource[];
-  /** Approved images, newest first — possibly none. */
-  images: CatalogueImage[];
-}
+} & components["schemas"]["CatalogueModelAttributes"];
 
 /**
  * A failed catalogue read.
@@ -100,22 +62,29 @@ export class CatalogueError extends Error {
   }
 }
 
-// --- Stub server (deleted in 4.9) ------------------------------------------
-
-/** Fixture ids, 26 characters like the ULID primary keys they stand in for. */
-function stubId(label: string): string {
-  return `01STUB${label.toUpperCase()}`.padEnd(26, "0").slice(0, 26);
-}
+/** The two error bodies these endpoints can answer with (see shared-knowledge). */
+type ErrorBody =
+  | components["schemas"]["ErrorDocument"]
+  | components["schemas"]["HTTPValidationError"]
+  | undefined;
 
 /**
- * The three fixture ids, exercised by the tests and by the manual walk-through:
- * a fully-populated model, a sparse one, and one that is not in the catalogue.
+ * Shared by both catalogue hooks (the `chatError` precedent): the class lives
+ * with the screen that branches on it, and the sibling list hook throws the same
+ * type so a caller never has to know which endpoint failed.
  */
-const FIXTURE_IDS = {
-  full: stubId("suzukigsr600"),
-  sparse: stubId("hondarebel500"),
-  missing: stubId("missing"),
-} as const;
+export function catalogueError(status: number, body: ErrorBody): CatalogueError {
+  // Domain failures arrive as a JSON:API `errors[]` document; request-validation
+  // 422s keep FastAPI's `{"detail": [...]}` shape and therefore have no code.
+  const code =
+    body !== undefined && "errors" in body && body.errors.length > 0
+      ? body.errors[0].code
+      : null;
+
+  return new CatalogueError(status, code);
+}
+
+// --- Request ----------------------------------------------------------------
 
 /**
  * Server-relative `/media/…` URLs resolve against Vite in development, where the
@@ -124,151 +93,38 @@ const FIXTURE_IDS = {
 const mediaBase: string = import.meta.env.VITE_API_URL ?? "";
 
 /**
- * Real approved images from the development media directory, so the gallery
- * renders actual photographs while the endpoint is still missing. The variant
- * URLs are spelled out the way the API computes them
- * (`…_{thumb,card,detail}.webp`).
+ * The detail payload carries all three variants already (no suffix arithmetic
+ * here, unlike the summary's card-only `imageUrl`); only the origin has to be
+ * filled in for the cross-origin development setup.
  */
-function imageVariants(cardPath: string, attribution: string | null): CatalogueImage {
+function prefixImage(image: CatalogueImage): CatalogueImage {
   return {
-    thumb: mediaBase + cardPath.replace(/_card\.webp$/, "_thumb.webp"),
-    card: mediaBase + cardPath,
-    detail: mediaBase + cardPath.replace(/_card\.webp$/, "_detail.webp"),
-    attribution,
+    thumb: mediaBase + image.thumb,
+    card: mediaBase + image.card,
+    detail: mediaBase + image.detail,
+    attribution: image.attribution,
   };
 }
 
-/**
- * Two `##` sections, a GFM table and an inline `<script>`: the fixture that
- * proves the pinned markdown configuration. Raw HTML is **off**, so the script
- * tag reaches the page as text and never as an element — this is retrieved web
- * content, and the article block is where that rule has to hold.
- */
-const GSR600_ARTICLE = `The **Suzuki GSR 600** is a naked bike built from 2006 to 2011, using a
-detuned version of the [GSX-R600](https://en.wikipedia.org/wiki/Suzuki_GSX-R600)
-inline-four. <script>window.__catalogueStubPwned = true;</script>
-
-## Design
-
-The GSR 600 pairs a bikini fairing with an underseat exhaust; the riding
-position is upright, and the frame is a twin-spar aluminium unit.
-
-| Year | Change |
-| --- | --- |
-| 2006 | Launched in Europe |
-| 2007 | ABS offered as an option |
-| 2011 | Replaced by the GSR 750 |
-
-## Reception
-
-Reviewers praised the engine's mid-range and the low seat height, while
-criticising the budget suspension on early bikes.`;
-
-const FIXTURES: readonly CatalogueModelDetail[] = [
-  {
-    motorbikeId: FIXTURE_IDS.full,
-    name: "Suzuki GSR 600",
-    manufacturer: "Suzuki",
-    // 13 of 13 — every group renders, both boolean spellings appear.
-    specs: {
-      category: "naked",
-      engineCc: 599,
-      cylinders: 4,
-      powerKw: 72.5,
-      torqueNm: 63.5,
-      wetWeightKg: 197,
-      seatHeightMm: 785,
-      tankCapacityL: 16.5,
-      topSpeedKmh: 230,
-      abs: true,
-      a2Eligible: false,
-      priceBand: "budget",
-      msrpEur: 4200,
-    },
-    article: GSR600_ARTICLE,
-    // Three rows, two of which are the interesting ones: an upload without a
-    // URL, and a duplicate of the Wikipedia URL that de-duplication removes.
-    sources: [
-      {
-        sourceTitle: "Suzuki GSR600 — Wikipedia",
-        sourceUrl: "https://en.wikipedia.org/wiki/Suzuki_GSR600",
-      },
-      {
-        sourceTitle: "Suzuki GSR600 (mirror)",
-        sourceUrl: "https://en.wikipedia.org/wiki/Suzuki_GSR600",
-      },
-      { sourceTitle: "Owner's manual (uploaded)", sourceUrl: null },
-    ],
-    images: [
-      imageVariants(
-        "/media/motorbikes/01M10WSCDCVD8P5AG7AWVEXWJK/01M10WSKNMZ3ZP9FEX7JPMQ7AW_card.webp",
-        "Photo: Wikimedia Commons, CC BY-SA 4.0",
-      ),
-      imageVariants(
-        "/media/motorbikes/01M112N358BYCK15Y6E3ZGS75V/01M112P80J0ZKG35ZDMVASJZVB_card.webp",
-        null,
-      ),
-    ],
-  },
-  {
-    motorbikeId: FIXTURE_IDS.sparse,
-    name: "Honda Rebel 500",
-    manufacturer: "Honda",
-    // Partial extraction: the "Licence & safety" group is entirely unknown, so
-    // it renders no header at all, and the unknown fields render no rows.
-    specs: {
-      category: "cruiser",
-      engineCc: 471,
-      cylinders: null,
-      powerKw: 34,
-      torqueNm: null,
-      wetWeightKg: 191,
-      seatHeightMm: 690,
-      tankCapacityL: null,
-      topSpeedKmh: null,
-      abs: null,
-      a2Eligible: null,
-      priceBand: "mid",
-      msrpEur: 6500,
-    },
-    article: null,
-    sources: [
-      {
-        sourceTitle: "Honda Rebel 500 — Wikipedia",
-        sourceUrl: "https://en.wikipedia.org/wiki/Honda_Rebel",
-      },
-    ],
-    images: [],
-  },
-];
-
-const FIXTURES_BY_ID = new Map(FIXTURES.map((model) => [model.motorbikeId, model]));
-
-/** Round trip long enough to make the page skeletons visible. */
-const STUB_LATENCY_MS = 250;
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-/**
- * What the endpoint will do: answer the approved model, or 404 `not-found` for
- * anything else — unknown, backlog, in review and rejected are deliberately
- * indistinguishable.
- */
+/** `GET /api/catalogue-models/{motorbikeId}` — the whole page in one payload. */
 async function getModel(motorbikeId: string): Promise<CatalogueModelDetail> {
-  await sleep(STUB_LATENCY_MS);
+  const { data, error, response } = await apiClient.GET(
+    "/api/catalogue-models/{motorbike_id}",
+    { params: { path: { motorbike_id: motorbikeId } } },
+  );
 
-  const model = FIXTURES_BY_ID.get(motorbikeId);
-
-  if (model === undefined) {
-    throw new CatalogueError(404, "not-found");
+  if (!response.ok || data === undefined) {
+    throw catalogueError(response.status, error);
   }
 
-  return model;
+  return {
+    motorbikeId: data.data.id,
+    ...data.data.attributes,
+    images: data.data.attributes.images.map(prefixImage),
+  };
 }
 
-// --- Hook (survives 4.9) ---------------------------------------------------
+// --- Hook -------------------------------------------------------------------
 
 /**
  * One approved model with everything the detail page shows: specs, prose,

@@ -535,3 +535,37 @@ depend on. 1–3 bullets per step, no prose.
   `renderWithProviders(..., {initialEntries})`; the 404 test wraps the route in a
   nested `QueryClientProvider` with `retry: false` (the `ConsultationChatRoute`
   precedent) to skip the ~7 s backoff.
+
+### Step 4.9 (catalogue wired live + recommendation-card link)
+
+- **Both stub hooks are gone; the pinned exports are unchanged**, so no renderer
+  moved. `useCatalogueModels.ts` owns the whole SPA→wire mapping (`toListQuery`:
+  absent filters **omitted**, `a2` sent only when on, `WIRE_SORT` `price ↔
+  msrpEur`, `page[size]=24`) and derives the thumb from the card-only `imageUrl`
+  by suffix swap; `useCatalogueModel.ts` only prefixes `VITE_API_URL` onto the
+  three variants the detail payload already carries. Types come from the
+  generated schema (`CatalogueListItem` = `Pick<CatalogueModelSummaryAttributes,
+  …> & {motorbikeId, image}`, `CatalogueModelDetail` = `{motorbikeId} &
+  CatalogueModelAttributes`). **`catalogueError(status, body)` is exported from
+  `useCatalogueModel.ts` and used by both hooks** (the `useChatMessages` →
+  `useChats` precedent) — every catalogue failure is a `CatalogueError`.
+  `useManufacturers` is one request with `page[size]=100`, no walk (dev DB: 3).
+- **Test fixtures moved out of the dying stubs into
+  `frontend/src/test/catalogueApi.ts`** — a `stubFetch(catalogueApi)` handler
+  that serves `/api/catalogue-models`, `…/{id}` (404 for anything else) and
+  `/api/manufacturers` in the **wire** vocabulary. The two catalogue route test
+  files gained only the import plus a `beforeEach`; every on-screen assertion is
+  the one written on stubs. Reuse this handler for any later catalogue screen
+  test instead of mocking the hooks.
+- **SSE + card:** `product.updated` → `["products"]`, `["catalogue"]`; the
+  reconnect blanket is products, operations, chats, chatMessages, catalogue,
+  manufacturers (`useServerEvents.test.ts` asserts the exact call order — append
+  new prefixes at the end). `RecommendationCard` is now a
+  `CardActionArea component={RouterLink}` over unchanged content; its Phase-3
+  "offers no dead controls" test became "links its whole surface…".
+- **Open defect (not fixed here — outside the step's files):**
+  `frontend/src/routes/LoginRoute.tsx:59` reads only `from.pathname`, so the
+  login redirect **drops the search string**: a shared *filtered* catalogue URL
+  lands a fresh session on a bare `/catalogue`. Path-only deep links (detail
+  pages) are unaffected. Fix is one line (carry `pathname + search`); needs a
+  coordinator decision.

@@ -44,10 +44,14 @@ type ServerEventName =
  * `chat.message.created` touches both chat caches: the advisor's answer joins
  * the timeline, and the consultation's last activity and `activeOperationId`
  * (the typing indicator's only input) move with it.
+ *
+ * `product.updated` reaches the customer catalogue as well: an approval or an
+ * unpublish changes which models the catalogue shows, and the two namespaces are
+ * separate caches on purpose (admin and customer see different payloads).
  */
 const INVALIDATIONS: Record<ServerEventName, readonly (readonly string[])[]> = {
   "operation.updated": [queryKeys.operations.all],
-  "product.updated": [queryKeys.products.all],
+  "product.updated": [queryKeys.products.all, queryKeys.catalogue.all],
   "document.updated": [queryKeys.documents.all, queryKeys.products.all],
   "chat.message.created": [queryKeys.chatMessages.all, queryKeys.chats.all],
 };
@@ -64,6 +68,8 @@ const RECONNECT_INVALIDATIONS: readonly (readonly string[])[] = [
   queryKeys.operations.all,
   queryKeys.chats.all,
   queryKeys.chatMessages.all,
+  queryKeys.catalogue.all,
+  queryKeys.manufacturers.all,
 ];
 
 /** `entity_type` of an operation answering a consultation turn. */
