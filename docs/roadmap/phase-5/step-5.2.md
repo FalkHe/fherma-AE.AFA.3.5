@@ -1,33 +1,27 @@
 ---
 phase: 5
 step: "5.2"
-title: Observability & polish
-summary: Wire the optional Langfuse callback (config-gated, with its optional Compose stack) and audit every screen for progress indicators, empty, loading, and error states.
-effort: 8
-dependencies: ["2.2", "2.6", "3.15", "4.2", "5.1"]
+title: Observability & polish (split — replaced by steps 5.9, 5.10, 5.13, 5.17)
+summary: SPLIT. The former effort-8 observability/polish step was re-sliced (2026-08-28) into steps of max effort 4. See shared-knowledge.md for the binding contract and the mapping below.
+effort: 0
+dependencies: []
 ---
 
-# Step 5.2 — Observability & polish
+# Step 5.2 — Observability & polish (split)
 
-**Effort: 8** — Langfuse itself is one callback handler plus Compose profile work, but the full-app UI-state audit across chat, catalogue, admin backlog, and review screens is the bulk of a day. Best done after step 5.1 so the error states being polished are the final ones.
+**This step no longer exists as dispatchable work.** During the Phase-5
+slicing (2026-08-28) its effort-8 scope was split, with the open design
+points resolved and pinned in [`shared-knowledge.md`](shared-knowledge.md)
+(decisions D5, D6, D9) and [`ui-spec.md`](ui-spec.md).
 
-## Architect's outline
-
-- **Langfuse callback factory** (backend-dev): `backend/app/llm/observability.py` returning a Langfuse LangChain callback handler when `LANGFUSE_*` settings are present, else `None`; attached at every chain/agent invocation (advisor agent, spec extraction, query translation, embeddings). No traces/token/cost data in the app database.
-- **Langfuse Compose profile** (backend-dev): optional services `langfuse-web`, `langfuse-worker`, `clickhouse`, `valkey`, `minio` behind a Compose profile (`--profile langfuse`), with the `langfuse` database on the existing PostgreSQL.
-- **Failure isolation** (backend-dev): a down/misconfigured Langfuse never fails an LLM call (handler errors swallowed/logged); verify with a wrong `LANGFUSE_HOST` — chat still works.
-- **Progress-indicator audit** (ui-ux-designer defines, frontend-dev implements): every long operation has a visible indicator driven by `operation.updated` SSE events — ingestion progress per backlog row, "seen/typing…" in chat, re-embed job status; checked screen by screen against `docs/core-requirements.md` §5.
-- **Empty states** (frontend-dev): shared `EmptyState` component for: no consultations yet, empty catalogue, no filter matches, empty backlog, model with no images/sources.
-- **Loading states** (frontend-dev): MUI Skeletons for catalogue list, model detail, consultation list, chat history load; no layout jumps on resolve.
-- **Error/reconnect states** (frontend-dev): TanStack Query error boundaries with a retry action; a subtle "reconnecting…" indicator when the EventSource drops, clearing on reconnect.
-- **QA walkthrough** (qa): a state matrix (screen × {loading, empty, error, in-progress}) executed manually — throttled network for loading, fresh account for empty, stopped backend for error, live ingestion for progress.
-
-## Verification
-
-- With Langfuse configured, one consultation shows a full trace (agent steps + tool calls) in the Langfuse UI; with it unset, everything runs identically; `docker compose --profile langfuse up` starts the stack, plain `docker compose up` does not; the state matrix passes.
-
-## Risks / notes
-
-- The self-hosted Langfuse stack is heavy (4 extra services); it's a bonus item — keep it strictly profile-gated and never let submission depend on it running.
-- Verify Langfuse/LangChain version compatibility first; the callback-handler API has shifted between major versions.
-- Resist redesigning screens during the audit — this step adds states to existing screens only.
+| Former 5.2 scope | Now lives in |
+|---|---|
+| Langfuse callback factory | 5.9 (D5 — `observability_callbacks` slot already exists; **embeddings excluded**, a documented limitation) |
+| Langfuse Compose profile | 5.10 (D6 — dedicated `langfuse-postgres`, default stack byte-identical; bonus item, OQ-C) |
+| Failure isolation (wrong `LANGFUSE_HOST` never fails a chat) | 5.9's verification |
+| Progress-indicator audit | **Already landed and pinned** (Phase-2 §3 OperationProgress, Phase-3 TypingIndicator, Phase-4 §3.7/§4.6 states) — collapses to the ui-spec §2 audit matrix, gap closures in 5.13, QA spot-check in 5.17 |
+| Empty states / loading skeletons | **Already landed per prior ui-specs**; the audited gaps (review tab panels, operations-query failure) close in 5.13 |
+| "TanStack Query error boundaries with retry" | **Superseded by D9 / ui-spec §9**: per-screen EmptyState + refetch stays; one app-level `AppErrorBoundary` for render crashes (ui-spec §5) in 5.13 |
+| "Reconnecting…" indicator | **Already landed** (`LiveConnectionAlert`, 5 s grace, "Live updates interrupted — reconnecting…") — no work; catalogue omission re-confirmed (ui-spec §9) |
+| Re-embed job status | **Pinned deliberate omission** (ui-spec §3.7) — CLI-triggered job, the CLI is the progress surface; named in the 5.15 limitations |
+| QA state-matrix walkthrough | 5.17 (M1) using ui-spec §2 as the checklist |

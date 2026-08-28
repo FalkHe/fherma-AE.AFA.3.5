@@ -244,14 +244,43 @@ URL.
 
 **Goal: grading-ready.**
 
-- **5.1 Error handling & validation sweep** — input validation everywhere,
-    graceful LLM/ingestion failure states, prompt-injection defences around
-    retrieved web content.
-- **5.2 Observability & polish** — optional Langfuse wiring, progress
-    indicators audit, empty/loading/error states.
-- **5.3 Docs & demo readiness** — README, setup instructions, seed/demo data
-    (initial model list ingested), mapping of the implementation to the
-    grading criteria.
+Re-sliced 2026-08-28 into two parallel tracks (backend ∥ frontend, max
+effort 4 per step, three milestones) — binding contract:
+`docs/roadmap/phase-5/shared-knowledge.md`; UI:
+`docs/roadmap/phase-5/ui-spec.md` (done at slicing time); open items:
+`docs/roadmap/phase-5/open-questions.md`. The phase is deliberately
+"confirm + test + close gaps" — landed failure states, progress indicators
+and per-screen state handling are audited, not rebuilt.
+
+- **5.1 / 5.2 / 5.3** *(split into 5.4–5.18; the step files remain as
+    mapping markers)*.
+- **5.4 Global 500 catch-all** (backend) — JSON:API envelope, code
+    `internal-error`, no trace leak.
+- **5.5 Input-validation gap closure** (backend) — the audited five gaps
+    (filter caps, catalogue filter bounds, page cap, chat_id ULID shape,
+    draft-spec dict caps); opens S1.
+- **5.6 LLM client timeouts & transient mapping** (backend) — closes the
+    step-3.9 stalled-embeddings finding.
+- **5.7 Fencing module extraction** (backend, refactor) ·
+    **5.8 Prompt-injection fencing on advisor surfaces** (backend) —
+    retrieved chunks, preference values, query-translation context.
+- **5.9 Langfuse callback factory** (backend; the phase's only new
+    dependency + three `LANGFUSE_*` keys; opens with a compat spike) ·
+    **5.10 Langfuse Compose profile** (backend; bonus, profile-gated).
+- **5.11 Seed list & `app seed demo --auto-approve`** (backend) — real
+    pipeline, skip-if-exists, report-and-continue.
+- **5.12 Shared `UntrustedMarkdown` renderer** (frontend) + chat inertness
+    test · **5.13 Error-surface gap closure + `AppErrorBoundary`**
+    (frontend, per ui-spec) · **5.14 RegisterRoute tests + type refresh**
+    (frontend, S1).
+- **5.15 README: CLI reference, seed, Langfuse, limitations** (docs) ·
+    **5.16 Grading map + demo-walkthrough submission chapter** (docs).
+- **5.17 M1 security & error acceptance** (QA) · **5.18 Final acceptance &
+    fresh-clone verification** (QA) — tags `phase-5-done`.
+
+*Done when:* a fresh clone with only `.env` filled follows the README to a
+seeded, hardened, documented app; the demo walkthrough replays green; the
+grading map covers every criterion and claimed bonus.
 
 ---
 
