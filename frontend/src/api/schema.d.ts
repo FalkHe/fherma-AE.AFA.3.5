@@ -153,6 +153,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/catalogue-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Browse the catalogue
+         * @description Return one page of approved models, filtered and sorted.
+         *
+         *     Comma-separated members of one filter are OR-ed, different filters are
+         *     AND-ed. A stated specification bound drops models whose verified value is
+         *     unknown (a missing number cannot support a claim), while unfiltered browsing
+         *     keeps them — the pinned NULL-spec browse rule.
+         */
+        get: operations["list_catalogue_models_api_catalogue_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/catalogue-models/{motorbike_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a catalogue model
+         * @description Return one approved model with its specification, prose, sources and images.
+         */
+        get: operations["get_catalogue_model_api_catalogue_models__motorbike_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/chat-messages": {
         parameters: {
             query?: never;
@@ -450,6 +495,166 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * BrowseSort
+         * @description The orderings the customer catalogue offers, spelled as they go on the wire.
+         *
+         *     Members are the wire values (`sort=-msrpEur`), so the route validates against
+         *     this enum instead of restating the vocabulary.
+         * @enum {string}
+         */
+        BrowseSort: "name" | "-name" | "msrpEur" | "-msrpEur";
+        /**
+         * CatalogueImage
+         * @description One approved picture: the three variant URLs plus its attribution.
+         *
+         *     Extends the pinned `ImageVariants` rather than restating the variant names,
+         *     so the URL formula stays in one place. `attribution` travels with the URLs
+         *     because the gallery must always render it — that is the licence compliance.
+         */
+        CatalogueImage: {
+            /** Thumb */
+            thumb: string;
+            /** Card */
+            card: string;
+            /** Detail */
+            detail: string;
+            /** Attribution */
+            attribution: string | null;
+        };
+        /**
+         * CatalogueModelAttributes
+         * @description The pinned attribute set of the detail page — self-contained on purpose.
+         */
+        CatalogueModelAttributes: {
+            /** Name */
+            name: string;
+            /** Manufacturer */
+            manufacturer: string | null;
+            specs: components["schemas"]["CatalogueModelSpecs"];
+            /** Article */
+            article: string | null;
+            /** Sources */
+            sources: components["schemas"]["CatalogueSource"][];
+            /** Images */
+            images: components["schemas"]["CatalogueImage"][];
+        };
+        /**
+         * CatalogueModelDocument
+         * @description Body of `GET /api/catalogue-models/{motorbike_id}`.
+         */
+        CatalogueModelDocument: {
+            data: components["schemas"]["CatalogueModelResource"];
+        };
+        /**
+         * CatalogueModelListDocument
+         * @description Body of `GET /api/catalogue-models`.
+         */
+        CatalogueModelListDocument: {
+            /** Data */
+            data: components["schemas"]["CatalogueModelSummaryResource"][];
+            meta: components["schemas"]["Meta"];
+        };
+        /**
+         * CatalogueModelResource
+         * @description A catalogue-model resource object as it appears in the detail document.
+         */
+        CatalogueModelResource: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default catalogue-models
+             * @constant
+             */
+            type: "catalogue-models";
+            attributes: components["schemas"]["CatalogueModelAttributes"];
+        };
+        /**
+         * CatalogueModelSpecs
+         * @description The verified specification of one model: the 13 frozen comparison fields.
+         *
+         *     Field order mirrors `catalogue_search_service.COMPARISON_SPEC_FIELDS`, and
+         *     every field is always present — `null` is the honest answer for a value the
+         *     catalogue never verified, and the detail table renders the gap.
+         */
+        CatalogueModelSpecs: {
+            category: components["schemas"]["SpecCategory"] | null;
+            /** Enginecc */
+            engineCc: number | null;
+            /** Cylinders */
+            cylinders: number | null;
+            /** Powerkw */
+            powerKw: number | null;
+            /** Torquenm */
+            torqueNm: number | null;
+            /** Wetweightkg */
+            wetWeightKg: number | null;
+            /** Seatheightmm */
+            seatHeightMm: number | null;
+            /** Tankcapacityl */
+            tankCapacityL: number | null;
+            /** Topspeedkmh */
+            topSpeedKmh: number | null;
+            /** Abs */
+            abs: boolean | null;
+            /** A2Eligible */
+            a2Eligible: boolean | null;
+            priceBand: components["schemas"]["PriceBand"] | null;
+            /** Msrpeur */
+            msrpEur: number | null;
+        };
+        /**
+         * CatalogueModelSummaryAttributes
+         * @description The pinned attribute set of one browse card.
+         */
+        CatalogueModelSummaryAttributes: {
+            /** Name */
+            name: string;
+            /** Manufacturer */
+            manufacturer: string | null;
+            category: components["schemas"]["SpecCategory"] | null;
+            /** Enginecc */
+            engineCc: number | null;
+            /** Powerkw */
+            powerKw: number | null;
+            /** Wetweightkg */
+            wetWeightKg: number | null;
+            /** Seatheightmm */
+            seatHeightMm: number | null;
+            /** A2Eligible */
+            a2Eligible: boolean | null;
+            priceBand: components["schemas"]["PriceBand"] | null;
+            /** Msrpeur */
+            msrpEur: number | null;
+            /** Imageurl */
+            imageUrl: string | null;
+        };
+        /**
+         * CatalogueModelSummaryResource
+         * @description A catalogue-model resource object as it appears in the list.
+         */
+        CatalogueModelSummaryResource: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default catalogue-models
+             * @constant
+             */
+            type: "catalogue-models";
+            attributes: components["schemas"]["CatalogueModelSummaryAttributes"];
+        };
+        /**
+         * CatalogueSource
+         * @description One provenance entry: what a document is, and where it can be read.
+         */
+        CatalogueSource: {
+            /** Sourcetitle */
+            sourceTitle: string;
+            /** Sourceurl */
+            sourceUrl: string | null;
+        };
         /**
          * ChatAttributes
          * @description The pinned attribute set of a consultation.
@@ -1515,6 +1720,112 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": string;
+                };
+            };
+        };
+    };
+    list_catalogue_models_api_catalogue_models_get: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated list of categories: naked, sport, sport_touring, touring, adventure, cruiser, classic, scrambler, enduro, supermoto, scooter */
+                "filter[category]"?: string | null;
+                /** @description Comma-separated list of price bands: budget, mid, upper, premium */
+                "filter[priceBand]"?: string | null;
+                /** @description Comma-separated list of manufacturer ULIDs; an unknown id matches nothing. */
+                "filter[manufacturer]"?: string | null;
+                /** @description Smallest displacement in cm³. */
+                "filter[engineCcMin]"?: number | null;
+                /** @description Largest displacement in cm³. */
+                "filter[engineCcMax]"?: number | null;
+                /** @description Smallest maximum power in kW. */
+                "filter[powerKwMin]"?: number | null;
+                /** @description Largest maximum power in kW. */
+                "filter[powerKwMax]"?: number | null;
+                /** @description Heaviest wet weight in kg. */
+                "filter[wetWeightKgMax]"?: number | null;
+                /** @description Highest seat height in mm. */
+                "filter[seatHeightMmMax]"?: number | null;
+                /** @description Restrict to A2-eligible models. */
+                "filter[a2Eligible]"?: boolean | null;
+                /** @description Ordering; price sorts put models without a price last. */
+                sort?: components["schemas"]["BrowseSort"];
+                /** @description 1-based page number. */
+                "page[number]"?: number;
+                /** @description Rows per page (maximum 100). */
+                "page[size]"?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogueModelListDocument"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_catalogue_model_api_catalogue_models__motorbike_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description ULID of the catalogue model. */
+                motorbike_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogueModelDocument"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

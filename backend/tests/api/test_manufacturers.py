@@ -115,11 +115,28 @@ def test_list_page_size_above_the_maximum_is_rejected(admin_client: TestClient) 
     assert response.status_code == 422
 
 
-def test_list_as_non_admin_returns_403(user_client: TestClient) -> None:
+def test_list_as_plain_user_returns_the_same_brands(
+    user_client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    """Since Phase 4 the brand list is readable by any signed-in account (D2)."""
+    _seed(fake_session, "Suzuki", "Honda")
+
     response = user_client.get("/api/manufacturers")
 
-    assert response.status_code == 403
-    assert response.json() == {"detail": "Admin privileges required."}
+    assert response.status_code == 200, response.text
+    assert [resource["attributes"]["name"] for resource in response.json()["data"]] == [
+        "Honda",
+        "Suzuki",
+    ]
+
+
+def test_list_without_a_session_returns_401(api: FastAPI, fake_session: FakeAsyncSession) -> None:
+    api.dependency_overrides[get_db_session] = lambda: fake_session
+    with TestClient(api) as anonymous:
+        response = anonymous.get("/api/manufacturers")
+    api.dependency_overrides.clear()
+
+    assert response.status_code == 401
 
 
 # --- GET /api/manufacturers/{id} ----------------------------------------------
@@ -155,14 +172,15 @@ def test_get_unknown_id_returns_404_not_found(admin_client: TestClient) -> None:
     assert errors[0]["code"] == "not-found"
 
 
-def test_get_as_non_admin_returns_403(
+def test_get_as_plain_user_returns_the_brand(
     user_client: TestClient, fake_session: FakeAsyncSession
 ) -> None:
     stored = _seed(fake_session, "Suzuki")[0]
 
     response = user_client.get(f"/api/manufacturers/{stored.id}")
 
-    assert response.status_code == 403
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["id"] == stored.id
 
 
 # --- No write routes ----------------------------------------------------------

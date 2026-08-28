@@ -420,6 +420,31 @@ depend on. 1–3 bullets per step, no prose.
   `statuses=[ImageStatus.APPROVED]` explicitly. Both statements are split into
   private `_…_statement` helpers so they compile in tests without a database.
 
+### Step 4.4 (`/api/catalogue-models` + manufacturers read relax)
+
+- **Wire (generated types 4.9 builds on):** components `CatalogueModelSummaryAttributes`
+  (list) / `CatalogueModelAttributes` + `CatalogueModelSpecs` / `CatalogueSource` /
+  `CatalogueImage` — `category` and `priceBand` are typed with the **existing**
+  `SpecCategory`/`PriceBand` enum components (literal unions in TS, not bare
+  `string`), `CatalogueImage` **extends `ImageVariants`** (`thumb`/`card`/`detail`
+  + `attribution`), every `specs` field is required-and-nullable (an approved
+  model with no verified revision answers 13 explicit nulls). `imageUrl` is the
+  `card` variant, path-only (`/media/…`) — the client prefixes `VITE_API_URL`.
+- **Route mechanics:** `sort` is typed as the **`BrowseSort` enum** (component
+  `BrowseSort`, junk → FastAPI 422, default `name`); `filter[category]` /
+  `filter[priceBand]` are parsed via `jsonapi.parse_filter` + the vocabulary enum
+  → unknown member = 400 `invalid-filter`; `filter[manufacturer]` is passed
+  through to `browse_motorbikes` unvalidated (unknown id → empty page, 200).
+  Beware: `SpecFilters`' inherited quantity validators **silently drop a bound
+  outside the field's plausibility range** (e.g. `filter[engineCcMin]=1` < 25 cm³
+  ⇒ unstated), so an absurd bound widens rather than empties the result.
+- **`manufacturers` router is now `current_user`** (anonymous still 401); the two
+  Phase-2 "non-admin → 403" tests in `tests/api/test_manufacturers.py` were
+  rewritten to assert the 200. Endpoint tests for the new resource live in
+  `tests/api/test_catalogue_models.py` and monkeypatch only the two **join**
+  reads (`browse_motorbikes`, `get_verified_specs`) — `FakeAsyncSession` cannot
+  interpret joins; everything else runs against seeded rows.
+
 ### Step 4.5 — NOT landed (stopped for a decision, 2026-08-28)
 
 - **Q4 stays open; no code changed** (backend tree untouched, suite 1181 green).

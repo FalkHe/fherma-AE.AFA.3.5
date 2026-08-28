@@ -1,12 +1,15 @@
-"""The `manufacturers` resource: the admin's reference list of brands.
+"""The `manufacturers` resource: the reference list of brands.
 
-Read-only and admin-only. The whole router carries `current_admin` — reads
-included, like every other administrative surface here — and there is no write
-route at all: rows appear through `manufacturer_service.get_or_create`, called
-by extraction and by `app catalogue set-manufacturer`. Nothing to CSRF-protect,
-therefore, and no error code beyond the pinned `not-found`.
+Read-only, and readable by **any signed-in account** since Phase 4 (D2): the
+customer catalogue filters by manufacturer ULID, so the SPA needs the id → name
+list to render that filter. A brand name is public information — nothing here
+carries curation state — which is why this is the one Phase-2 admin resource
+that relaxes to `current_user` instead of growing a customer-facing twin.
 
-Customer-facing exposure (a catalogue brand filter) is a Phase-4 decision.
+There is no write route at all: rows appear through
+`manufacturer_service.get_or_create`, called by extraction and by
+`app catalogue set-manufacturer`. Nothing to CSRF-protect, therefore, and no
+error code beyond the pinned `not-found`.
 """
 
 from typing import Annotated
@@ -15,7 +18,7 @@ from fastapi import APIRouter, Depends, Path, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import jsonapi
-from app.api.deps import current_admin
+from app.api.deps import current_user
 from app.api.schemas.manufacturers import (
     ManufacturerAttributes,
     ManufacturerDocument,
@@ -29,7 +32,7 @@ from app.services import manufacturer_service
 router = APIRouter(
     prefix="/manufacturers",
     tags=["manufacturers"],
-    dependencies=[Depends(current_admin)],
+    dependencies=[Depends(current_user)],
 )
 
 SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
