@@ -419,3 +419,22 @@ depend on. 1–3 bullets per step, no prose.
   `None` **and** `[]` mean unfiltered, so the customer gallery must pass
   `statuses=[ImageStatus.APPROVED]` explicitly. Both statements are split into
   private `_…_statement` helpers so they compile in tests without a database.
+
+### Step 4.5 — NOT landed (stopped for a decision, 2026-08-28)
+
+- **Q4 stays open; no code changed** (backend tree untouched, suite 1181 green).
+  Race reproduced live on `main`: 2 parallel `POST /api/chat-messages` → 2×201,
+  2 `chat.response` operation rows (2 runs).
+- **The outlined fix is provably insufficient:** `lock_owned_chat`
+  (`SELECT … FOR UPDATE`) before `heal_stale_turn`, everything else unchanged,
+  still gave 2×201 / 2 operations in 3/3 live runs — `append_user_message`
+  **commits** (and `operation_service.create` commits again) *before*
+  `active_operation_id` is ever written, so the row lock dies before the claim
+  exists and the woken competitor still reads a NULL pointer.
+- **Three Phase-3 pins are jointly unsatisfiable with a row lock:** (1) healing
+  check strictly *before* `append_user_message`, (2) `start_response` strictly
+  *after* it, (3) "every `chat_service` public function commits". Check and
+  claim therefore sit in different transactions; **no lock can serialize a
+  check-then-act split across a commit.** Fixing 4.5 requires relaxing (2) or
+  (3) — plus a seam for `operation_service.create`'s internal commit — which is
+  a pin change, i.e. a coordinator/owner decision, not a dev-agent one.

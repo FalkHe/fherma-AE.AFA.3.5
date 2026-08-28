@@ -7,7 +7,40 @@ pinned in [`shared-knowledge.md`](shared-knowledge.md).
 
 ---
 
-*(none open)*
+## OQ4 — Q4 fix (step 4.5) needs a Phase-3 pin change; deferred pending owner re-decision
+
+**State (2026-08-28):** step 4.5 was dispatched and stopped without landing
+code. The pinned fix (row lock via `SELECT … FOR UPDATE` before
+`heal_stale_turn`, nothing else changed) is **provably insufficient** — the
+race still reproduces 3/3 with the lock in place, because the POST path
+commits (`append_user_message`, then `operation_service.create`) before
+`active_operation_id` is written; the lock dies at the first commit, before
+the claim exists. Full analysis under `shared-knowledge.md` → Landed
+decisions → Step 4.5.
+
+**Why deferred:** D7's owner confirmation was premised on "least-effort,
+migration-free lock". The real price is relaxing one of three Phase-3 pins
+(claim-before-append, or one-transaction POST breaking "every public
+function commits") plus a `commit=False` seam in `operation_service.create`
+— a pin change is an owner decision. The race remains unreachable through
+the UI (composer disables via SSE) and degrades gracefully (both replies
+persist).
+
+**Options for the owner:**
+- **A (recommended by the investigating agent, ~40 lines):** `claim_turn`
+  before `append_user_message` — relaxes the "start_response after append"
+  pin; SSE/`activeOperationId` become visible milliseconds early; a crash
+  between claim and append self-heals after 150 s; a residual stale-pointer
+  race path remains (degrades to today's behaviour).
+- **B:** single-transaction POST — relaxes "every public function commits"
+  and needs the same operation-service seam.
+- **C (interim state):** stay deferred; Q4 remains in
+  `../phase-3/open-questions.md`.
+
+**Consequence for Phase 4:** step 4.5 is dropped per its own deferral
+clause (no other step is touched). Milestone M2's double-POST criterion and
+4.11's "Q4 re-proof (if 4.5 landed)" bullet are waived; 4.11 instead
+records the race as a known open issue.
 
 ---
 
