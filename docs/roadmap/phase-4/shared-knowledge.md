@@ -569,3 +569,19 @@ depend on. 1–3 bullets per step, no prose.
   lands a fresh session on a bare `/catalogue`. Path-only deep links (detail
   pages) are unaffected. Fix is one line (carry `pathname + search`); needs a
   coordinator decision.
+
+### Step 4.10 (demo-script catalogue chapter)
+
+- **The Phase-3 demo walkthrough had no companion doc** — 3.16 landed only
+  `backend/scripts/demo_conversation.py`'s own module docstring (a scripted,
+  self-cleaning API demo with no browser-replayable artefact left behind).
+  4.10 creates that companion doc at **`docs/demo-walkthrough.md`** (linked
+  from `README.md` "Further reading") rather than editing the script's
+  docstring, per this step's "documentation only, no code changes" scope.
+  Later steps that extend the demo (Phase 5.3 mentioned in 3.16's docstring)
+  should extend this file, not invent a second one.
+- **The LoginRoute search-string defect flagged above (step 4.9) is fixed as
+  of `HEAD aa1f108`** ("Preserve query string in post-login redirect") —
+  live-verified during 4.10: a filtered `/catalogue?...` URL now survives the
+  login redirect. The walkthrough documents this as working; no further
+  action needed from a later step.

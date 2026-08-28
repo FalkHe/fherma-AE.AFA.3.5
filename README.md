@@ -9,12 +9,14 @@ Sprint 3 project: a domain-specialised RAG chatbot built with LangChain,
 advanced RAG techniques, tool calling, and a vector database (see `125.md`
 for the full brief and `docs/` for design decisions).
 
-**Current status:** Phases 0–2 are implemented. Accounts (register/login/
+**Current status:** Phases 0–4 are implemented. Accounts (register/login/
 roles) and catalogue ingestion (admin adds a model, live-tracked ingestion
 fetches sources, extracts specs and images, admin reviews and approves) work
-end-to-end — see `docs/ingestion.md`. Retrieval and the advisor agent
-(Phase 3) and the customer-facing chat UI (Phase 4) are not implemented yet;
-see `docs/roadmap.md`.
+end-to-end — see `docs/ingestion.md`. The advisor chat (retrieval, tool
+calls, recommendations — Phase 3) and the customer catalogue (browse,
+filter, model detail with specs/article/sources — Phase 4) are live; see
+`docs/demo-walkthrough.md` for a replayable tour and `docs/roadmap.md` for
+what remains.
 
 ## Stack
 
@@ -233,6 +235,9 @@ convention that keeps it from drifting.
 - `docs/architecture.md` — binding architecture decisions
 - `docs/backend-stack.md`, `docs/frontend-stack.md` — stack choices and why
 - `docs/ingestion.md` — admin ingestion flow and CLI commands
+- `docs/demo-walkthrough.md` — replayable demo: consultation → catalogue
+  browse/filter/detail → recommendation-card click-through, plus curl role
+  scoping checks
 - `docs/roadmap.md` — phased implementation plan
 - `docs/core-requirements.md` — grading requirements
 - `docs/qa-checklist.md` — QA checklist and known rough edges
