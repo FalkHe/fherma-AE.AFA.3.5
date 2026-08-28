@@ -31,9 +31,9 @@ from app.api.jsonapi import JsonApiError, json_api_error_handler
 from app.core.config import Settings, get_settings
 from app.services.notification_listener import NotificationListener
 
-# The Vite dev server origin; credentials are allowed because the SPA
-# authenticates with a session cookie.
-CORS_ALLOWED_ORIGINS = ["http://localhost:5173"]
+# The Vite dev server origin (both hostname spellings browsers may use);
+# credentials are allowed because the SPA authenticates with a session cookie.
+CORS_ALLOWED_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 # Where the generated image variants are served from. Mirrors
 # `app.api.schemas.images.MEDIA_URL_PREFIX`, which builds the URLs.
