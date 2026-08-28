@@ -6,11 +6,14 @@ async service call is driven through `asyncio.run()` per the project's
 """
 
 import asyncio
+import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus, MotorbikeImage
@@ -299,3 +302,120 @@ def test_a2_eligible_derivation(
     spec = asyncio.run(product_service.upsert_draft_spec(fake_session, motorbike.id, values))
 
     assert spec.a2_eligible is expected
+
+
+# --- step 4.3: the image reads the customer catalogue needs -------------------
+#
+# `DISTINCT ON` is PostgreSQL syntax the in-memory `FakeAsyncSession` cannot
+# interpret, so these follow the compiled-SQL convention from 3.7: a local
+# recording session, and the statement itself is what is asserted.
+
+BIKE_ID = "01J0BIKE00000000000000000A"
+OTHER_BIKE_ID = "01J0BIKE00000000000000000B"
+
+_PARAMETER = re.compile(r"%\([a-z_0-9]+\)s")
+
+
+@dataclass(frozen=True, slots=True)
+class _Image:
+    """The one attribute the mapping is keyed by."""
+
+    motorbike_id: str
+
+
+class _RecordedScalars:
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[Any]:
+        return self._rows
+
+
+class _RecordedResult:
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def scalars(self) -> _RecordedScalars:
+        return _RecordedScalars(self._rows)
+
+
+class RecordingSession:
+    """Records the statements issued and replays scripted rows. Never commits."""
+
+    def __init__(self, rows: list[Any] | None = None) -> None:
+        self.rows = rows if rows is not None else []
+        self.statements: list[Any] = []
+
+    async def execute(self, statement: Any) -> _RecordedResult:
+        self.statements.append(statement)
+        return _RecordedResult(self.rows)
+
+
+def _compiled(session: RecordingSession, index: int = 0) -> Any:
+    return session.statements[index].compile(dialect=postgresql.dialect())
+
+
+def _sql(session: RecordingSession, index: int = 0) -> str:
+    return _PARAMETER.sub("?", str(_compiled(session, index)))
+
+
+def test_the_newest_approved_image_lookup_is_one_distinct_on_statement() -> None:
+    """One round trip for a whole page, and approved is a `WHERE`, not a hope."""
+    session = RecordingSession()
+
+    asyncio.run(product_service.newest_approved_images(session, [BIKE_ID, OTHER_BIKE_ID]))
+    sql = _sql(session)
+    params = _compiled(session).params
+
+    assert len(session.statements) == 1
+    assert "SELECT DISTINCT ON (motorbike_images.motorbike_id)" in sql
+    assert "motorbike_images.motorbike_id IN (__[POSTCOMPILE_motorbike_id_1])" in sql
+    assert "motorbike_images.status = ?" in sql
+    assert params["status_1"] is ImageStatus.APPROVED
+    # The `DISTINCT ON` expression has to lead the ordering for "newest per
+    # model" to be well defined at all.
+    assert (
+        "ORDER BY motorbike_images.motorbike_id, motorbike_images.created_at DESC, "
+        "motorbike_images.id DESC" in sql
+    )
+
+
+def test_the_newest_approved_images_are_keyed_by_motorbike() -> None:
+    """One winner per model; a model without an approved image is simply absent."""
+    session = RecordingSession([_Image(BIKE_ID)])
+
+    images = asyncio.run(product_service.newest_approved_images(session, [BIKE_ID, OTHER_BIKE_ID]))
+
+    assert set(images) == {BIKE_ID}
+    assert images[BIKE_ID].motorbike_id == BIKE_ID
+
+
+def test_no_ids_means_no_image_round_trip() -> None:
+    """An empty page is answered without asking the database."""
+    session = RecordingSession()
+
+    assert asyncio.run(product_service.newest_approved_images(session, [])) == {}
+    assert session.statements == []
+
+
+def test_list_images_stays_unfiltered_by_moderation_state_by_default() -> None:
+    """The admin review screen must keep seeing pending pictures."""
+    session = RecordingSession()
+
+    asyncio.run(product_service.list_images(session, motorbike_id=BIKE_ID))
+    sql = _sql(session)
+
+    assert "motorbike_images.status" not in sql.split("WHERE")[1]
+    assert "ORDER BY motorbike_images.created_at DESC, motorbike_images.id DESC" in sql
+
+
+def test_list_images_restricts_to_the_requested_moderation_states() -> None:
+    """The customer gallery asks for approved rows in SQL, not after the fact."""
+    session = RecordingSession()
+
+    asyncio.run(
+        product_service.list_images(session, motorbike_id=BIKE_ID, statuses=[ImageStatus.APPROVED])
+    )
+
+    assert "motorbike_images.status IN (__[POSTCOMPILE_status_1])" in _sql(session)
+    assert _compiled(session).params["status_1"] == [ImageStatus.APPROVED]

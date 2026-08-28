@@ -400,3 +400,241 @@ def test_no_ids_means_no_round_trip() -> None:
 
     assert _verified(session, []) == []
     assert session.statements == []
+
+
+# --- step 4.3: the customer browse page --------------------------------------
+#
+# Same convention once more — no database, the compiled statements are what is
+# asserted. `browse_motorbikes` issues exactly two: the count first, then the
+# page, so the session below replays a scalar and then a set of mappings.
+
+MANUFACTURER_ID = "01J0MANU00000000000000000A"
+
+BrowseSort = catalogue_search_service.BrowseSort
+
+# The four pinned orderings, spelled exactly as they must compile.
+BROWSE_ORDERINGS = {
+    BrowseSort.NAME: "ORDER BY motorbikes.name ASC, motorbikes.id ASC",
+    BrowseSort.NAME_DESC: "ORDER BY motorbikes.name DESC, motorbikes.id ASC",
+    BrowseSort.MSRP_EUR: (
+        "ORDER BY motorbike_specs.msrp_eur ASC NULLS LAST, motorbikes.name ASC, motorbikes.id ASC"
+    ),
+    BrowseSort.MSRP_EUR_DESC: (
+        "ORDER BY motorbike_specs.msrp_eur DESC NULLS LAST, motorbikes.name ASC, motorbikes.id ASC"
+    ),
+}
+
+
+class _CountResult:
+    def __init__(self, total: int) -> None:
+        self._total = total
+
+    def scalar_one(self) -> int:
+        return self._total
+
+
+class BrowseSession:
+    """Replays the count, then the page; records both statements."""
+
+    def __init__(self, total: int = 0, rows: list[Any] | None = None) -> None:
+        self.total = total
+        self.rows = rows if rows is not None else []
+        self.statements: list[Any] = []
+
+    async def execute(self, statement: Any) -> Any:
+        self.statements.append(statement)
+        return _CountResult(self.total) if len(self.statements) == 1 else _ScriptedResult(self.rows)
+
+
+def _browse(
+    session: BrowseSession,
+    filters: SpecFilters | None = None,
+    *,
+    manufacturer_ids: list[str] | None = None,
+    sort: Any = BrowseSort.NAME,
+    limit: int = 24,
+    offset: int = 0,
+) -> tuple[list[Any], int]:
+    """Drive the async browse read from a synchronous test."""
+    return asyncio.run(
+        catalogue_search_service.browse_motorbikes(
+            session,
+            filters=filters or SpecFilters(),
+            manufacturer_ids=manufacturer_ids,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+def _browse_row(**values: Any) -> dict[str, Any]:
+    """One page row as the database mapping would hand it over."""
+    return (
+        {"id": BIKE_ID, "name": "Honda CB500F", "manufacturer_id": MANUFACTURER_ID}
+        | dict.fromkeys(catalogue_search_service.SUMMARY_SPEC_FIELDS)
+        | values
+    )
+
+
+def test_the_summary_columns_are_a_subset_of_the_comparable_ones() -> None:
+    """Drift guard: a card shows fewer specs than a comparison, never other ones.
+
+    A summary field that is not comparable would be a second, unreviewed
+    definition of "a specification value we show a customer".
+    """
+    summary = catalogue_search_service.SUMMARY_SPEC_FIELDS
+    comparable = catalogue_search_service.COMPARISON_SPEC_FIELDS
+
+    assert set(summary) <= set(comparable)
+    # Frozen column order, so the projection and the card stay aligned.
+    assert list(summary) == [field for field in comparable if field in set(summary)]
+
+
+def test_a_browse_page_is_one_count_and_one_page_statement() -> None:
+    """Two round trips, and the count is not a page (no LIMIT/OFFSET on it)."""
+    session = BrowseSession(total=7)
+
+    _, total = _browse(session)
+
+    assert len(session.statements) == 2
+    assert total == 7
+    count_sql = _sql_at(session, 0)
+    assert "count(*)" in count_sql
+    assert "LIMIT" not in count_sql
+    assert "OFFSET" not in count_sql
+    page_sql = _sql_at(session, 1)
+    assert "LIMIT ?" in page_sql
+    assert "OFFSET ?" in page_sql
+
+
+def test_browsing_outer_joins_the_verified_specification() -> None:
+    """The pinned NULL-spec browse rule, in both statements.
+
+    Deliberately *not* `find_motorbike_ids`' inner join: unfiltered browsing has
+    to include an approved model that has no verified revision at all, and the
+    `verified` condition therefore belongs in the `ON` clause.
+    """
+    session = BrowseSession()
+
+    _browse(session)
+
+    for index in (0, 1):
+        sql = _sql_at(session, index)
+        assert (
+            "LEFT OUTER JOIN motorbike_specs ON motorbike_specs.motorbike_id = motorbikes.id "
+            "AND motorbike_specs.kind = ?" in sql
+        )
+        assert "motorbikes.status = ?" in sql
+        params = _params_at(session, index)
+        assert params["kind_1"] is SpecKind.VERIFIED
+        assert params["status_1"] is MotorbikeStatus.APPROVED
+
+
+def test_an_unfiltered_browse_states_no_bound_at_all() -> None:
+    """No filter, no clause — every approved model, verified specs or not."""
+    session = BrowseSession()
+
+    _browse(session)
+    sql = _sql_at(session, 1)
+
+    for column in set(FILTER_FIELD_COLUMNS.values()):
+        assert f"motorbike_specs.{column} " not in sql
+    assert "motorbikes.manufacturer_id" not in sql.split("WHERE")[1]
+
+
+def test_browsing_reuses_the_shared_filter_clauses_verbatim() -> None:
+    """The one filter vocabulary: browse emits `_clauses`, it restates nothing.
+
+    Each clause is compiled on its own and must appear literally in the browse
+    statement — a second, subtly different bound here would be invisible to the
+    3.8 tests that guard the advisor's shortlist.
+    """
+    filters = SpecFilters.model_validate(SAMPLES)
+    session = BrowseSession()
+
+    _browse(session, filters)
+    sql = _sql_at(session, 1)
+
+    clauses = catalogue_search_service._clauses(filters)
+    assert len(clauses) == 9
+    for clause in clauses:
+        assert _PARAMETER.sub("?", str(clause.compile(dialect=postgresql.dialect()))) in sql
+
+
+def test_a_manufacturer_filter_is_a_clause_on_the_catalogue_row() -> None:
+    """Manufacturer is an identity on `motorbikes`, not a specification value."""
+    session = BrowseSession()
+
+    _browse(session, manufacturer_ids=[MANUFACTURER_ID])
+
+    for index in (0, 1):
+        assert "motorbikes.manufacturer_id IN (__[POSTCOMPILE_manufacturer_id_1])" in _sql_at(
+            session, index
+        )
+        assert _params_at(session, index)["manufacturer_id_1"] == [MANUFACTURER_ID]
+
+
+def test_an_empty_manufacturer_set_is_not_a_filter() -> None:
+    """`None` and `[]` both mean "unfiltered", as in `list_motorbikes`."""
+    session = BrowseSession()
+
+    _browse(session, manufacturer_ids=[])
+
+    assert "manufacturer_id IN" not in _sql_at(session, 1)
+
+
+@pytest.mark.parametrize("sort", sorted(BROWSE_ORDERINGS))
+def test_every_sort_compiles_to_its_pinned_order_by(sort: Any) -> None:
+    """Price sorts put NULLs last in both directions; `id` tiebreaks ascending."""
+    session = BrowseSession()
+
+    _browse(session, sort=sort)
+
+    assert BROWSE_ORDERINGS[sort] in _sql_at(session, 1)
+
+
+def test_the_page_projects_identity_plus_the_summary_columns_only() -> None:
+    """A card is a teaser: no draft values, no uncompared long tail."""
+    session = BrowseSession()
+
+    _browse(session)
+    sql = _sql_at(session, 1)
+
+    assert "SELECT motorbikes.id, motorbikes.name, motorbikes.manufacturer_id" in sql
+    for field in catalogue_search_service.SUMMARY_SPEC_FIELDS:
+        assert f"motorbike_specs.{field}" in sql
+    for field in set(catalogue_search_service.COMPARISON_SPEC_FIELDS) - set(
+        catalogue_search_service.SUMMARY_SPEC_FIELDS
+    ):
+        assert f"motorbike_specs.{field}" not in sql
+
+
+def test_a_browse_row_carries_every_summary_key_with_plain_values() -> None:
+    """`Decimal` unwrapped, missing verified numbers explicitly `None`."""
+    session = BrowseSession(
+        total=1,
+        rows=[_browse_row(category="naked", power_kw=Decimal("35.0"), msrp_eur=Decimal("6800.00"))],
+    )
+
+    rows, total = _browse(session)
+
+    assert total == 1
+    assert [row.motorbike_id for row in rows] == [BIKE_ID]
+    assert rows[0].name == "Honda CB500F"
+    assert rows[0].manufacturer_id == MANUFACTURER_ID
+    assert set(rows[0].values) == set(catalogue_search_service.SUMMARY_SPEC_FIELDS)
+    assert rows[0].values["power_kw"] == 35.0
+    assert isinstance(rows[0].values["power_kw"], float)
+    assert rows[0].values["msrp_eur"] == 6800.0
+    assert rows[0].values["seat_height_mm"] is None
+
+
+def test_a_model_without_a_verified_revision_is_still_a_browse_row() -> None:
+    """The outer join's whole point, seen from the mapping side."""
+    session = BrowseSession(total=1, rows=[_browse_row(manufacturer_id=None)])
+
+    rows, _ = _browse(session)
+
+    assert rows[0].manufacturer_id is None
+    assert all(value is None for value in rows[0].values.values())

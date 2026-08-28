@@ -393,3 +393,29 @@ Frontend: `frontend/src/App.tsx` · `frontend/src/queryKeys.ts` ·
 
 Appended by implementing agents when a step finishes — decisions later steps
 depend on. 1–3 bullets per step, no prose.
+
+### Step 4.3 (catalogue browse & image service reads)
+
+- **`catalogue_search_service` new public surface (4.4 consumes it verbatim):**
+  `SUMMARY_SPEC_FIELDS` (the 8 card columns, frozen `SPEC_FIELDS` order —
+  `category, engine_cc, power_kw, wet_weight_kg, seat_height_mm, a2_eligible,
+  price_band, msrp_eur`), `BrowseSort` StrEnum whose **members are the wire
+  values** (`NAME="name"`, `NAME_DESC="-name"`, `MSRP_EUR="msrpEur"`,
+  `MSRP_EUR_DESC="-msrpEur"` — the route validates against the enum, it does not
+  restate the vocabulary), frozen `BrowseRow(motorbike_id, name,
+  manufacturer_id, values)` with snake_case `values` keys (camelCase aliasing is
+  the schema's job) and `Decimal` unwrapped to `float`.
+- **`browse_motorbikes` = count statement first, then the page** (both over
+  `_browse_conditions(filters, manufacturer_ids)` = `status='approved'` +
+  optional `manufacturer_id IN` + `_clauses(filters)` verbatim, both over the
+  same outer join with `kind='verified'` in the `ON`). `manufacturer_ids=None`
+  **and** `[]` both mean unfiltered (the `list_motorbikes` precedent); the plain
+  `count(*)` is exact because `motorbike_specs` is unique per (motorbike, kind).
+  Nothing commits; `find_motorbike_ids`' inner join is untouched.
+- **`product_service`:** `newest_approved_images(session, motorbike_ids) ->
+  dict[str, MotorbikeImage]` (one `DISTINCT ON`, empty ids → `{}` without a
+  round trip, a model with no approved image is **absent** from the mapping —
+  callers render the placeholder); `list_images(..., statuses=None)` where
+  `None` **and** `[]` mean unfiltered, so the customer gallery must pass
+  `statuses=[ImageStatus.APPROVED]` explicitly. Both statements are split into
+  private `_…_statement` helpers so they compile in tests without a database.

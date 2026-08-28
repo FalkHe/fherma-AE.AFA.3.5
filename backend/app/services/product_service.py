@@ -27,7 +27,7 @@ from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
@@ -170,15 +170,26 @@ async def get_image(session: AsyncSession, image_id: str) -> MotorbikeImage | No
 
 
 async def list_images(
-    session: AsyncSession, *, motorbike_id: str | None = None
+    session: AsyncSession,
+    *,
+    motorbike_id: str | None = None,
+    statuses: Sequence[ImageStatus] | None = None,
 ) -> list[MotorbikeImage]:
     """Return image rows, newest first; `motorbike_id` is the `filter[product]` set.
 
     Unpaginated on purpose: ingestion stores at most one image per run, so the
     result is a handful of rows per model and the review screen renders the
     newest one.
+
+    `statuses` restricts the moderation states, the way `list_motorbikes` does
+    for catalogue statuses: `None` (the default) means unfiltered — the admin
+    review screen has to see pending pictures — while a customer-facing gallery
+    passes `[ImageStatus.APPROVED]`, so an unreviewed picture cannot be shown by
+    forgetting a filter downstream.
     """
     conditions = [] if motorbike_id is None else [MotorbikeImage.motorbike_id == motorbike_id]
+    if statuses:
+        conditions.append(MotorbikeImage.status.in_(list(statuses)))
 
     result = await session.execute(
         select(MotorbikeImage)
@@ -186,6 +197,29 @@ async def list_images(
         .order_by(MotorbikeImage.created_at.desc(), MotorbikeImage.id.desc())
     )
     return list(result.scalars().all())
+
+
+async def newest_approved_images(
+    session: AsyncSession, motorbike_ids: Sequence[str]
+) -> dict[str, MotorbikeImage]:
+    """Return the newest approved image of each of `motorbike_ids`, keyed by model id.
+
+    One statement for a whole catalogue page: `DISTINCT ON (motorbike_id)` with
+    the matching `ORDER BY` lets PostgreSQL pick the winner per model, so the
+    page costs one round trip instead of one per card. A model with no approved
+    image is simply absent from the mapping — the caller renders a placeholder,
+    it never falls back to a pending picture.
+
+    Args:
+        session: Session the statement runs on; nothing is written or committed.
+        motorbike_ids: The models to look up. Empty returns `{}` without a round
+            trip.
+    """
+    if not motorbike_ids:
+        return {}
+
+    result = await session.execute(_newest_approved_images_statement(motorbike_ids))
+    return {image.motorbike_id: image for image in result.scalars().all()}
 
 
 async def create_backlog(session: AsyncSession, name: str) -> Motorbike:
@@ -320,6 +354,31 @@ async def upsert_draft_spec(
     await session.commit()
     await _announce(session, motorbike_id)
     return spec
+
+
+def _newest_approved_images_statement(
+    motorbike_ids: Sequence[str],
+) -> Select[tuple[MotorbikeImage]]:
+    """Compose the one statement `newest_approved_images` issues.
+
+    Split out so the SQL can be compiled in a test without a database. The
+    `DISTINCT ON` expression must be the leading `ORDER BY` term — that is what
+    makes "newest per model" well defined; `created_at DESC, id DESC` then picks
+    the same winner the unpaginated `list_images` order would put first.
+    """
+    return (
+        select(MotorbikeImage)
+        .distinct(MotorbikeImage.motorbike_id)
+        .where(
+            MotorbikeImage.motorbike_id.in_(list(motorbike_ids)),
+            MotorbikeImage.status == ImageStatus.APPROVED,
+        )
+        .order_by(
+            MotorbikeImage.motorbike_id,
+            MotorbikeImage.created_at.desc(),
+            MotorbikeImage.id.desc(),
+        )
+    )
 
 
 async def _apply_approval(session: AsyncSession, motorbike_id: str) -> None:
