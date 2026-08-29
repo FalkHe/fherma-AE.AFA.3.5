@@ -12,13 +12,15 @@ Those rules apply to **registration only**. Login is a credential check, not
 data entry: a syntactically impossible username or password is simply a wrong
 credential and must fail authentication with 401, not 422. `LoginRequest`
 therefore normalises the username (the service looks up the normalised form)
-but validates neither field's format.
+and validates neither field's format — with one sanctioned exception (OQ-A):
+`password` carries a `max_length` ceiling purely to cap Argon2 work per
+attempt, not to validate the credential.
 """
 
 import re
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 USERNAME_MIN_LENGTH = 3
@@ -28,6 +30,11 @@ USERNAME_PATTERN = re.compile(r"^[a-z0-9_.-]+$")
 
 PASSWORD_MIN_LENGTH = 8
 PASSWORD_MAX_LENGTH = 128
+
+# Owner-approved (OQ-A) sole relaxation of "login is deliberately unvalidated"
+# (see `docs/roadmap/phase-1/shared-knowledge.md`): caps Argon2 work per
+# attempt, nothing else about login gains a rule.
+LOGIN_PASSWORD_MAX_LENGTH = 1024
 
 
 class AuthSchema(BaseModel):
@@ -88,11 +95,15 @@ class RegisterRequest(_CredentialsRequest):
 class LoginRequest(_CredentialsRequest):
     """Credentials for an existing account, plus the cookie lifetime choice.
 
-    Deliberately unvalidated beyond the username normalisation: a credential
-    that could not possibly match is rejected by `user_service.authenticate`
-    with a 401, on the same constant-time path as any other wrong password.
+    Deliberately unvalidated beyond the username normalisation and the
+    password length ceiling: a credential that could not possibly match is
+    rejected by `user_service.authenticate` with a 401, on the same
+    constant-time path as any other wrong password. `password`'s
+    `max_length` is the one sanctioned exception (OQ-A) — it exists solely to
+    cap Argon2 work per attempt, not as data-entry validation.
     """
 
+    password: Annotated[str, Field(max_length=LOGIN_PASSWORD_MAX_LENGTH)]
     remember_me: bool = False
 
 

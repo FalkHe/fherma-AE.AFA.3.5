@@ -479,10 +479,32 @@ def test_post_rejects_an_invented_attribute(
 def test_post_to_an_unknown_consultation_returns_404(
     customer: Account, fake_session: FakeAsyncSession
 ) -> None:
+    """A well-formed but unknown 26-char ULID stays a 404, not a 422."""
     response = _send(customer.client, "0" * 26, "Hello.")
 
     assert response.status_code == 404
     assert response.json()["errors"][0]["code"] == "not-found"
+    assert fake_session.rows(ChatMessage) == []
+
+
+def test_post_with_a_too_long_chat_id_returns_422(
+    customer: Account, fake_session: FakeAsyncSession
+) -> None:
+    response = _send(customer.client, "0" * 27, "Hello.")
+
+    assert response.status_code == 422
+    locs = [tuple(error["loc"]) for error in response.json()["detail"]]
+    assert ("body", "data", "attributes", "chatId") in locs
+    assert fake_session.rows(ChatMessage) == []
+
+
+def test_post_with_a_non_crockford_chat_id_returns_422(
+    customer: Account, fake_session: FakeAsyncSession
+) -> None:
+    """26 characters long, but lowercase is not the canonical ULID shape."""
+    response = _send(customer.client, "0" * 25 + "a", "Hello.")
+
+    assert response.status_code == 422
     assert fake_session.rows(ChatMessage) == []
 
 

@@ -53,6 +53,7 @@ from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus, MotorbikeImage
 from app.db.models.source_document import SourceDocument, SourceType
 from app.db.session import get_db_session
+from app.llm.extraction import _QUANTITIES
 from app.llm.query_translation import SpecFilters
 from app.services import (
     catalogue_search_service,
@@ -252,29 +253,64 @@ async def list_catalogue_models(
         str | None,
         Query(alias="filter[manufacturer]", description=MANUFACTURER_FILTER_DESCRIPTION),
     ] = None,
+    # `ge`/`le` mirror `SpecFilters`' own plausibility windows (`_QUANTITIES`
+    # in `app.llm.extraction`), imported rather than restated: `SpecFilters`
+    # itself silently drops an out-of-range bound (the landed 4.4 caveat)
+    # instead of rejecting it, so this is what makes an absurd filter value a
+    # 422 at the wire instead of a silently widened result.
     engine_cc_min: Annotated[
         int | None,
-        Query(alias="filter[engineCcMin]", description="Smallest displacement in cm³."),
+        Query(
+            alias="filter[engineCcMin]",
+            description="Smallest displacement in cm³.",
+            ge=_QUANTITIES["engine_cc"].minimum,
+            le=_QUANTITIES["engine_cc"].maximum,
+        ),
     ] = None,
     engine_cc_max: Annotated[
         int | None,
-        Query(alias="filter[engineCcMax]", description="Largest displacement in cm³."),
+        Query(
+            alias="filter[engineCcMax]",
+            description="Largest displacement in cm³.",
+            ge=_QUANTITIES["engine_cc"].minimum,
+            le=_QUANTITIES["engine_cc"].maximum,
+        ),
     ] = None,
     power_kw_min: Annotated[
         float | None,
-        Query(alias="filter[powerKwMin]", description="Smallest maximum power in kW."),
+        Query(
+            alias="filter[powerKwMin]",
+            description="Smallest maximum power in kW.",
+            ge=_QUANTITIES["power_kw"].minimum,
+            le=_QUANTITIES["power_kw"].maximum,
+        ),
     ] = None,
     power_kw_max: Annotated[
         float | None,
-        Query(alias="filter[powerKwMax]", description="Largest maximum power in kW."),
+        Query(
+            alias="filter[powerKwMax]",
+            description="Largest maximum power in kW.",
+            ge=_QUANTITIES["power_kw"].minimum,
+            le=_QUANTITIES["power_kw"].maximum,
+        ),
     ] = None,
     wet_weight_kg_max: Annotated[
         float | None,
-        Query(alias="filter[wetWeightKgMax]", description="Heaviest wet weight in kg."),
+        Query(
+            alias="filter[wetWeightKgMax]",
+            description="Heaviest wet weight in kg.",
+            ge=_QUANTITIES["wet_weight_kg"].minimum,
+            le=_QUANTITIES["wet_weight_kg"].maximum,
+        ),
     ] = None,
     seat_height_mm_max: Annotated[
         int | None,
-        Query(alias="filter[seatHeightMmMax]", description="Highest seat height in mm."),
+        Query(
+            alias="filter[seatHeightMmMax]",
+            description="Highest seat height in mm.",
+            ge=_QUANTITIES["seat_height_mm"].minimum,
+            le=_QUANTITIES["seat_height_mm"].maximum,
+        ),
     ] = None,
     a2_eligible: Annotated[
         bool | None,

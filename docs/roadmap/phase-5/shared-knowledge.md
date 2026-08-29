@@ -385,3 +385,48 @@ depend on. 1–3 bullets per step, no prose.
   fast (auth-rejection) path the step file names as an acceptable alternative
   to a blackholed upstream. Key restored and `app-worker` recreated again
   afterwards; a normal turn was re-verified end-to-end.
+
+### Step 5.5
+
+- Exact constants landed (5.17 asserts, 5.14 regenerates types against
+  these): `jsonapi.MAX_FILTER_MEMBERS = 50`, `jsonapi.MAX_FILTER_MEMBER_LENGTH
+  = 128` (violation → existing 400 `invalid-filter`, raised by `parse_filter`
+  itself now, not only its vocabulary callers); `jsonapi.MAX_PAGE_NUMBER =
+  10_000` (`page[number]` `le`, shared `pagination()` dependency — every
+  paginated endpoint inherits it); catalogue numeric filters
+  (`filter[engineCcMin/Max]`, `filter[powerKwMin/Max]`,
+  `filter[wetWeightKgMax]`, `filter[seatHeightMmMax]`) got `ge`/`le` imported
+  straight from `app.llm.extraction._QUANTITIES` (`engine_cc` 25–3000,
+  `power_kw` 0.5–400, `wet_weight_kg` 30–600, `seat_height_mm` 400–1200) —
+  both ends applied to both the min- and max-named params, values restated
+  nowhere; `ChatMessageCreateAttributes.chat_id` gained
+  `min_length=max_length=ULID_LENGTH` (26, imported from
+  `app.db.models.base`) plus `pattern=CHAT_ID_PATTERN =
+  r"^[0-9A-HJKMNP-TV-Z]+$"` (uppercase Crockford base32, matching
+  `new_ulid`'s canonical output — lowercase is rejected, not folded);
+  `DraftSpecRequest.extra`/`source_hints` share one `@field_validator`
+  enforcing `DRAFT_SPEC_EXTRA_MAX_KEYS = 50`,
+  `DRAFT_SPEC_EXTRA_KEY_MAX_LENGTH = 64`,
+  `DRAFT_SPEC_EXTRA_VALUE_MAX_LENGTH = 2_000` (value length measured via
+  `json.dumps(item, default=str)`); `LoginRequest.password` gained
+  `LOGIN_PASSWORD_MAX_LENGTH = 1024` as a field override on the subclass
+  (`_CredentialsRequest.password` stays unconstrained for `RegisterRequest`'s
+  own 8–128 rule).
+- `parse_filter` now raises `JsonApiError` itself (previously only its
+  vocabulary-checking callers did) — every one of its six call sites
+  (catalogue-models, chat-messages, documents, images, operations, products)
+  inherits the two new caps for free; no call site changed.
+- OpenAPI diff reviewed (`app openapi export`, not written into `frontend/` —
+  left in `backend/`'s own working tree only, per the no-`frontend/`-touch
+  rule): additive only — `minLength`/`maxLength`/`pattern` on `chatId`,
+  `maxLength` on `LoginRequest.password`, `minimum`/`maximum` on the six
+  catalogue numeric filter params and on every `page[number]` parameter
+  (all list endpoints share the one dependency); no field removed, renamed or
+  retyped, no endpoint shape change. `parse_filter`'s caps and the
+  `extra`/`source_hints` validator are runtime-only and do not appear in the
+  schema (a `field_validator`'s `ValueError`, not a `Field` constraint) —
+  5.14/5.17 should not expect to find them there.
+- Deliberate non-change: `SpecFilters` itself (the LLM-facing schema in
+  `app.llm.query_translation`) is untouched — it still silently drops an
+  out-of-range bound (the 4.4 caveat); only the catalogue-models wire params
+  gained explicit `ge`/`le`.

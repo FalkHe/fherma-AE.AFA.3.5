@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.jsonapi import Document, JsonApiModel, ListDocument, Resource
 from app.api.schemas.products import PriceBand, SpecCategory
+from app.db.models.base import ULID_LENGTH
 from app.db.models.chat import ChatMessageRole
 
 CHAT_MESSAGE_TYPE = "chat-messages"
@@ -37,6 +38,11 @@ CHAT_MESSAGE_TYPE = "chat-messages"
 # A schema constant, deliberately not config: it is part of the wire contract
 # the SPA's composer counts against.
 BODY_MAX_LENGTH = 4000
+
+# Canonical Crockford base32 alphabet (excludes I, L, O, U — never emitted by
+# `new_ulid`), so a syntactically impossible id is a 422 before it ever
+# reaches a lookup; an unknown-but-well-formed id still answers 404.
+CHAT_ID_PATTERN = r"^[0-9A-HJKMNP-TV-Z]+$"
 
 
 class ToolCallStatus(StrEnum):
@@ -151,7 +157,9 @@ class ChatMessageCreateAttributes(JsonApiModel):
     chat_id: Annotated[
         str,
         Field(
-            min_length=1,
+            min_length=ULID_LENGTH,
+            max_length=ULID_LENGTH,
+            pattern=CHAT_ID_PATTERN,
             description="ULID of the consultation this message belongs to.",
         ),
     ]

@@ -24,6 +24,7 @@ path writes a `verified` row. `extra="forbid"` on the request models is what
 turns a `verifiedSpec` in a PATCH body into a 422 instead of a silent no-op.
 """
 
+import json
 import string
 from datetime import datetime
 from enum import StrEnum
@@ -43,6 +44,13 @@ SMALLINT_MAX = 32_767
 INTEGER_MAX = 2_147_483_647
 NUMERIC_5_1_MAX = 9_999.9
 NUMERIC_4_1_MAX = 999.9
+
+# `extra`/`source_hints` are open objects (the extraction model's long tail) —
+# without a bound a hallucinated or adversarial payload could grow the JSONB
+# column unboundedly.
+DRAFT_SPEC_EXTRA_MAX_KEYS = 50
+DRAFT_SPEC_EXTRA_KEY_MAX_LENGTH = 64
+DRAFT_SPEC_EXTRA_VALUE_MAX_LENGTH = 2_000
 
 # What `product_service.slugify` keeps; a name without one of these has no
 # identity to be unique on.
@@ -137,6 +145,30 @@ class DraftSpecRequest(JsonApiModel):
     extra: dict[str, Any] | None = None
     source_hints: dict[str, Any] | None = None
     extracted_at: datetime | None = None
+
+    @field_validator("extra", "source_hints")
+    @classmethod
+    def check_extra_size(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Cap the open object's key count, key length and per-value size.
+
+        The ranges are arbitrary but generous for a genuine extraction long
+        tail; they exist to catch a runaway payload, not a legitimate one.
+        """
+        if value is None:
+            return value
+        if len(value) > DRAFT_SPEC_EXTRA_MAX_KEYS:
+            raise ValueError(f"Must have at most {DRAFT_SPEC_EXTRA_MAX_KEYS} keys.")
+        for key, item in value.items():
+            if len(key) > DRAFT_SPEC_EXTRA_KEY_MAX_LENGTH:
+                raise ValueError(
+                    f"Key '{key}' exceeds {DRAFT_SPEC_EXTRA_KEY_MAX_LENGTH} characters."
+                )
+            if len(json.dumps(item, default=str)) > DRAFT_SPEC_EXTRA_VALUE_MAX_LENGTH:
+                raise ValueError(
+                    f"Value for key '{key}' exceeds "
+                    f"{DRAFT_SPEC_EXTRA_VALUE_MAX_LENGTH} characters when serialized."
+                )
+        return value
 
 
 class ProductCreateAttributes(JsonApiModel):

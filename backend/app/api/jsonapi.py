@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Annotated, Any
 
-from fastapi import Depends, HTTPException, Query, Request
+from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
@@ -40,6 +40,15 @@ from pydantic.alias_generators import to_camel
 # rows) and list hooks walk pages via `meta.totalCount`.
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
+# `page[number]` ceiling: comfortably beyond any real page count, just there to
+# turn an absurd value into a 422 instead of a huge, wasted `OFFSET`.
+MAX_PAGE_NUMBER = 10_000
+# `filter[...]` caps: a comma-separated value is user input parsed before any
+# vocabulary or type check runs, so it needs its own bound — an unbounded
+# member count or member length could otherwise reach the SQL layer as an IN
+# clause with thousands of entries.
+MAX_FILTER_MEMBERS = 50
+MAX_FILTER_MEMBER_LENGTH = 128
 
 
 class JsonApiModel(BaseModel):
@@ -148,7 +157,12 @@ class Pagination:
 def pagination(
     number: Annotated[
         int,
-        Query(alias="page[number]", ge=1, description="1-based page number."),
+        Query(
+            alias="page[number]",
+            ge=1,
+            le=MAX_PAGE_NUMBER,
+            description=f"1-based page number (maximum {MAX_PAGE_NUMBER}).",
+        ),
     ] = 1,
     size: Annotated[
         int,
@@ -171,9 +185,26 @@ def parse_filter(value: str | None) -> list[str] | None:
     """Split a comma-separated `filter[...]` value into its members.
 
     Returns `None` when the parameter is absent or carries no usable value, so
-    callers can treat "not filtered" and "filtered by nothing" alike.
+    callers can treat "not filtered" and "filtered by nothing" alike. A
+    member count or member length beyond the module caps is a 400
+    `invalid-filter` — the same code every vocabulary caller already raises
+    for an unknown member, so this stays indistinguishable on the wire.
     """
     if value is None:
         return None
     members = [member.strip() for member in value.split(",") if member.strip()]
-    return members or None
+    if not members:
+        return None
+    if len(members) > MAX_FILTER_MEMBERS:
+        raise JsonApiError(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="invalid-filter",
+            detail=f"A filter may have at most {MAX_FILTER_MEMBERS} members.",
+        )
+    if any(len(member) > MAX_FILTER_MEMBER_LENGTH for member in members):
+        raise JsonApiError(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="invalid-filter",
+            detail=f"A filter member may be at most {MAX_FILTER_MEMBER_LENGTH} characters long.",
+        )
+    return members

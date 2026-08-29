@@ -428,6 +428,88 @@ def test_patch_rejects_a_negative_number(admin_client: TestClient) -> None:
     assert ("body", "data", "attributes", "draftSpec", "engineCc") in locs
 
 
+# --- draftSpec.extra / sourceHints size caps (5.5) ------------------------------
+
+
+def test_patch_draft_spec_extra_at_the_key_count_ceiling_is_accepted(
+    admin_client: TestClient,
+) -> None:
+    created = _create(admin_client).json()["data"]
+    extra = {f"k{i}": "x" for i in range(50)}
+
+    response = _patch(admin_client, created["id"], {"draftSpec": {"extra": extra}})
+
+    assert response.status_code == 200, response.text
+
+
+def test_patch_draft_spec_extra_beyond_the_key_count_ceiling_returns_422(
+    admin_client: TestClient,
+) -> None:
+    created = _create(admin_client).json()["data"]
+    extra = {f"k{i}": "x" for i in range(51)}
+
+    response = _patch(admin_client, created["id"], {"draftSpec": {"extra": extra}})
+
+    assert response.status_code == 422
+    locs = [tuple(error["loc"]) for error in response.json()["detail"]]
+    assert ("body", "data", "attributes", "draftSpec", "extra") in locs
+
+
+def test_patch_draft_spec_source_hints_beyond_the_key_count_ceiling_returns_422(
+    admin_client: TestClient,
+) -> None:
+    """The same validator guards `sourceHints`, not only `extra`."""
+    created = _create(admin_client).json()["data"]
+    source_hints = {f"k{i}": "x" for i in range(51)}
+
+    response = _patch(admin_client, created["id"], {"draftSpec": {"sourceHints": source_hints}})
+
+    assert response.status_code == 422
+
+
+def test_patch_draft_spec_extra_key_at_the_length_ceiling_is_accepted(
+    admin_client: TestClient,
+) -> None:
+    created = _create(admin_client).json()["data"]
+
+    response = _patch(admin_client, created["id"], {"draftSpec": {"extra": {"k" * 64: "x"}}})
+
+    assert response.status_code == 200, response.text
+
+
+def test_patch_draft_spec_extra_key_beyond_the_length_ceiling_returns_422(
+    admin_client: TestClient,
+) -> None:
+    created = _create(admin_client).json()["data"]
+
+    response = _patch(admin_client, created["id"], {"draftSpec": {"extra": {"k" * 65: "x"}}})
+
+    assert response.status_code == 422
+
+
+def test_patch_draft_spec_extra_value_at_the_length_ceiling_is_accepted(
+    admin_client: TestClient,
+) -> None:
+    created = _create(admin_client).json()["data"]
+    # `json.dumps` adds the two quote characters, so 1998 + 2 == 2000.
+    extra = {"k": "x" * 1998}
+
+    response = _patch(admin_client, created["id"], {"draftSpec": {"extra": extra}})
+
+    assert response.status_code == 200, response.text
+
+
+def test_patch_draft_spec_extra_value_beyond_the_length_ceiling_returns_422(
+    admin_client: TestClient,
+) -> None:
+    created = _create(admin_client).json()["data"]
+    extra = {"k": "x" * 1999}
+
+    response = _patch(admin_client, created["id"], {"draftSpec": {"extra": extra}})
+
+    assert response.status_code == 422
+
+
 def test_patch_without_csrf_header_returns_403(admin_client: TestClient) -> None:
     created = _create(admin_client).json()["data"]
 

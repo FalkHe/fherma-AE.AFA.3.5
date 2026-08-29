@@ -212,6 +212,26 @@ def test_login_with_invalid_username_returns_401_not_422(
     assert response.json() == {"detail": "Invalid username or password."}
 
 
+# The one sanctioned exception (OQ-A): `password` still gets no format rule,
+# but a length ceiling caps the Argon2 work a single attempt can demand.
+
+
+def test_login_with_a_1024_char_password_returns_401_not_422(auth_client: TestClient) -> None:
+    """At the ceiling, the request still reaches the credential check."""
+    response = _login(auth_client, "nobody", password="x" * 1024)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid username or password."}
+
+
+def test_login_with_a_1025_char_password_returns_422(auth_client: TestClient) -> None:
+    response = _login(auth_client, "nobody", password="x" * 1025)
+
+    assert response.status_code == 422
+    locs = [tuple(error["loc"]) for error in response.json()["detail"]]
+    assert ("body", "password") in locs
+
+
 # --- GET /auth/me -------------------------------------------------------------
 
 

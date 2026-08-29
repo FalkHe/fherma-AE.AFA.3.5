@@ -351,6 +351,108 @@ def test_list_junk_typed_parameters_return_422(
     assert response.status_code == 422
 
 
+# --- filter[...] caps (5.5) -----------------------------------------------------
+
+
+def test_list_filter_with_the_maximum_member_count_is_accepted(
+    customer: TestClient, browse: RecordedBrowse
+) -> None:
+    members = ",".join(f"m{i}" for i in range(50))
+
+    response = customer.get("/api/catalogue-models", params={"filter[manufacturer]": members})
+
+    assert response.status_code == 200, response.text
+    assert len(browse.calls[0]["manufacturer_ids"]) == 50
+
+
+def test_list_filter_beyond_the_maximum_member_count_returns_400_invalid_filter(
+    customer: TestClient, browse: RecordedBrowse
+) -> None:
+    members = ",".join(f"m{i}" for i in range(51))
+
+    response = customer.get("/api/catalogue-models", params={"filter[manufacturer]": members})
+
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["code"] == "invalid-filter"
+
+
+def test_list_filter_member_at_the_maximum_length_is_accepted(
+    customer: TestClient, browse: RecordedBrowse
+) -> None:
+    response = customer.get("/api/catalogue-models", params={"filter[manufacturer]": "m" * 128})
+
+    assert response.status_code == 200, response.text
+
+
+def test_list_filter_member_beyond_the_maximum_length_returns_400_invalid_filter(
+    customer: TestClient, browse: RecordedBrowse
+) -> None:
+    response = customer.get("/api/catalogue-models", params={"filter[manufacturer]": "m" * 129})
+
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["code"] == "invalid-filter"
+
+
+# --- catalogue numeric filter plausibility bounds (5.5) -------------------------
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value"),
+    [
+        ("filter[engineCcMin]", 25),
+        ("filter[engineCcMax]", 3000),
+        ("filter[powerKwMin]", 0.5),
+        ("filter[powerKwMax]", 400),
+        ("filter[wetWeightKgMax]", 600),
+        ("filter[seatHeightMmMax]", 1200),
+    ],
+)
+def test_list_numeric_filter_at_the_plausibility_boundary_is_accepted(
+    customer: TestClient, browse: RecordedBrowse, parameter: str, value: float
+) -> None:
+    response = customer.get("/api/catalogue-models", params={parameter: value})
+
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value"),
+    [
+        ("filter[engineCcMin]", 24),
+        ("filter[engineCcMax]", 3001),
+        ("filter[powerKwMin]", 0.4),
+        ("filter[powerKwMax]", 400.1),
+        ("filter[wetWeightKgMax]", 600.1),
+        ("filter[seatHeightMmMax]", 1201),
+    ],
+)
+def test_list_numeric_filter_beyond_the_plausibility_boundary_returns_422(
+    customer: TestClient, browse: RecordedBrowse, parameter: str, value: float
+) -> None:
+    response = customer.get("/api/catalogue-models", params={parameter: value})
+
+    assert response.status_code == 422
+
+
+# --- page[number] upper bound (5.5) ---------------------------------------------
+
+
+def test_list_page_number_at_the_ceiling_is_accepted(
+    customer: TestClient, browse: RecordedBrowse
+) -> None:
+    response = customer.get("/api/catalogue-models", params={"page[number]": 10_000})
+
+    assert response.status_code == 200, response.text
+
+
+def test_list_page_number_beyond_the_ceiling_returns_422(
+    customer: TestClient, browse: RecordedBrowse
+) -> None:
+    response = customer.get("/api/catalogue-models", params={"page[number]": 10_001})
+
+    assert response.status_code == 422
+
+
 @pytest.mark.parametrize(
     ("wire", "expected"),
     [
