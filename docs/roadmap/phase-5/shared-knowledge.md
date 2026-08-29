@@ -622,3 +622,68 @@ depend on. 1–3 bullets per step, no prose.
   is local. Test count: 1253 → 1259 backend-wide, all from the parallel 5.11
   seed work merging in via the bind mount, not from this step (this step kept
   the pre-existing test one test, net zero).
+
+### Step 5.11
+
+- **Final model list** (`backend/app/cli/data/seed_models.json`, `[{"name": …}, …]`,
+  12 entries, none colliding with any dev-DB slug or with `suzuki-gsr-600`
+  which stays free for the 5.16 live-review chapter): Kawasaki Z400 (A2),
+  KTM 390 Duke (A2), Yamaha YZF-R3 (A2), Honda CBR500R (A2), Suzuki SV650
+  (naked), Kawasaki Z900 (naked), Triumph Street Triple 765 (naked), Honda
+  CB650R (naked), BMW R 1250 GS (tourer), Honda Africa Twin (tourer),
+  Kawasaki Versys 650 (tourer), Yamaha Tracer 9 (tourer).
+- `app seed demo [--auto-approve]` (`backend/app/cli/seed.py`, 13th sub-app in
+  `backend/app/cli/main.py`, alphabetical between `retrieval` and `tools`).
+  Per model: `product_service.get_by_slug` (skip if any status, prints
+  `"{name}: skipped (exists: {status})"`) → `product_service.create_backlog` →
+  `product_service.start_ingestion` (byte-identical sequence to
+  `POST /api/products`/`app ingest run` — no bypass) → poll → (optional)
+  `product_service.transition(session, motorbike, MotorbikeStatus.APPROVED)`.
+  **Polling contract**: `POLL_INTERVAL_SECONDS = 5.0`,
+  `INGESTION_TIMEOUT_SECONDS = 600.0` (10 min/model), module constants on
+  `app.cli.seed`; `_poll` loops on `await session.refresh(operation)` — not a
+  fresh `operation_service.get` call — because `get_sessionmaker()` sets
+  `expire_on_commit=False`, so a plain re-select would hand back the same
+  identity-mapped, non-expired object without overwriting it; only an
+  explicit `refresh` (or `expire`) forces the reload. The same pitfall applies
+  to the motorbike row before `--auto-approve`'s `transition` call (the worker
+  moved it to `in_review` in a different session) — `_seed_one` refreshes it
+  explicitly first. A still-non-terminal operation after the timeout is
+  treated as `"failed (timed out after 600s)"`, not retried further (the
+  pipeline's own `SmartRetryMiddleware` already covers transient errors).
+- **Summary-output format** (5.16/5.18 may script against this literally):
+  per-model progress lines during the run —
+  `"{name}: skipped (exists: {status})"`, `"{name}: ingesting (operation {id})"`,
+  `"{name}: seeded"`, `"{name}: approved"`, `"{name}: failed ({detail})"` — then
+  a blank line, `"Summary:"`, one row per model as
+  `"  {name:<{width}}  {outcome}"` (outcome is exactly one of
+  `seeded`/`approved`/`skipped (…)`/`failed (…)`, `width` = the longest model
+  name in that run), then one totals line:
+  `"{n} seeded, {n} approved, {n} skipped, {n} failed."` (always all four
+  counts, that literal order, comma-separated, one trailing period). Exit code
+  1 iff `attempted` (= results whose outcome is not `skipped`) is non-empty
+  **and** every one of them is `failed`; all-skipped and any-non-failed both
+  exit 0.
+- Tests: `backend/tests/cli/test_seed.py` (6 tests, stubs only, no DB/network —
+  the 2.19 precedent). `product_service.start_ingestion` is monkeypatched
+  per-test to resolve immediately to a terminal `Operation` (built via real
+  `operation_service.create`/`succeed`/`fail` + `product_service.transition`
+  against the shared `FakeAsyncSession` from `tests/services/conftest.py`), so
+  `_poll`'s `while` loop exits on its first check — no `asyncio.sleep`
+  patching needed. Broker is stubbed exactly like `tests/cli/test_jobs.py`
+  (`monkeypatch.setattr("app.cli.seed.broker", stub)`); the seed list is
+  swapped for a 2-name temp-file list via `monkeypatch.setattr(seed_cli,
+  "SEED_MODELS_PATH", tmp_path / "seed_models.json")`, decoupling the tests
+  from the curated production list's content.
+- Live-verified twice against the dev DB (stack already up, worker already
+  running): first run seeded and approved all 12 (`0 seeded, 12 approved, 0
+  skipped, 0 failed.`, exit 0); a second immediate re-run skipped all 12
+  (`0 seeded, 0 approved, 12 skipped, 0 failed.`, exit 0), proving the
+  fresh-run pin holds — no re-ingestion, no duplicate rows. Post-seed:
+  `motorbikes` has 22 rows (10 pre-existing + 12 new), 19 `approved`;
+  `GET /api/catalogue-models?page[size]=100` (customer-facing, cookie-authed)
+  returned 19 items. Spot-checked `Honda Africa Twin`'s detail endpoint: specs
+  (partial — real extraction, not every field found), a multi-paragraph
+  article, 3 sources, 1 image with a working `/media` URL (200). A throwaway
+  QA account created only to authenticate the read (`qa511spotcheck`) was
+  deleted afterwards, including its session row.

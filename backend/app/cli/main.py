@@ -14,6 +14,7 @@ from app.cli import (
     operations,
     rag,
     retrieval,
+    seed,
     tools,
     users,
 )
@@ -35,6 +36,7 @@ app.add_typer(openapi.app, name="openapi")
 app.add_typer(operations.app, name="operations")
 app.add_typer(rag.app, name="rag")
 app.add_typer(retrieval.app, name="retrieval")
+app.add_typer(seed.app, name="seed")
 app.add_typer(tools.app, name="tools")
 app.add_typer(users.app, name="users")
 
