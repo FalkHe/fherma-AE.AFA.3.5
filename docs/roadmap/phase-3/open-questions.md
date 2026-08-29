@@ -40,6 +40,20 @@ overflow horizontally (`scrollWidth` 435 vs 390). Plain customer accounts
 are clean; the Phase-3 chat surfaces themselves are responsive. Pre-existing
 admin-nav layout, not a Phase-3 regression — route to Phase 5 polish.
 
+**N2 — RESOLVED (2026-08-29, Phase-5 step 5.17 acceptance).** Re-verified in
+a real browser at both 360 px and 390 px on the admin backlog and admin review
+shells: `document.documentElement.scrollWidth === window.innerWidth` at both
+widths, and the header element's width matches the viewport exactly — the
+4.11 fixes (commit `c7340a3`) hold. The catalogue article table wrapper was
+confirmed clean at 360 px in the same pass.
+
+The same pass found a **distinct, pre-existing** overflow with a different
+root cause, filed and fixed rather than folded into N2: wide GFM tables in the
+admin review Documents tab (`ModelDocumentsPanel`) scrolled the whole page at
+360/390 px, because only `CatalogueModelRoute` carried a table scroll wrapper.
+Fixed in commit `4b0a1e5` by giving the panel its own module-local wrapper
+(chat and catalogue rendering unchanged).
+
 ---
 
 *(previously: no open questions, 2026-08-27)*
