@@ -13,6 +13,8 @@ from app.core.config import get_settings
 from app.llm.models import (
     APP_TITLE,
     APP_URL,
+    CHAT_REQUEST_TIMEOUT_SECONDS,
+    LLM_MAX_RETRIES,
     MissingApiKeyError,
     get_chat_model,
     observability_callbacks,
@@ -71,6 +73,19 @@ def test_no_callbacks_until_langfuse_is_wired() -> None:
     """The observability slot is empty in Phase 2 and attaches nothing."""
     assert observability_callbacks(get_settings()) == []
     assert get_chat_model().callbacks is None
+
+
+@pytest.mark.usefixtures("configured")
+def test_timeout_and_retries_are_wired() -> None:
+    """The client-side policy (shared-knowledge D3) reaches the constructed model.
+
+    `ChatOpenRouter.timeout` is documented in milliseconds (the D3 amendment,
+    verified against the installed SDK), hence the `* 1000`.
+    """
+    chat = get_chat_model()
+
+    assert chat.request_timeout == CHAT_REQUEST_TIMEOUT_SECONDS * 1000
+    assert chat.max_retries == LLM_MAX_RETRIES
 
 
 @pytest.mark.usefixtures("without_api_key")

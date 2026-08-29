@@ -11,8 +11,12 @@ from collections.abc import Iterator
 import pytest
 
 from app.core.config import get_settings
-from app.llm.embeddings import OPENROUTER_API_BASE, get_embeddings
-from app.llm.models import MissingApiKeyError
+from app.llm.embeddings import (
+    EMBEDDINGS_REQUEST_TIMEOUT_SECONDS,
+    OPENROUTER_API_BASE,
+    get_embeddings,
+)
+from app.llm.models import LLM_MAX_RETRIES, MissingApiKeyError
 
 # Syntactically usable and deliberately never dialled, like the URLs pinned in
 # the top-level conftest.
@@ -75,6 +79,19 @@ def test_context_length_check_is_disabled() -> None:
 def test_no_dimensions_parameter_is_sent() -> None:
     """The model's native vector size already matches the column."""
     assert get_embeddings().dimensions is None
+
+
+@pytest.mark.usefixtures("configured")
+def test_timeout_and_retries_are_wired() -> None:
+    """The client-side policy (shared-knowledge D3) reaches the constructed client.
+
+    Unlike `ChatOpenRouter`, `OpenAIEmbeddings.timeout` is seconds (the OpenAI
+    SDK's own convention) — the constant is passed straight through.
+    """
+    client = get_embeddings()
+
+    assert client.request_timeout == EMBEDDINGS_REQUEST_TIMEOUT_SECONDS
+    assert client.max_retries == LLM_MAX_RETRIES
 
 
 @pytest.mark.usefixtures("without_api_key")

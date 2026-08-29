@@ -17,6 +17,13 @@ from app.core.config import Settings, get_settings
 APP_TITLE = "Motorcycle Buying Advisor"
 APP_URL = "https://github.com/TuringCollegeSubmissions/fherma-AE.AFA.3.5"
 
+# Client-side timeout and retry policy (shared-knowledge D3). Module constants,
+# not settings — the policy is fixed, not environment-specific. A stalled
+# gateway call must fail (and retry through the job's own transient-error
+# handling) well inside `AGENT_TIMEOUT_SECONDS`, not hang on the SDK default.
+CHAT_REQUEST_TIMEOUT_SECONDS = 60
+LLM_MAX_RETRIES = 2
+
 
 class MissingApiKeyError(RuntimeError):
     """Raised when a model is requested without `OPENROUTER_API_KEY` configured.
@@ -56,4 +63,9 @@ def get_chat_model(model: str | None = None) -> ChatOpenRouter:
         app_url=APP_URL,
         app_title=APP_TITLE,
         callbacks=observability_callbacks(settings) or None,
+        # `ChatOpenRouter.timeout` is documented in *milliseconds* (maps to the
+        # SDK's `timeout_ms`) — shared-knowledge D3 amendment, verified against
+        # the installed `langchain_openrouter` — hence the conversion.
+        timeout=CHAT_REQUEST_TIMEOUT_SECONDS * 1000,
+        max_retries=LLM_MAX_RETRIES,
     )

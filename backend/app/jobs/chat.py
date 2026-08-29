@@ -21,6 +21,7 @@ Failure policy, and it is the point of this file:
 
 import logging
 
+from openai import APIConnectionError, APITimeoutError
 from openrouter.errors import EdgeNetworkTimeoutResponseError, RequestTimeoutResponseError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,10 +39,20 @@ APOLOGY = (
     "Please send your message again."
 )
 
-# Gateway timeouts, and only those, are worth retrying: the request never
-# reached a completion, so repeating it is not a second answer. Everything else
-# (authentication, a rejected request, a bug here) would fail again identically.
-TRANSIENT_GATEWAY_ERRORS = (EdgeNetworkTimeoutResponseError, RequestTimeoutResponseError)
+# Gateway timeouts and connection failures, and only those, are worth
+# retrying: the request never reached a completion, so repeating it is not a
+# second answer. Everything else (authentication, a rejected request, a bug
+# here) would fail again identically. The `openrouter` pair covers
+# `ChatOpenRouter` (the advisor's own model calls); the `openai` pair covers
+# `OpenAIEmbeddings` (the retrieval tool's embedding calls, `llm/embeddings.py`)
+# — `langchain_openai` talks to OpenRouter through the OpenAI SDK, whose
+# transport errors are these types, not the `openrouter` package's.
+TRANSIENT_GATEWAY_ERRORS = (
+    EdgeNetworkTimeoutResponseError,
+    RequestTimeoutResponseError,
+    APITimeoutError,
+    APIConnectionError,
+)
 
 # What an admin reads on the operation when the consultation is gone.
 CHAT_GONE_ERROR = "The consultation was deleted before the answer was ready."

@@ -21,11 +21,19 @@ import openrouter
 from langchain_openai import OpenAIEmbeddings
 
 from app.core.config import get_settings
-from app.llm.models import MissingApiKeyError
+from app.llm.models import LLM_MAX_RETRIES, MissingApiKeyError
 
 # OpenRouter's own API base, taken from the SDK that ships with
 # langchain-openrouter instead of being spelled out here.
 OPENROUTER_API_BASE = openrouter.SERVERS[openrouter.SERVER_PRODUCTION]
+
+# Client-side timeout (shared-knowledge D3). A module constant, not a setting —
+# this closes the step-3.9 finding of a stalled embeddings call hanging on the
+# SDK's ~600 s default. `OpenAIEmbeddings.timeout` is seconds (the OpenAI SDK's
+# own convention), unlike `ChatOpenRouter.timeout` (milliseconds) — no
+# conversion here. `LLM_MAX_RETRIES` is reused from `app.llm.models` so the
+# retry policy is one number, not one per client.
+EMBEDDINGS_REQUEST_TIMEOUT_SECONDS = 30
 
 
 def get_embeddings(model: str | None = None) -> OpenAIEmbeddings:
@@ -48,4 +56,6 @@ def get_embeddings(model: str | None = None) -> OpenAIEmbeddings:
         base_url=OPENROUTER_API_BASE,
         api_key=settings.openrouter_api_key,
         check_embedding_ctx_length=False,
+        timeout=EMBEDDINGS_REQUEST_TIMEOUT_SECONDS,
+        max_retries=LLM_MAX_RETRIES,
     )

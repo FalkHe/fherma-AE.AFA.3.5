@@ -13,7 +13,9 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 import pytest
+from openai import APIConnectionError
 from openrouter.errors import EdgeNetworkTimeoutResponseError
 
 from app.db.models.chat import Chat, ChatMessage, ChatMessageRole
@@ -261,6 +263,25 @@ def test_a_failed_turn_lets_the_next_message_through(
     assert asyncio.run(chat_service.heal_stale_turn(fake_session, chat)) is True
 
 
-def test_only_gateway_timeouts_are_retried() -> None:
+def test_respond_re_raises_an_embeddings_connection_error_as_transient(
+    fake_session: WorkerSession, failing: Callable[[Exception], None]
+) -> None:
+    """The OpenAI-SDK errors `OpenAIEmbeddings` raises are transient too (D3)."""
+    chat = _chat(fake_session)
+    operation = _turn(fake_session, chat)
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/embeddings")
+    failing(APIConnectionError(message="Connection error.", request=request))
+
+    with pytest.raises(TransientJobError):
+        asyncio.run(job.respond(chat.id, operation.id))
+
+    assert operation.status is OperationStatus.RUNNING
+    assert chat.active_operation_id == operation.id
+
+
+def test_only_gateway_timeouts_and_connection_errors_are_retried() -> None:
     """A rejected, unauthorised or unparsable answer would fail again identically."""
-    assert all("Timeout" in error.__name__ for error in job.TRANSIENT_GATEWAY_ERRORS)
+    assert all(
+        "Timeout" in error.__name__ or "Connection" in error.__name__
+        for error in job.TRANSIENT_GATEWAY_ERRORS
+    )

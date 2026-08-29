@@ -352,3 +352,36 @@ depend on. 1–3 bullets per step, no prose.
   so the gap (a) Snackbar test drives a real stubbed 500 directly, no
   override needed.
 
+### Step 5.6
+
+- Implemented per the D3 amendment exactly: `backend/app/llm/models.py` passes
+  `timeout=CHAT_REQUEST_TIMEOUT_SECONDS * 1000, max_retries=LLM_MAX_RETRIES`
+  to `ChatOpenRouter` (ms conversion, commented at the call site);
+  `backend/app/llm/embeddings.py` imports `LLM_MAX_RETRIES` from `llm.models`
+  and passes `timeout=EMBEDDINGS_REQUEST_TIMEOUT_SECONDS, max_retries=` the
+  same (seconds, no conversion — `OpenAIEmbeddings` uses the OpenAI SDK's own
+  convention). `backend/app/jobs/chat.py`'s `TRANSIENT_GATEWAY_ERRORS` gained
+  exactly `openai.APITimeoutError` and `openai.APIConnectionError` (verified
+  against installed `openai==2.54.0`; `APITimeoutError` subclasses
+  `APIConnectionError`) alongside the existing `openrouter.errors` pair.
+- **5.17 note:** the added `openai.*` pair is currently unreachable from
+  `chat.respond` in practice — `app/llm/agents/advisor._run_call` catches
+  *every* exception from a tool call (including the `retrieve_bike_knowledge`
+  tool's `OpenAIEmbeddings.aembed_query`) and turns it into an error
+  `ToolMessage`, never letting it propagate to the job. Only a top-level
+  `ChatOpenRouter.ainvoke()` failure (which raises `openrouter.errors.*`,
+  already covered) reaches `jobs/chat.py`'s except clause today. So 5.17
+  cannot provoke a `TransientJobError` via a dead embeddings gateway through
+  the live chat path — only via a directly-raised `openai.APIConnectionError`/
+  `APITimeoutError` (unit-tested in `tests/jobs/test_chat.py`) or via a
+  blackholed/invalid-key `ChatOpenRouter` call (live-verified below). This is
+  scope-accurate per the outline, not a gap I introduced or was asked to close.
+- Live-verified with the dev `.env`'s real `OPENROUTER_API_KEY` swapped for an
+  invalid one (`docker compose up -d app-worker` — **not** `restart`, which
+  does not reread `env_file` changes) and a real chat turn driven through
+  `POST /api/chats` + polling `GET /api/chats/{id}`: the turn ended in ~1 s
+  with `operations.error = "UnauthorizedResponseError: User not found."`,
+  `status = failed`, and the stored assistant message was `job.APOLOGY` — the
+  fast (auth-rejection) path the step file names as an acceptable alternative
+  to a blackholed upstream. Key restored and `app-worker` recreated again
+  afterwards; a normal turn was re-verified end-to-end.
