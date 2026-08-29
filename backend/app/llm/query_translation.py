@@ -50,6 +50,7 @@ from app.db.models.motorbike_spec import PRICE_BANDS, SPEC_CATEGORIES
 # tables) is what keeps "72 kW" and "98 hp" meaning the same thing on the way
 # in and on the way out.
 from app.llm.extraction import _normalize_flag, _quantity_validator, _vocabulary_validator
+from app.llm.fencing import FENCE_END, FENCE_START, fence
 from app.llm.models import get_chat_model
 from app.llm.prompts import render_prompt
 
@@ -360,20 +361,33 @@ def render_translation_prompt(
 
     Args:
         utterance: What the customer just wrote, verbatim. It is rendered as
-            quoted data, and the prompt says so.
+            quoted data, fenced, and the prompt says so.
         history_summary: A short recap of the conversation so far, or `None` to
             omit the block entirely (the first turn has no history).
         preferences: The active preferences, in the caller's order. Omitted when
             empty.
+
+    Every context block is stripped of anything resembling a fence marker
+    (`fencing.fence`) before it is rendered inside one, the same pattern
+    `extraction.render_extraction_prompt` uses for fetched documents.
     """
     return render_prompt(
         PROMPT_NAME,
-        utterance=utterance,
-        history_summary=history_summary,
-        preferences=list(preferences),
+        utterance=fence(utterance),
+        history_summary=fence(history_summary) if history_summary else None,
+        preferences=[
+            ActivePreference(
+                attribute=preference.attribute,
+                value=fence(preference.value),
+                firmness=preference.firmness,
+            )
+            for preference in preferences
+        ],
         categories=SPEC_CATEGORIES,
         price_bands=PRICE_BANDS,
         max_search_queries=MAX_SEARCH_QUERIES,
+        fence_start=FENCE_START,
+        fence_end=FENCE_END,
     )
 
 

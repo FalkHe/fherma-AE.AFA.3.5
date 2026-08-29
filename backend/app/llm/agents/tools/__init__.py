@@ -27,9 +27,19 @@ being answered (write tools need it; `None` in the CLI harness) and the
 `ToolCallCollector`. **Recording is the wrapper's job, not the tool's** —
 `execute` records every call it runs into the pinned `tool_calls[]` shape,
 successes and failures alike, so no tool can forget to be visible. The step-3.13
-loop appends the returned JSON string to the conversation as a `ToolMessage` and
-persists `collector.tool_calls` with the assistant message; a failure is recorded
-and then re-raised, so the loop still gets to tell the model what went wrong.
+loop appends `execute`'s **return value** to the conversation as a `ToolMessage`
+and persists `collector.tool_calls` with the assistant message; a failure is
+recorded and then re-raised, so the loop still gets to tell the model what went
+wrong.
+
+**Step 5.8:** what is recorded and what is returned are no longer guaranteed to
+be the same object. `execute` always records the unfenced `result.model_dump(...)`
+— `tool_calls[].result` and `sources[]` stay byte-identical to before 5.8 — but
+returns `spec.model_view(result)` instead when the tool declares one. Only
+`retrieve_bike_knowledge.TOOL` does, to fence retrieved chunk text for the model
+without fencing the persisted/UI copy. Every other tool is unaffected: no
+`model_view` means the recorded and returned payloads are identical, exactly as
+before.
 
 Argument validation failures are the one thing *not* recorded here: a call whose
 arguments never validated never executed, and the loop reports it to the model as
@@ -223,12 +233,21 @@ class ToolSpec:
     `description` is what the model reads to decide whether to call the tool. It
     stays in the tool module (a docstring-like constant, not a prompt template):
     it is part of the function schema LangChain sends, not a rendered prompt.
+
+    `model_view` is the step-5.8 escape hatch for a tool whose result embeds
+    untrusted prose: when set, `execute` still records the **unfenced** result as
+    today (`tool_calls[].result` and `sources[]` stay byte-identical) but returns
+    `model_view(result)` instead of the plain dump — the value that actually
+    reaches the `ToolMessage` the model reads. `None` (the default, every tool but
+    `retrieve_bike_knowledge`) means no split: the recorded and the model-facing
+    payload are the same object, exactly as before 5.8.
     """
 
     name: str
     description: str
     args_schema: type[BaseModel]
     run: Callable[[ToolContext, Any], Awaitable[BaseModel]]
+    model_view: Callable[[BaseModel], dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,7 +326,7 @@ def build_advisor_tools(ctx: ToolContext) -> list[BaseTool]:
 
 
 async def execute(spec: ToolSpec, ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Validate, run and record one tool call; return the pinned result payload.
+    """Validate, run and record one tool call; return what the caller should send.
 
     The single execution path: `build_advisor_tools` wraps it for the agent loop
     and `app tools run` calls it directly, so the harness proves the same code the
@@ -320,8 +339,17 @@ async def execute(spec: ToolSpec, ctx: ToolContext, arguments: dict[str, Any]) -
             both), as the model sent them.
 
     Returns:
-        The result model dumped by alias — the exact object that lands in
-        `tool_calls[].result` and reaches the UI's renderer.
+        The result model dumped by alias — **always** what is recorded into
+        `tool_calls[].result` and reaches the UI's renderer. When `spec.model_view`
+        is set (step 5.8's escape hatch, currently only
+        `retrieve_bike_knowledge.TOOL`), the *returned* value is
+        `spec.model_view(result)` instead — the model-facing view of the same
+        result, which may differ from what was recorded (a fenced snippet text,
+        for example). The persisted/UI payload and `sources[]` are built from the
+        unfenced `result` in both cases; only the caller's copy — the one that
+        becomes the `ToolMessage` the model reads — can differ. `app tools run`
+        therefore prints the model view for that one tool, not the recorded one;
+        this is the harness showing what the model sees, not a pinned wire shape.
 
     Raises:
         pydantic.ValidationError: the arguments do not satisfy the args schema.
@@ -340,7 +368,7 @@ async def execute(spec: ToolSpec, ctx: ToolContext, arguments: dict[str, Any]) -
 
     payload = result.model_dump(by_alias=True)
     ctx.collector.record(spec.name, recorded_arguments, payload)
-    return payload
+    return spec.model_view(result) if spec.model_view is not None else payload
 
 
 async def resolve_references(

@@ -53,6 +53,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.db.models.chat import Chat, ChatMessage, ChatMessageRole, ChatPreference
 from app.llm.agents import tools
+from app.llm.fencing import FENCE_END, FENCE_START, fence
 from app.llm.models import get_chat_model
 from app.llm.prompts import render_prompt
 from app.services import chat_service
@@ -166,11 +167,15 @@ def build_context(
         preferences=[
             {
                 "attribute": preference.attribute,
-                "value": preference.value,
+                # The customer's own words: stripped of anything resembling a
+                # fence marker before it is rendered inside one (fencing.fence).
+                "value": fence(preference.value),
                 "firmness": preference.firmness.value,
             }
             for preference in preferences
         ],
+        fence_start=FENCE_START,
+        fence_end=FENCE_END,
     )
     messages: list[BaseMessage] = [SystemMessage(prompt)]
     for message in history:

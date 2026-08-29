@@ -276,6 +276,8 @@ def test_supplying_every_variable_renders_without_history_or_preferences() -> No
         categories=("naked",),
         price_bands=("budget",),
         max_search_queries=3,
+        fence_start=query_translation.FENCE_START,
+        fence_end=query_translation.FENCE_END,
     )
     assert "hello" in rendered
     assert "Conversation so far" not in rendered
