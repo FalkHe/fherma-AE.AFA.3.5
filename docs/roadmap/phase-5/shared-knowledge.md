@@ -560,3 +560,19 @@ depend on. 1–3 bullets per step, no prose.
 - `app-worker` restarted (`docker compose restart app-worker` — no env/compose
   change this step, so a plain restart was sufficient to reload the
   bind-mounted code; `up -d` is only needed when `.env`/`env_file` changed).
+
+### Step 5.17 follow-up — admin document table overflow
+
+- `ModelDocumentsPanel` gained a module-local `DocProseTable` wrapper
+  (`<Box sx={{ maxWidth: "100%", overflowX: "auto" }}><table>…</table></Box>`,
+  mirroring `CatalogueModelRoute`'s `ProseTable`) passed via
+  `UntrustedMarkdown`'s existing `components={{ table: DocProseTable }}` prop
+  — no change to `UntrustedMarkdown`'s prop surface or `BASE_MARKDOWN_SX`.
+- Chat (`MessageBubble`) and catalogue (`CatalogueModelRoute`) rendering are
+  unaffected — the delta is module-local to `ModelDocumentsPanel.tsx` only.
+- Verified with a headless-Chrome check (network-mocked `/admin/models/:id`
+  Documents tab, wide GFM table) at 360px/390px:
+  `document.documentElement.scrollWidth === window.innerWidth` and the table
+  scrolls inside its own wrapper (`overflowX: auto`, table wider than
+  wrapper). Added `AdminModelReviewRoute.test.tsx` assertion that the
+  rendered `table`'s parent has `overflowX: auto`.

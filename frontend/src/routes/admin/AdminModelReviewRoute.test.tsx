@@ -300,7 +300,13 @@ describe("AdminModelReviewRoute gates", () => {
     expect(
       await screen.findByRole("heading", { name: "Suzuki GSR600", level: 3 }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("table")).toBeInTheDocument();
+    const table = screen.getByRole("table");
+
+    expect(table).toBeInTheDocument();
+    // Wide Wikipedia-sourced tables must not push the whole page sideways
+    // (ui-spec §10) — the table sits inside its own horizontal scroller,
+    // mirroring CatalogueModelRoute's `ProseTable` wrapper.
+    expect(table.parentElement).toHaveStyle({ overflowX: "auto" });
     // Raw HTML in retrieved prose renders as text, never as markup.
     const inertHtml = screen.getByText(/rendered as text, never as markup/);
 

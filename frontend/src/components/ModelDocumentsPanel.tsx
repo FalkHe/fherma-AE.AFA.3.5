@@ -11,6 +11,7 @@ import ListItemText from "@mui/material/ListItemText";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
+import type { ReactNode } from "react";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router";
@@ -42,6 +43,26 @@ import { UntrustedMarkdown } from "./UntrustedMarkdown";
 const MARKDOWN_SX = {
   "& img": { maxWidth: "100%", height: "auto" },
 } as const;
+
+/**
+ * Retrieved documents carry Wikipedia-width tables whose min-content width is
+ * far past a phone viewport; unwrapped they push the whole page sideways
+ * (ui-spec §10 — "no horizontal page scroll anywhere" at 360px). The wrapper
+ * bounds the table to the column and moves the overflow into its own
+ * scroller (mirrors `CatalogueModelRoute`'s `ProseTable` — module-local per
+ * the per-site delta rule, ui-spec §4).
+ */
+function DocProseTable({ children }: { children?: ReactNode }) {
+  return (
+    <Box sx={{ maxWidth: "100%", overflowX: "auto" }}>
+      <table>{children}</table>
+    </Box>
+  );
+}
+
+const MARKDOWN_COMPONENTS = {
+  table: DocProseTable,
+};
 
 /** `example.org` out of a source URL; the raw value if it will not parse. */
 function hostname(sourceUrl: string): string {
@@ -192,7 +213,9 @@ export function ModelDocumentsPanel({ product }: { product: Product }) {
             </Typography>
           </Stack>
           <Divider sx={{ my: 2 }} />
-          <UntrustedMarkdown sx={MARKDOWN_SX}>{selected.contentMarkdown}</UntrustedMarkdown>
+          <UntrustedMarkdown sx={MARKDOWN_SX} components={MARKDOWN_COMPONENTS}>
+            {selected.contentMarkdown}
+          </UntrustedMarkdown>
         </Paper>
       </Grid>
     </Grid>
