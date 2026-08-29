@@ -687,3 +687,101 @@ depend on. 1–3 bullets per step, no prose.
   article, 3 sources, 1 image with a working `/media` URL (200). A throwaway
   QA account created only to authenticate the read (`qa511spotcheck`) was
   deleted afterwards, including its session row.
+
+### Step 5.10
+
+- **INCIDENT (report to coordinator, not just a landed decision): the shared
+  dev-DB volume was destroyed during this step's cleanup.** `docker compose
+  --profile langfuse down -v` does **not** scope to the profile's services —
+  `down` (unlike `up`/`stop`) tears down the **entire project**, so it also
+  stopped/removed `postgres`/`redis`/`app-web`/`app-worker`/`frontend` and,
+  with `-v`, deleted the named `postgres-data` volume — the shared pgvector
+  Postgres data, including whatever the parallel 5.11 seed session had just
+  written (its own report above logs a fully successful run: 22 motorbikes,
+  19 approved, live-verified twice). The stack was brought back up
+  immediately (`docker compose up -d`), migrations re-ran cleanly to the
+  pinned head `fb2747f937c4` on the fresh empty volume, and the default five
+  services are healthy again — but **all runtime data is gone**: every
+  account, chat, motorbike, document and operation row from phases 2–5's dev
+  session, not just this step's own throwaway fixtures. No code or migration
+  was affected. **Recovery path**: 5.11 landed `app seed demo --auto-approve`
+  as code (not a one-off action), so re-running it against the now-empty DB
+  reproduces the ≥10-approved-model catalogue for M3 from scratch (full cost:
+  all 12 models re-ingested, ~1–3 min + LLM/search spend each, since nothing
+  exists to skip anymore); the original Phase-4 manual demo bootstrapping and
+  any other ad-hoc dev/QA fixtures accumulated in earlier phases are **not**
+  known to be scripted and may not be recoverable at all — the coordinator
+  should confirm with 5.11's owner whether a re-run is needed before any
+  later step assumes seeded data exists. **Lesson for future compose-profile
+  work**: never run `docker compose --profile <p> down [-v]` on a project that
+  also has always-on default services — use `docker compose stop
+  <service...>` + `docker compose rm -f <service...>` (+ `docker volume rm
+  <specific-volume>` if truly needed) to scope the teardown to only the
+  profile's own containers/volumes.
+- **D6 compose profile lands as specified and works end-to-end** — services
+  `langfuse-web`/`langfuse-worker` (`langfuse/langfuse:4` /
+  `langfuse/langfuse-worker:4`, Docker Hub, not the project's own
+  `docker.langfuse.com` registry, which does not resolve from this sandbox's
+  network — same published image, reachable mirror; matches the SDK's major
+  version, `langfuse~=4.0`/4.15.1, landed in 5.9), `clickhouse`
+  (`clickhouse/clickhouse-server:25.12`), `valkey` (`valkey/valkey:7-alpine`,
+  named apart from the app's own `redis` service to stay unambiguous),
+  `minio` (`cgr.dev/chainguard/minio`) and a dedicated `langfuse-postgres`
+  (`postgres:17-alpine`), all under `profiles: ["langfuse"]`, named volumes
+  for clickhouse/minio/langfuse-postgres, no host ports published except
+  `langfuse-web`'s UI on **3000** (avoids 5173/8000/5432/6379 — nothing else
+  needs host access). Generated dev-only secrets are hardcoded in
+  `compose.yaml` with `# generated dev secret` comments (fine for a bonus
+  dev stack, never reused anywhere real). One required correction beyond the
+  official reference I over-trimmed: `CLICKHOUSE_CLUSTER_ENABLED: "false"` is
+  required (its absence fails ClickHouse migrations with a Zookeeper/
+  `ON CLUSTER` error) — added back after the first `up` failed on it.
+- **Proven**: `docker compose config --services` (no profile) is
+  byte-identical before/after (`postgres app-web redis app-worker frontend`,
+  same 5); `docker compose --profile langfuse config --services` additionally
+  lists exactly the 6 new services; all 6 images pulled cleanly; a headless
+  bootstrap via Langfuse's documented `LANGFUSE_INIT_*` one-shot env vars
+  (no browser tool available to drive the sign-up UI) created an
+  org/project/API-key triple, confirmed via a direct `langfuse-postgres`
+  query; with those keys in `.env` and `app-web`/`app-worker` recreated, a
+  real two-turn consultation (welcome + a tool-calling follow-up: 4×
+  `record_preference` + `catalogue_search` + `present_recommendations`)
+  completed normally and Langfuse's own `/api/public/v2/observations` API
+  confirmed 5 exported `ChatOpenRouter` GENERATION events with real
+  latencies. `.env.dist` got comment-only pointers (the literal
+  `LANGFUSE_HOST=http://localhost:3000` example named in the step outline is
+  **not** what a container should use — corrected the comment to
+  `http://langfuse-web:3000`, the intra-Compose-network hostname app-web/
+  app-worker actually need; `localhost:3000` is only reachable from the host
+  browser). `make langfuse-up`/`langfuse-down` added (trivial one-liners).
+- **M2's "full trace — agent steps + tool calls" criterion is NOT met, and
+  this is out of 5.10's compose-only scope to fix.** The 5 observations above
+  are 5 **independent root traces** (`isRootObservation: true`, distinct
+  `traceId`s, no `parentObservationId` nesting), one per individual
+  `ChatOpenRouter.ainvoke()` call — even though `advisor.py` builds one
+  `ChatOpenRouter`/`LangfuseCallbackHandler` instance per turn and reuses it
+  across that turn's whole tool-calling loop (confirmed by reading
+  `advisor.py`: `get_chat_model()` is called once per turn, not per LLM
+  call). Reusing the handler does not group calls into one trace under
+  Langfuse v4's callback integration — no shared `trace_context`/session id
+  is passed anywhere. Additionally, **tool calls never appear at all**: they
+  run as plain Python (`tools.execute`), never inside a LangChain
+  Runnable/callback graph, so nothing instruments them. Closing this gap
+  needs trace/session-context wiring in `backend/app/llm/agents/advisor.py`
+  and/or `llm/models.py` (e.g. Langfuse's `trace_context`/`@observe` span
+  grouping) — real `backend/app/` code, out of scope for this step (compose-
+  only) and not built in 5.9 either (5.9 was scoped to the factory + gate,
+  "no call-site changes"). Recorded here, not fixed: the coordinator should
+  either relax M2's demo wording to "individual LLM-call traces are visible,
+  grouping/tool-call spans are a known gap" or schedule a small dedicated
+  backend step for the wiring — not something to improvise here.
+- Verified `docker compose --profile langfuse down` (without `-v`, scoped to
+  only the langfuse services under normal operation) leaves the default
+  stack healthy — this was exercised implicitly by the full-project
+  `down -v` above and the subsequent `docker compose up -d` recovery, both of
+  which came back clean; the compose file itself was not reverted, only the
+  temporary `LANGFUSE_INIT_*` bootstrap block (marked as verification-only)
+  was removed from `langfuse-web` before finishing. `ruff check .` /
+  `ruff format --check .` pass unchanged (no `backend/app/` file touched).
+  Changes are uncommitted, confined to `compose.yaml`, `.env.dist`,
+  `Makefile`, per the no-commit instruction.

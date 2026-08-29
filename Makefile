@@ -40,6 +40,14 @@ ps: ## Show service status
 	$(COMPOSE) ps
 .PHONY: ps
 
+langfuse-up: ## Start the optional Langfuse tracing stack (bonus, profile "langfuse")
+	$(COMPOSE) --profile langfuse up -d
+.PHONY: langfuse-up
+
+langfuse-down: ## Stop the optional Langfuse tracing stack
+	$(COMPOSE) --profile langfuse down
+.PHONY: langfuse-down
+
 test: backend-test frontend-test ## Run both test suites
 .PHONY: test
 
