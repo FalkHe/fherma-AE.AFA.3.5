@@ -37,6 +37,21 @@ the same day; see below)*
 
 ---
 
+## Opened during Phase 5
+
+- **Ingestion spec-quality: `a2Eligible` is not cross-checked against
+  power** (found 2026-08-29 during the 5.16 walkthrough replay). The
+  extraction marked Suzuki GSR600 `a2Eligible: true` at 72 kW, far above the
+  35 kW A2 ceiling. The advisor behaved correctly — the strict search
+  returned nothing and it offered to widen — so this is a **data-quality**
+  issue, not a retrieval or agent bug, and it is out of Phase-5 scope
+  (hardening, zero feature work). Candidate fix for a later phase: a
+  derived-consistency validator in extraction (power > 35 kW ⇒ `a2Eligible`
+  cannot be true), or dropping the extracted flag in favour of deriving it
+  from power at query time. Owner decision needed on which.
+
+---
+
 ## Carried over (tracked elsewhere, listed for visibility)
 
 - **Q4 / Phase-4 OQ4 — concurrent-turn 409 race:** owner decision still
