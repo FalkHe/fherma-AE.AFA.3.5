@@ -371,5 +371,7 @@ convention that keeps it from drifting.
   scoping checks
 - `docs/roadmap.md` — phased implementation plan
 - `docs/core-requirements.md` — grading requirements
+- `docs/grading-map.md` — every grading requirement and claimed bonus mapped
+  to concrete files/endpoints/screens
 - `docs/qa-checklist.md` — QA checklist and known rough edges
 - `125.md` — original task brief

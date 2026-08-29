@@ -852,3 +852,60 @@ depend on. 1–3 bullets per step, no prose.
   stack.md` is a stack doc, not README, and was not touched by this step —
   flagging for the coordinator per the "flag contradictions rather than
   silently rewriting decisions" instruction rather than editing it.
+
+### Step 5.16
+
+- New `docs/grading-map.md`: every `docs/core-requirements.md` item and every
+  claimed bonus (hybrid RRF search, auth & personalisation/preferences,
+  prompt-injection fencing, Langfuse, real-time admin-triggered ingestion)
+  mapped to concrete files/endpoints/screens; every row spot-checked against
+  the actual filesystem (one correction made while writing it: chunking
+  lives in `backend/app/services/chunking.py`, not `chunking_service.py`;
+  the documents table is `source_documents`, not `motorbike_documents`).
+  Linked from README's "Further reading". Langfuse's row states the D5/M2
+  scope honestly: per-LLM-call tracing only, no per-turn grouping, tool
+  calls absent, embeddings excluded -- never "full trace".
+- `docs/demo-walkthrough.md` chapters 1-5 are now count-agnostic/seed-aware
+  (no literal ULIDs, no fixed "3 approved models" assumption, price caveat
+  dropped per the 5.15 landed decision -- today's prices are real pipeline
+  extraction, not guesses). New section 6 "Submission chapter" walks
+  register -> CLI `users set-role ... admin` -> add-to-backlog (UI or
+  `app ingest run`) -> live SSE ingestion progress -> one live admin review
+  + approve -> `app seed demo --auto-approve` named explicitly as bulk
+  convenience, not a substitute for the live review -> a consultation ->
+  card click-through -> filtered catalogue URL round-trip -> logout/login
+  resume. Every grading-map row is cross-referenced inline via bracketed
+  tags.
+- **Live-replayed end to end against the seeded dev stack** (not a fresh
+  clone -- that is 5.18's job), `HEAD 25d87c6`, 2026-08-29: registered
+  `demo516-admin`, promoted it via CLI, logged in again (role change revokes
+  sessions, as documented); `app ingest run "Suzuki GSR600"` (the model
+  5.11/5.15 deliberately kept out of the seed list) created the entry and
+  finished ingestion in ~28s, landing `in_review` with a draft spec;
+  `PATCH /api/products/{id}` with `status: approved` promoted it live -- the
+  catalogue went from 5 to 6 approved models immediately, no restart.
+  Registered a second throwaway account (`demo516-user`), drove a real
+  4+-turn consultation: it needed one widening follow-up (the seeded
+  catalogue's `a2Eligible` extraction is noisy -- Suzuki GSR600 is flagged
+  `a2Eligible: true` despite a 72 kW engine, well above the 35 kW A2 cap, so
+  the first strict-A2 `catalogue_search` legitimately returned zero rows)
+  before it produced a 2-card recommendation (Kawasaki Versys 650, Suzuki
+  SV650) citing 8 sources and using five distinct tools in one turn
+  (`catalogue_search`, `record_preference`, `retrieve_bike_knowledge`,
+  `licence_fit_check`, `present_recommendations`). Verified card
+  click-through (200 on the detail endpoint), the filter round-trip
+  (`filter[category]=naked` -> `totalCount: 4`), the non-approved-id 404,
+  and the plain-user-403-on-admin-resource check, all live. Both throwaway
+  accounts and their sessions/chats were deleted afterward (cascaded via
+  `DELETE FROM users WHERE username IN (...)`); the newly approved Suzuki
+  GSR600 was left in place -- it is the intended, documented outcome of the
+  live-review chapter, not a throwaway fixture. Dev DB after cleanup: 6
+  approved / 7 in_review motorbikes, 0 users.
+- **Data-quality note for a future step, not fixed here (out of
+  docs-writer's scope):** Suzuki GSR600's `a2Eligible` flag is almost
+  certainly a spec-extraction error (draft/verified spec both say `true` at
+  72 kW, roughly 2x the A2 limit) -- worth a look if a future
+  ingestion-quality pass happens, but the walkthrough documents the
+  advisor's graceful handling of the resulting zero-match search as a
+  feature (the tool-calling loop asking a clarifying follow-up), not a bug
+  to route around.
