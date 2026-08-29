@@ -43,12 +43,56 @@ const BASE_PRODUCT: Product = {
 /** What the doubled `useProduct` answers with; set per test. */
 let productQuery: Partial<UseQueryResult<Product, Error>>;
 
+/**
+ * When set, replaces the documents/image query result. A real failure would
+ * hit the query's default retry budget before settling, so — same idiom as
+ * `CatalogueRoute.test.tsx`'s `listOverride` — the hooks are wrapped rather
+ * than replaced, and only the states the fixture API cannot reach (pending,
+ * failed) are answered with a canned override.
+ */
+let documentsOverride: Partial<UseQueryResult<unknown, Error>> | null = null;
+let imageOverride: Partial<UseQueryResult<unknown, Error>> | null = null;
+
 vi.mock("../../hooks/useProductReview", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../hooks/useProductReview")>();
 
   return {
     ...actual,
     useProduct: () => ({ refetch: vi.fn(), ...productQuery }),
+    useProductDocuments: (productId: string) => {
+      const result = actual.useProductDocuments(productId);
+
+      if (documentsOverride === null) {
+        return result;
+      }
+
+      return {
+        ...result,
+        ...documentsOverride,
+        // Clearing the override before the real refetch settles is what makes
+        // a retry land on the real (successful) fixture data.
+        refetch: (...args: Parameters<typeof result.refetch>) => {
+          documentsOverride = null;
+          return result.refetch(...args);
+        },
+      };
+    },
+    useProductImage: (productId: string) => {
+      const result = actual.useProductImage(productId);
+
+      if (imageOverride === null) {
+        return result;
+      }
+
+      return {
+        ...result,
+        ...imageOverride,
+        refetch: (...args: Parameters<typeof result.refetch>) => {
+          imageOverride = null;
+          return result.refetch(...args);
+        },
+      };
+    },
   };
 });
 
@@ -167,6 +211,8 @@ function installApi(): void {
 
 beforeEach(() => {
   latestOperation = null;
+  documentsOverride = null;
+  imageOverride = null;
   withStatus("in_review");
   installApi();
 });
@@ -260,6 +306,50 @@ describe("AdminModelReviewRoute gates", () => {
 
     expect(inertHtml.textContent).toContain('<script>alert("xss")</script>');
     expect(inertHtml.querySelector("script, b")).toBeNull();
+  });
+
+  it("shows the documents tab's own loading spinner, not a blank tab", () => {
+    documentsOverride = { data: undefined, isLoading: true, isError: false };
+    renderWithProviders(<AdminModelReviewRoute />);
+
+    expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
+    expect(screen.queryByText("No documents")).not.toBeInTheDocument();
+  });
+
+  it("shows the documents tab's own error state with a working retry", async () => {
+    documentsOverride = { data: undefined, isLoading: false, isError: true };
+    renderWithProviders(<AdminModelReviewRoute />);
+
+    expect(screen.getByText("Could not load the documents")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Suzuki GSR600", level: 3 }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the image tab's own loading spinner, not a blank tab", async () => {
+    imageOverride = { data: undefined, isLoading: true, isError: false };
+    renderWithProviders(<AdminModelReviewRoute />);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Image" }));
+
+    expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
+    expect(screen.queryByText("No image")).not.toBeInTheDocument();
+  });
+
+  it("shows the image tab's own error state with a working retry", async () => {
+    imageOverride = { data: undefined, isLoading: false, isError: true };
+    renderWithProviders(<AdminModelReviewRoute />);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Image" }));
+
+    expect(await screen.findByText("Could not load the image")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(await screen.findByText("Attribution / licence")).toBeInTheDocument();
   });
 
   it("renders a published model read-only", async () => {

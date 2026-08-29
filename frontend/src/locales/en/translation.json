@@ -40,7 +40,10 @@
       }
     },
     "errors": {
-      "serverError": "Something went wrong. Please try again."
+      "serverError": "Something went wrong. Please try again.",
+      "crashTitle": "Something went wrong",
+      "crashBody": "An unexpected error broke this page. Reloading usually fixes it.",
+      "crashReload": "Reload page"
     }
   },
   "auth": {
@@ -122,7 +125,9 @@
         "nameRequired": "Enter a model name.",
         "duplicate": "This model is already in the catalogue.",
         "submit": "Add & start ingestion"
-      }
+      },
+      "transitionError": "Could not start the ingestion. Please try again.",
+      "operationsLoadError": "Ingestion progress could not be loaded — statuses are still current."
     },
     "review": {
       "back": "Backlog",
@@ -149,7 +154,8 @@
           "technical": "Technical documentation",
           "magazine": "Magazine",
           "upload": "Upload"
-        }
+        },
+        "loadError": "Could not load the documents"
       },
       "specs": {
         "draftHeading": "Draft specification",
@@ -198,7 +204,8 @@
         "rejectConfirmBody": "The image will not be published with the model. Uploading a replacement is not available yet.",
         "rejectedNotice": "Image rejected. The model can still be approved without an image.",
         "emptyTitle": "No image",
-        "emptyBody": "Ingestion did not fetch an image for this model."
+        "emptyBody": "Ingestion did not fetch an image for this model.",
+        "loadError": "Could not load the image"
       },
       "actions": {
         "approve": "Approve & publish",

@@ -1,9 +1,11 @@
+import Alert from "@mui/material/Alert";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Icon from "@mui/material/Icon";
 import MenuItem from "@mui/material/MenuItem";
 import Paper from "@mui/material/Paper";
 import Skeleton from "@mui/material/Skeleton";
+import Snackbar from "@mui/material/Snackbar";
 import Stack from "@mui/material/Stack";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
@@ -310,6 +312,29 @@ export function AdminBacklogRoute() {
         </TextField>
         {addModelButton}
       </Stack>
+      {/* No reserved slot: the healthy page stays unchanged, matching the
+          `LiveConnectionAlert` precedent — statuses are still current, only
+          their liveness is in question. */}
+      {operations.isError && (
+        <Alert
+          severity="warning"
+          icon={<Icon>sync_problem</Icon>}
+          sx={{ mb: 2 }}
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => {
+                void operations.refetch();
+              }}
+            >
+              {t("common.retry")}
+            </Button>
+          }
+        >
+          {t("admin.backlog.operationsLoadError")}
+        </Alert>
+      )}
       {renderContent()}
       {isAddDialogOpen && (
         <AddModelDialog
@@ -317,6 +342,18 @@ export function AdminBacklogRoute() {
           onCreated={handleCreated}
         />
       )}
+      {/* A rejected transition emits no SSE event, so nothing else on the page
+          would otherwise show that the click failed. Success stays
+          surface-free — SSE genuinely reports that outcome. */}
+      <Snackbar
+        open={transition.isError}
+        autoHideDuration={6000}
+        onClose={() => transition.reset()}
+      >
+        <Alert severity="error" onClose={() => transition.reset()}>
+          {t("admin.backlog.transitionError")}
+        </Alert>
+      </Snackbar>
     </>
   );
 }

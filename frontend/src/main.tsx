@@ -10,6 +10,7 @@ import { BrowserRouter } from "react-router";
 import "material-symbols/outlined.css";
 
 import App from "./App";
+import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { i18n } from "./i18n";
 import { queryClient } from "./queryClient";
 import { theme } from "./theme";
@@ -29,7 +30,9 @@ createRoot(rootElement).render(
       <I18nextProvider i18n={i18n}>
         <QueryClientProvider client={queryClient}>
           <BrowserRouter>
-            <App />
+            <AppErrorBoundary>
+              <App />
+            </AppErrorBoundary>
           </BrowserRouter>
         </QueryClientProvider>
       </I18nextProvider>

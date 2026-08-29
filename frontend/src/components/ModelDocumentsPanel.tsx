@@ -1,4 +1,7 @@
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
+import CircularProgress from "@mui/material/CircularProgress";
 import Divider from "@mui/material/Divider";
 import Grid from "@mui/material/Grid";
 import Link from "@mui/material/Link";
@@ -86,10 +89,38 @@ export function ModelDocumentsPanel({ product }: { product: Product }) {
     setSearchParams(params, { replace: true });
   }
 
-  // Loading and failure are page-level concerns (the route's gates); this panel
-  // renders once its documents are there.
+  // The route only gates the product query — this panel owns its own
+  // documents query's loading and error states, so a failed tab is never
+  // indistinguishable from an empty one.
+  if (documents.isError) {
+    return (
+      <EmptyState
+        icon="error"
+        title={t("admin.review.documents.loadError")}
+        body={t("common.errors.serverError")}
+        action={
+          <Button
+            onClick={() => {
+              void documents.refetch();
+            }}
+          >
+            {t("common.retry")}
+          </Button>
+        }
+      />
+    );
+  }
+
   if (rows === undefined) {
-    return null;
+    return (
+      <Box
+        role="status"
+        aria-label={t("common.loading")}
+        sx={{ display: "flex", justifyContent: "center", py: 8 }}
+      >
+        <CircularProgress size={48} />
+      </Box>
+    );
   }
 
   if (rows.length === 0 || selected === undefined) {

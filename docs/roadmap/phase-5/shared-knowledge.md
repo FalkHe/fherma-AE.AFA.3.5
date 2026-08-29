@@ -156,6 +156,19 @@ milestone's demo passes (exception: 5.9's compat spike may run any time).
   (`SmartRetryMiddleware`, 3 attempts, exponential + jitter) — no per-call-site
   tuning anywhere. This closes the step-3.9 open finding (stalled embeddings
   call hung ~600 s); `llm/embeddings.py` was out of scope then, in scope now.
+  **Amendment (2026-08-29, coordinator, after the 5.6 SDK verification):** the
+  units differ per factory and the constants above state *seconds*, so the
+  chat call site converts. `langchain_openrouter.ChatOpenRouter`'s `timeout`
+  field is **milliseconds** (`request_timeout` → the SDK's `timeout_ms`), so
+  pass `timeout=CHAT_REQUEST_TIMEOUT_SECONDS * 1000` with a comment naming the
+  unit; `OpenAIEmbeddings.timeout` is seconds and takes the constant directly.
+  Also: `ChatOpenRouter` maps `max_retries` to `max_elapsed_time =
+  max_retries * 150 s`, so `LLM_MAX_RETRIES = 2` is a ~300 s *budget ceiling*,
+  not "2 × 60 s" — it is bounded in practice by the pre-existing
+  `asyncio.timeout(AGENT_TIMEOUT_SECONDS)` (120 s) around the whole turn in
+  `app/llm/agents/advisor.py`, which still resolves into the apology path.
+  `LLM_MAX_RETRIES = 2` stays pinned; the arithmetic wording is corrected, the
+  values are not tuned.
 - **D4 — fencing (5.7 + 5.8):** `backend/app/llm/fencing.py` becomes the one
   definition site for `FENCE_START`/`FENCE_END`, the lookalike stripper and a
   `fence(text)` helper (moved verbatim from `extraction.py`, which re-imports;
@@ -299,3 +312,43 @@ depend on. 1–3 bullets per step, no prose.
   `components` override merge) and the missing `MessageBubble` raw-HTML
   inertness test; all three pre-existing per-site inertness tests
   (catalogue, admin documents) stay green unchanged.
+
+### Step 5.13
+
+- `AppErrorBoundary` (`frontend/src/components/AppErrorBoundary.tsx`) mounted
+  in `main.tsx` around `<App />`, inside all providers. Fallback is a
+  module-local `ErrorFallback` function component (uses `useTranslation`)
+  rendered by the class boundary's `render()`. Fallback aria/role: `EmptyState`
+  renders an `h2` (`common.errors.crashTitle` = "Something went wrong"); the
+  reload button's accessible name is `common.errors.crashReload` = "Reload
+  page" and calls `window.location.reload()` directly (no confirm step). QA
+  can force a crash with a component that throws during render (see
+  `AppErrorBoundary.test.tsx`'s `Bomb` helper) — there is no dev-flag/query-param
+  trigger wired into the shipped app, so a forced-crash walkthrough needs a
+  temporary local edit (e.g. a component that throws) or the equivalent
+  browser devtools override; nothing production-reachable trips it.
+- Gap (a): `AdminBacklogRoute`'s transition-error `Snackbar` — accessible name
+  of the dismiss control is the MUI `Alert` default `"Close"`; message text is
+  `admin.backlog.transitionError`. Gap (c): the operations-warning `Alert`
+  (`severity="warning"`, `sync_problem` icon) renders between the toolbar and
+  the table only when `operations.isError`; its retry button's accessible
+  name is `common.retry` ("Try again"); message is
+  `admin.backlog.operationsLoadError`.
+- Gap (b): `ModelDocumentsPanel`/`ModelImagePanel` loading spinner is
+  `role="status"` with accessible name `common.loading` ("Loading"); error
+  branch is `EmptyState` with `admin.review.documents.loadError` /
+  `admin.review.image.loadError` and a `common.retry` button that calls the
+  panel's own `query.refetch()`.
+- Test-infra note for reproducing gap (b)/(c) in new tests: `useQuery`'s
+  default retry budget (3 attempts, exponential backoff) means a *real*
+  stubbed-fetch failure through `renderWithProviders`'s default `QueryClient`
+  does not reach `isError` inside a `findByText` default timeout. Both
+  `AdminBacklogRoute.test.tsx` (operations query) and
+  `AdminModelReviewRoute.test.tsx` (documents/image queries) therefore wrap
+  the hook with `vi.mock` and an override variable — same idiom as
+  `CatalogueRoute.test.tsx`'s `listOverride` (call the real hook, splice in
+  `{ ...result, ...override }` only when an override is set) — rather than
+  driving the failure through the fetch stub. A mutation's default retry is 0,
+  so the gap (a) Snackbar test drives a real stubbed 500 directly, no
+  override needed.
+

@@ -2,6 +2,7 @@ import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
+import CircularProgress from "@mui/material/CircularProgress";
 import Icon from "@mui/material/Icon";
 import Link from "@mui/material/Link";
 import Paper from "@mui/material/Paper";
@@ -51,9 +52,38 @@ export function ModelImagePanel({ product }: { product: Product }) {
 
   const row = image.data;
 
-  // Loading and failure are page-level concerns (the route's gates).
+  // The route only gates the product query — this panel owns its own image
+  // query's loading and error states, so a failed tab is never
+  // indistinguishable from an empty one.
+  if (image.isError) {
+    return (
+      <EmptyState
+        icon="error"
+        title={t("admin.review.image.loadError")}
+        body={t("common.errors.serverError")}
+        action={
+          <Button
+            onClick={() => {
+              void image.refetch();
+            }}
+          >
+            {t("common.retry")}
+          </Button>
+        }
+      />
+    );
+  }
+
   if (row === undefined) {
-    return null;
+    return (
+      <Box
+        role="status"
+        aria-label={t("common.loading")}
+        sx={{ display: "flex", justifyContent: "center", py: 8 }}
+      >
+        <CircularProgress size={48} />
+      </Box>
+    );
   }
 
   if (row === null) {

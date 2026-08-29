@@ -33,7 +33,9 @@ function toOperation(resource: components["schemas"]["OperationResource"]): Oper
  *
  * Failures throw a plain `Error` on purpose: no screen branches on why the
  * operations list is unavailable (a row simply renders no progress cell), so this
- * hook deliberately exports no error type of its own.
+ * hook deliberately exports no error type of its own. The one exception is
+ * `AdminBacklogRoute`, which branches on `isError` (never the error value) to
+ * show a "progress could not be loaded" warning above the table.
  */
 async function listOperations(): Promise<Operation[]> {
   const operations: Operation[] = [];

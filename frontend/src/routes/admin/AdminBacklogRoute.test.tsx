@@ -1,9 +1,11 @@
+import type { UseQueryResult } from "@tanstack/react-query";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { components } from "../../api/schema";
+import type { Operation } from "../../hooks/useOperations";
 import { jsonResponse, stubFetch } from "../../test/network";
 import { renderWithProviders } from "../../test/render";
 
@@ -15,10 +17,31 @@ import { AdminBacklogRoute } from "./AdminBacklogRoute";
  * one and a failed one on the `backlog` one, so every chip colour, both progress
  * states and both row actions are covered. The `PATCH` really moves its row,
  * which is what makes the "filter now matches nothing" case reachable.
+ *
+ * The operations query is wrapped rather than replaced (same idiom as
+ * `CatalogueRoute.test.tsx`): the fixture API answers the happy path, and only
+ * the state it cannot reach within a query's default retry budget — a failed
+ * request — is answered with a canned override.
  */
 
 type ProductResource = components["schemas"]["ProductResource"];
 type OperationResource = components["schemas"]["OperationResource"];
+
+/** When set, replaces the operations query result (a real failure would retry). */
+let operationsOverride: UseQueryResult<Map<string, Operation>, Error> | null = null;
+
+vi.mock("../../hooks/useOperations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../hooks/useOperations")>();
+
+  return {
+    ...actual,
+    useLatestOperationsByEntity: () => {
+      const result = actual.useLatestOperationsByEntity();
+
+      return operationsOverride ?? result;
+    },
+  };
+});
 
 const IDS = {
   backlog: "01PRODUCTBACKLOG0000000001",
@@ -195,6 +218,7 @@ function searchString(): string {
 }
 
 beforeEach(() => {
+  operationsOverride = null;
   installApi();
 });
 
@@ -276,5 +300,59 @@ describe("AdminBacklogRoute", () => {
 
     expect(searchString()).toBe("");
     expect(await screen.findByText("Honda CB500F")).toBeInTheDocument();
+  });
+
+  it("shows a dismissible Snackbar when starting ingestion fails, row unchanged", async () => {
+    renderRoute();
+
+    await screen.findByText("Honda CB500F");
+
+    stubFetch(() =>
+      jsonResponse(
+        { errors: [{ status: "500", code: "internal-error", detail: "boom" }] },
+        { status: 500 },
+      ),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry ingestion" }));
+
+    const alert = await screen.findByText("Could not start the ingestion. Please try again.");
+    expect(alert).toBeInTheDocument();
+    // The row is unaffected — the action is still "retry", not "start".
+    expect(screen.getByRole("button", { name: "Retry ingestion" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => {
+      expect(
+        screen.queryByText("Could not start the ingestion. Please try again."),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("surfaces a warning when the operations query fails, rows still render", async () => {
+    const refetch = vi.fn();
+
+    operationsOverride = {
+      data: undefined,
+      isError: true,
+      refetch,
+    } as unknown as UseQueryResult<Map<string, Operation>, Error>;
+
+    renderRoute();
+
+    expect(await screen.findByText("Suzuki GSR 600")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Ingestion progress could not be loaded — statuses are still current.",
+      ),
+    ).toBeInTheDocument();
+    // Rows render with no progress cell — the Alert is the one surface.
+    expect(
+      screen.queryByRole("progressbar", { name: /Ingestion progress/ }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(refetch).toHaveBeenCalled();
   });
 });
