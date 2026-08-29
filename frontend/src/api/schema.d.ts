@@ -987,9 +987,12 @@ export interface components {
          * LoginRequest
          * @description Credentials for an existing account, plus the cookie lifetime choice.
          *
-         *     Deliberately unvalidated beyond the username normalisation: a credential
-         *     that could not possibly match is rejected by `user_service.authenticate`
-         *     with a 401, on the same constant-time path as any other wrong password.
+         *     Deliberately unvalidated beyond the username normalisation and the
+         *     password length ceiling: a credential that could not possibly match is
+         *     rejected by `user_service.authenticate` with a 401, on the same
+         *     constant-time path as any other wrong password. `password`'s
+         *     `max_length` is the one sanctioned exception (OQ-A) — it exists solely to
+         *     cap Argon2 work per attempt, not as data-entry validation.
          */
         LoginRequest: {
             /** Username */
@@ -1749,7 +1752,7 @@ export interface operations {
                 "filter[a2Eligible]"?: boolean | null;
                 /** @description Ordering; price sorts put models without a price last. */
                 sort?: components["schemas"]["BrowseSort"];
-                /** @description 1-based page number. */
+                /** @description 1-based page number (maximum 10000). */
                 "page[number]"?: number;
                 /** @description Rows per page (maximum 100). */
                 "page[size]"?: number;
@@ -1835,7 +1838,7 @@ export interface operations {
             query?: {
                 /** @description ULID of the consultation whose messages to return (required). */
                 "filter[chat]"?: string | null;
-                /** @description 1-based page number. */
+                /** @description 1-based page number (maximum 10000). */
                 "page[number]"?: number;
                 /** @description Rows per page (maximum 100). */
                 "page[size]"?: number;
@@ -1938,7 +1941,7 @@ export interface operations {
     list_chats_api_chats_get: {
         parameters: {
             query?: {
-                /** @description 1-based page number. */
+                /** @description 1-based page number (maximum 10000). */
                 "page[number]"?: number;
                 /** @description Rows per page (maximum 100). */
                 "page[size]"?: number;
@@ -2212,7 +2215,7 @@ export interface operations {
     list_manufacturers_api_manufacturers_get: {
         parameters: {
             query?: {
-                /** @description 1-based page number. */
+                /** @description 1-based page number (maximum 10000). */
                 "page[number]"?: number;
                 /** @description Rows per page (maximum 100). */
                 "page[size]"?: number;
@@ -2293,7 +2296,7 @@ export interface operations {
                 "filter[entityId]"?: string | null;
                 /** @description Comma-separated list of statuses: queued, running, succeeded, failed */
                 "filter[status]"?: string | null;
-                /** @description 1-based page number. */
+                /** @description 1-based page number (maximum 10000). */
                 "page[number]"?: number;
                 /** @description Rows per page (maximum 100). */
                 "page[size]"?: number;
@@ -2338,7 +2341,7 @@ export interface operations {
             query?: {
                 /** @description Comma-separated list of statuses: backlog, ingesting, in_review, approved, rejected */
                 "filter[status]"?: string | null;
-                /** @description 1-based page number. */
+                /** @description 1-based page number (maximum 10000). */
                 "page[number]"?: number;
                 /** @description Rows per page (maximum 100). */
                 "page[size]"?: number;
