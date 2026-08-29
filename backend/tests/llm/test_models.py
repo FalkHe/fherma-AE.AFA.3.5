@@ -8,6 +8,7 @@ depends on, and it is observable on the constructed object.
 from collections.abc import Iterator
 
 import pytest
+from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 
 from app.core.config import get_settings
 from app.llm.models import (
@@ -69,10 +70,25 @@ def test_key_and_attribution_are_wired() -> None:
 
 
 @pytest.mark.usefixtures("configured")
-def test_no_callbacks_until_langfuse_is_wired() -> None:
-    """The observability slot is empty in Phase 2 and attaches nothing."""
+def test_no_callbacks_until_langfuse_is_wired(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The observability slot is empty without `LANGFUSE_*` and wired once all three are set.
+
+    No network call is made: constructing the `Langfuse` client and the
+    LangChain `CallbackHandler` is local (they only queue/export in the
+    background), so this stays a pure wiring assertion like its siblings.
+    """
     assert observability_callbacks(get_settings()) == []
     assert get_chat_model().callbacks is None
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://langfuse.invalid")
+    get_settings.cache_clear()
+
+    callbacks = observability_callbacks(get_settings())
+
+    assert len(callbacks) == 1
+    assert isinstance(callbacks[0], LangfuseCallbackHandler)
 
 
 @pytest.mark.usefixtures("configured")

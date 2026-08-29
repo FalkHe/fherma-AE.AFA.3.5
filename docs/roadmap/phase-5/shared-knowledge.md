@@ -576,3 +576,49 @@ depend on. 1–3 bullets per step, no prose.
   scrolls inside its own wrapper (`overflowX: auto`, table wider than
   wrapper). Added `AdminModelReviewRoute.test.tsx` assertion that the
   rendered `table`'s parent has `overflowX: auto`.
+
+### Step 5.9
+
+- Implemented exactly per the D5 amendment: `backend/app/llm/models.py`
+  imports `from langfuse import Langfuse` and
+  `from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler`.
+  `observability_callbacks` returns `[]` unless all three
+  `settings.langfuse_public_key/secret_key/host` are non-empty; when they are,
+  it first constructs `Langfuse(public_key=..., secret_key=..., host=...)`
+  (registers as the active client, discarded — never stored) and then returns
+  `[LangfuseCallbackHandler()]` (no constructor args). Confirmed live against
+  the installed SDK: `CallbackHandler.__init__` only takes
+  `public_key`/`trace_context`; `Langfuse.__init__` takes `public_key`,
+  `secret_key`, `host` (plus unrelated OTel/tuning kwargs) — matches the
+  outline exactly, no surprises beyond what the spike already found.
+- `langfuse~=4.0` landed in `backend/pyproject.toml` (grouped under the AI
+  section, right after `langchain-openai`, not at the dependency list's tail
+  where `uv add` put it — a placement tidy-up, not a version change) and
+  `backend/uv.lock`; resolved to `langfuse==4.15.1` exactly as the spike
+  predicted. `make build` was required and run (the venv is baked into the
+  image, outside the bind mount) — both `app-web` and `app-worker` must be
+  recreated (`docker compose up -d <service>`, not `restart`) after, since the
+  running containers otherwise reload edited source over an old venv lacking
+  the new import and crash (`ModuleNotFoundError: langfuse`, observed live on
+  `app-web`'s auto-reload before recreating it).
+- No `filterwarnings` entry was added — confirmed again under the real
+  `pytest` run (`filterwarnings = ["error"]` stays untouched), matching the
+  spike's finding.
+- Failure isolation re-confirmed live end-to-end (not just the spike's direct
+  SDK call): with `LANGFUSE_HOST` pointed at an unresolvable host and real
+  `LANGFUSE_PUBLIC_KEY`/`SECRET_KEY` set on `app-worker`, two full advisor
+  turns (`POST /api/chats` welcome message + `POST /api/chat-messages`) each
+  completed in ~4 s with normal replies; `app-worker` logs showed only
+  `opentelemetry.exporter.otlp.proto.http.trace_exporter` WARNING/ERROR lines
+  (DNS resolution failure, retried, then "Failed to export span batch"),
+  never an exception reaching the job. `.env` was restored and both
+  `app-web`/`app-worker` recreated back to the empty-Langfuse baseline
+  afterwards; throwaway accounts (`qa59*`) and their chats/messages/sessions
+  were deleted from the dev DB after verification.
+- `tests/llm/test_models.py::test_no_callbacks_until_langfuse_is_wired` was
+  rewritten in place (same name, still accurate) to assert both halves in one
+  test: `[]` with no `LANGFUSE_*` set, then one `LangfuseCallbackHandler`
+  instance once all three are monkeypatched in — no network call, construction
+  is local. Test count: 1253 → 1259 backend-wide, all from the parallel 5.11
+  seed work merging in via the bind mount, not from this step (this step kept
+  the pre-existing test one test, net zero).

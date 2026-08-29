@@ -93,6 +93,13 @@ class Settings(BaseSettings):
     agent_max_tool_steps: int = 8
     agent_timeout_seconds: float = 120
 
+    # Observability: Langfuse tracing of chat-model calls, entirely optional.
+    # Empty (the default) means `observability_callbacks` attaches nothing and
+    # the app behaves byte-identically; all three must be set to enable it.
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

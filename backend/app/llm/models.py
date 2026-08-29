@@ -8,6 +8,8 @@ caller only ever decides *which* model, never *how* to reach it.
 
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_openrouter import ChatOpenRouter
+from langfuse import Langfuse
+from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 
 from app.core.config import Settings, get_settings
 
@@ -37,14 +39,33 @@ class MissingApiKeyError(RuntimeError):
 
 
 def observability_callbacks(settings: Settings) -> list[BaseCallbackHandler]:
-    """Return the LangChain callback handlers every model is built with.
+    """Return the LangChain callback handlers every chat model is built with.
 
-    This is the Langfuse slot: Phase 5 adds the `LANGFUSE_*` configuration and
-    returns the handler here — gated on those settings, empty when they are
-    absent — and every model built by `get_chat_model` is traced without a
-    single call site changing. Until then the list is deliberately empty.
+    Langfuse tracing, gated on all three `LANGFUSE_*` settings being non-empty
+    (otherwise `[]`, byte-identical to no observability at all — a Langfuse
+    outage or missing configuration must never fail an LLM call). Embeddings
+    are deliberately excluded: LangChain embeddings emit no callback events, a
+    documented limitation, not an oversight.
+
+    `langfuse~=4.0`'s `CallbackHandler` (`langfuse.langchain`) only takes
+    `public_key`/`trace_context` — `secret_key` and `host` are not constructor
+    arguments there. They are passed to the `Langfuse` client instead, which
+    registers itself as the active client the handler then reports through.
     """
-    return []
+    configured = (
+        settings.langfuse_public_key,
+        settings.langfuse_secret_key,
+        settings.langfuse_host,
+    )
+    if not all(configured):
+        return []
+
+    Langfuse(
+        public_key=settings.langfuse_public_key,
+        secret_key=settings.langfuse_secret_key,
+        host=settings.langfuse_host,
+    )
+    return [LangfuseCallbackHandler()]
 
 
 def get_chat_model(model: str | None = None) -> ChatOpenRouter:

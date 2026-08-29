@@ -32,6 +32,9 @@ dependencies = [
     # OpenAI-compatible wrapper is pointed at OpenRouter's own /embeddings
     # route. Chat never goes through this package.
     "langchain-openai~=1.0",
+    # AI observability: LangChain callback handler for Langfuse, gated behind
+    # the optional LANGFUSE_* configuration (empty by default, traces nothing).
+    "langfuse~=4.0",
     # Prompt templates (Markdown + Jinja files under app/llm/prompts/).
     "jinja2~=3.1",
     # Structural chunking of source documents (headings, then characters).
