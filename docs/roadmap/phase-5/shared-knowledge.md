@@ -53,6 +53,15 @@ them; steps confirm, test, and close the audited gaps listed here.
 - **Live verifications need the stack up** (`make up`); `OPENROUTER_API_KEY`
   and `TAVILY_API_KEY` are configured in the dev `.env` and live-verified in
   earlier phases.
+- **Never run `docker compose down -v`, and never `down` with a `--profile`
+  flag expecting it to be scoped** (added 2026-08-29 after the 5.10 incident).
+  `down` always tears down the **whole project** regardless of `--profile`,
+  and `-v` deletes the shared `postgres-data` volume — that is the entire dev
+  database. To stop profile services, use
+  `docker compose --profile <name> stop` or `rm -s` the named services
+  explicitly. Data loss here is real but cheap to recover: `app seed demo
+  --auto-approve` (5.11) rebuilds the catalogue; the CLI admin bootstrap
+  rebuilds the first account.
 
 ---
 
@@ -98,7 +107,7 @@ milestone's demo passes (exception: 5.9's compat spike may run any time).
 | Milestone | Steps (backend ∥ frontend) | Demo criterion (both tracks together) |
 |---|---|---|
 | **M1 — Hardened core** | 5.4–5.8 ∥ 5.12–5.14, then QA 5.17 | Garbage/oversized payloads answer the pinned 422/400 shapes; a forced 500 answers the JSON:API envelope with no traceback; an invalid `OPENROUTER_API_KEY` surfaces the apologetic failure state in the UI within the client timeout (never a 600 s hang, never a stuck "typing…"); a poisoned ingested document is neutralized (advisor does not comply); `<script>`/`<img onerror>` render inert on chat, model detail and admin review; a forced render crash shows the `AppErrorBoundary` fallback. Tag `phase-5-m1`. |
-| **M2 — Observability** | 5.9, 5.10 (backend only) | `docker compose --profile langfuse up` starts the Langfuse stack and one consultation shows a full trace (agent steps + tool calls) in the Langfuse UI; plain `docker compose up` starts exactly today's services; with `LANGFUSE_*` unset the app behaves byte-identically; a wrong `LANGFUSE_HOST` never fails a chat. Tag `phase-5-m2`. |
+| **M2 — Observability** | 5.9, 5.10 (backend only) | **Criterion relaxed 2026-08-29 by the coordinator under D5's standing owner authorization** (Langfuse is nice-to-have; no fallback engineering). As landed: `docker compose --profile langfuse up` starts the Langfuse stack and one consultation exports its **LLM calls** as traces visible in the Langfuse UI; plain `docker compose up` starts exactly today's services; with `LANGFUSE_*` unset the app behaves byte-identically; a wrong `LANGFUSE_HOST` never fails a chat. **Known and accepted gap:** each LLM call lands as its own root trace (no per-turn grouping across the tool loop), and tool calls are plain Python outside any LangChain Runnable, so they do not appear at all. Grouping them would need `advisor.py`/`models.py` wiring that is out of 5.10's compose-only scope — explicitly **not** scheduled, per the owner's indifference. 5.15/5.16 must claim only per-LLM-call tracing, never "full trace". Tag `phase-5-m2`. |
 | **M3 — Submission ready** | 5.11 ∥ 5.15 → 5.16, then QA 5.18 | Fresh clone + `.env` from `.env.dist` → README followed verbatim → seeded catalogue (≥ 10 approved models) → full demo walkthrough green; `docs/grading-map.md` maps every criterion and bonus to real files/endpoints/screens. Tag `phase-5-done`. |
 
 ---
