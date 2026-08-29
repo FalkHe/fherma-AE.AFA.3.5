@@ -23,8 +23,9 @@ Two demo assets exist. Pick whichever fits:
   surface), then — in the submission chapter (§6) — build the whole story
   from an empty database: register, promote an admin, ingest a model,
   approve it live, and use the resulting catalogue in a consultation. Every
-  URL, curl command and expected outcome below was replayed against the
-  running stack at `HEAD 25d87c6` on 2026-08-29. Each numbered item below
+  URL, curl command and expected outcome below was replayed against a
+  fresh clone with an empty database at `HEAD 51eb323` on 2026-08-29
+  (step 5.18's acceptance run). Each numbered item below
   names the `docs/grading-map.md` row it demonstrates, in brackets.
 
 ## Prerequisites
@@ -99,9 +100,12 @@ rejected rows are excluded server-side, for every role). `[UI: shows context]`
 In the filter panel (sidebar on desktop, **Filters** button drawer below the
 `md` breakpoint), set **Category** to any value your catalogue has more than
 one of (e.g. **Naked**), then add an engine-displacement or seat-height bound
-that further narrows the grid. Each control applies immediately — no Apply
-button. The result count drops below the unfiltered total; which models
-remain depends on your catalogue's contents, not a fixed pair of names.
+that further narrows the grid. There is no Apply button: the selects, sliders
+and the A2 checkbox apply the moment you change them, and the typed numeric
+bounds (max seat height, max weight) apply when the field loses focus or you
+press Enter — so tab away after typing. The result count drops below the
+unfiltered total; which models remain depends on your catalogue's contents,
+not a fixed pair of names.
 
 ### 3.3 Copy/reload the URL
 
@@ -165,7 +169,9 @@ or middle-click opens it in a new tab too). `[UI: displays tool call results]`
 
 Graders who want to prove the security story without the UI can replay this
 directly against the API. Each snippet is self-contained (uses a cookie jar
-file for the session):
+file for the session); `-g` on the JSON:API query calls is required — without
+it curl reads the `[...]` in `page[size]`/`filter[category]` as a glob range
+and refuses the URL (`curl: (3) bad range in URL`):
 
 ```bash
 # 1. Register a throwaway account and sign in (cookie jar captures the session).
@@ -180,7 +186,7 @@ curl -s -c cookies.txt -b cookies.txt -X POST http://localhost:8000/auth/login \
 # -> 200, {"id":"...","username":"demo-curl","role":"user"}
 
 # 2. A plain user CAN read the customer catalogue resource.
-curl -s -b cookies.txt "http://localhost:8000/api/catalogue-models?page[size]=100" \
+curl -s -g -b cookies.txt "http://localhost:8000/api/catalogue-models?page[size]=100" \
   -o /dev/null -w '%{http_code}\n'
 # -> 200
 
@@ -199,7 +205,7 @@ curl -s -b cookies.txt http://localhost:8000/api/catalogue-models/01ZZZZZZZZZZZZ
 # -> 404
 
 # 5. The filter combination from §3.2, over the wire (JSON:API filter names).
-curl -s -b cookies.txt \
+curl -s -g -b cookies.txt \
   "http://localhost:8000/api/catalogue-models?filter[category]=naked"
 # -> 200, meta.totalCount reflects however many naked models are approved
 ```
@@ -223,7 +229,7 @@ This chapter replays the full grading story end to end, starting from a
 database with **no users and no models** (a fresh clone after `make up` +
 first-run setup is exactly this state). It is the walkthrough a grader
 following the README from scratch would naturally produce. Every step below
-was live-replayed against `HEAD 25d87c6` on 2026-08-29.
+was live-replayed against a fresh clone at `HEAD 51eb323` on 2026-08-29.
 
 ### 6.1 Register, then become the first admin
 
@@ -235,9 +241,11 @@ CLI, per the README's "Creating the first admin":
 docker compose exec app-web app users set-role <your-username> admin
 ```
 
-Re-running it is a no-op. **This revokes the account's existing sessions**
-(same as any role change) — log out and back in (or re-run `POST
-/auth/login`) to pick up the new role. `[domain specialisation → security]`
+Re-running it is a no-op. **Promotion keeps the account's existing sessions
+alive** — live sessions read the role fresh, so the Admin nav appears on the
+next page load without signing out. Only a *demotion* (`... set-role <name>
+user`) or a password reset revokes that account's sessions.
+`[domain specialisation → security]`
 
 ### 6.2 Add a model to the backlog and watch ingestion progress
 
@@ -265,11 +273,13 @@ responsive the upstream sites are.
 ### 6.3 Live admin review + approve (the admin-verified story)
 
 Open the model's review screen (`/admin/models/:motorbikeId`). Check the
-fetched documents, the draft specification (with per-field `sourceHints`
-showing which document each value came from), and the downloaded image.
-Click **Approve** — this promotes the draft specification to verified and the
-image to approved, moving the entry to `approved` (published to the
-customer catalogue immediately, no restart — `[real-time KB updates]`). This
+fetched documents, the editable draft specification (plus the "Additional
+extracted data" table of everything the extractor found beyond the fixed
+fields), and the downloaded image with its licence attribution. Click
+**Approve & publish** and confirm in the "Publish this model?" dialog — this
+promotes the draft specification to verified and the image to approved,
+moving the entry to `approved` (published to the customer catalogue
+immediately, no restart — `[real-time KB updates]`). This
 one live, human-in-the-loop review is what earns the "admin-verified"
 claim — nothing in this repo publishes a model to customers without it.
 

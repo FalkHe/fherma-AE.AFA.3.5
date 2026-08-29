@@ -2,7 +2,8 @@
 
 Every item in `docs/core-requirements.md`, plus every bonus this project
 claims, mapped to the concrete file/endpoint/screen that implements it. Rows
-were spot-checked live against `HEAD 25d87c6` (2026-08-29) — see
+were spot-checked live against `HEAD 51eb323` (2026-08-29, step 5.18's
+fresh-clone acceptance run) — see
 `docs/demo-walkthrough.md` for a replayable tour that exercises each row.
 
 ## Core requirements
@@ -53,7 +54,7 @@ loop (`backend/app/llm/agents/advisor.py`) enforces `AGENT_MAX_TOOL_STEPS` and
 | Sub-item | Where |
 |---|---|
 | LangChain + OpenRouter | `backend/app/llm/models.py` (`ChatOpenRouter`, `langchain_openrouter`), `backend/app/llm/embeddings.py` (`OpenAIEmbeddings` pointed at OpenRouter) — the OpenAI-compatible SDK shape, never wired to `api.openai.com` directly. |
-| Error handling | JSON:API error envelope (`backend/app/api/jsonapi.py::error_document`); domain errors keep their codes (`duplicate-model`, `invalid-transition`, `invalid-filter`, …); one catch-all `Exception` handler in `backend/app/main.py` (`unhandled_exception_handler`) returns a generic 500 `internal-error` envelope, traceback only to `logger.exception`, never to the client. Transient LLM/gateway failures retry through `SmartRetryMiddleware` (`backend/app/jobs/chat.py`); a failed turn resolves to an apologetic assistant message (`job.APOLOGY`), never a stuck UI. |
+| Error handling | JSON:API error envelope (`backend/app/api/jsonapi.py::error_document`); domain errors keep their codes (`duplicate-model`, `invalid-transition`, `invalid-filter`, …); one catch-all `Exception` handler in `backend/app/main.py` (`unhandled_exception_handler`) returns a generic 500 `internal-error` envelope, traceback only to `logger.exception`, never to the client. Transient LLM/gateway failures retry through Taskiq's `SmartRetryMiddleware` (configured in `backend/app/jobs/broker.py`; jobs opt in with `retry_on_error=True`, e.g. `backend/app/jobs/chat.py`); a failed turn resolves to an apologetic assistant message (`job.APOLOGY`), never a stuck UI. |
 | User input validation | FastAPI/Pydantic field constraints across the API (`ChatMessageCreateAttributes.chat_id` ULID pattern, catalogue numeric filter `ge`/`le` bounds, `jsonapi.MAX_FILTER_MEMBERS`/`MAX_FILTER_MEMBER_LENGTH`/`MAX_PAGE_NUMBER`, `DraftSpecRequest.extra`/`source_hints` size caps, `RegisterRequest`/`LoginRequest` in `backend/app/api/schemas/auth.py`); every tool's Pydantic `Args` schema bounds what the LLM can pass to a tool call. |
 
 ### 5. User interface

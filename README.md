@@ -214,12 +214,12 @@ nothing else in this repo, and no grading criterion, depends on it running.
 **Destructive-command warning:** never run `docker compose down -v` — it
 deletes the shared `postgres-data` volume, i.e. the entire dev database, not
 just Langfuse's data. Also avoid `docker compose --profile langfuse down`
-(including via `make langfuse-down`, whose target currently runs exactly that
-command): `down` is **never** scoped by a `--profile` flag — it tears down
-every service in the project regardless (confirmed with `docker compose
---profile langfuse down --dry-run`: it lists all five default containers for
-removal, Langfuse or not). To stop only the Langfuse services and leave the
-rest of the stack running, use:
+(`make langfuse-down` does **not** run it — the target stops the six
+Langfuse services by name): `down` is **never** scoped by a `--profile`
+flag — it tears down every service in the project regardless (confirmed
+with `docker compose --profile langfuse down --dry-run`: it lists all five
+default containers for removal, Langfuse or not). To stop only the Langfuse
+services and leave the rest of the stack running, use:
 
 ```bash
 docker compose --profile langfuse stop
