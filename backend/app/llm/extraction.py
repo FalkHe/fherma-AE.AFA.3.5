@@ -39,6 +39,7 @@ from langchain_core.runnables import Runnable
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from app.db.models.motorbike_spec import PRICE_BANDS, SPEC_CATEGORIES, SPEC_FIELDS
+from app.llm.fencing import FENCE_END, FENCE_START, fence
 from app.llm.models import get_chat_model
 from app.llm.prompts import render_prompt
 
@@ -53,14 +54,6 @@ PROMPT_NAME = "spec_extraction"
 # they are excluded from the spec write by construction — passing one of them to
 # `upsert_draft_spec` would raise.
 NON_SPEC_FIELDS = ("manufacturer",)
-
-# The fence around one document in the prompt. Deliberately unlikely to occur
-# in fetched prose, and stripped from the document text before it is fenced, so
-# a page cannot close its own block and continue as if it were the instructions.
-FENCE_START = "<<<UNTRUSTED-DOCUMENT-START>>>"
-FENCE_END = "<<<UNTRUSTED-DOCUMENT-END>>>"
-_FENCE_LOOKALIKE = re.compile(r"<{2,}\s*/?\s*UNTRUSTED[- _]?DOCUMENT[^>]*>{2,}", re.IGNORECASE)
-_FENCE_REPLACEMENT = "[fence removed]"
 
 # The pinned vocabularies as enums, so they reach the JSON schema the model is
 # constrained by instead of living in prose only. Built from the single source
@@ -453,11 +446,6 @@ class ExtractedSpec(BaseModel):
     def filled_fields(self) -> tuple[str, ...]:
         """Names of the frozen fields this extraction actually filled."""
         return tuple(field for field in SPEC_FIELDS if getattr(self, field) is not None)
-
-
-def fence(markdown: str) -> str:
-    """Return document text with anything resembling a fence marker removed."""
-    return _FENCE_LOOKALIKE.sub(_FENCE_REPLACEMENT, markdown)
 
 
 def render_extraction_prompt(name: str, documents: Sequence[ExtractionDocument]) -> str:
