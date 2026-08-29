@@ -2,20 +2,17 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Icon from "@mui/material/Icon";
-import Link from "@mui/material/Link";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
-import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
 import type { ChatMessage } from "../hooks/useChatMessages";
 
 import { MessageSources } from "./MessageSources";
 import { RecommendationCard } from "./RecommendationCard";
 import { ToolResultBlock } from "./ToolResultBlock";
+import { UntrustedMarkdown } from "./UntrustedMarkdown";
 
 /**
  * One message in the conversation: the user's own words on the right, the
@@ -24,7 +21,7 @@ import { ToolResultBlock } from "./ToolResultBlock";
  * The asymmetry is not only cosmetic. **User input is never rendered as
  * Markdown** — it is displayed as plain, pre-wrapped text, so nothing a user
  * types can style, link or otherwise dress itself up as advisor output. The
- * advisor's body goes through the pinned `react-markdown` configuration (GFM
+ * advisor's body goes through the shared `UntrustedMarkdown` renderer (GFM
  * tables, raw HTML **off** — never add `rehype-raw`), with links opening in a
  * new tab instead of navigating the SPA.
  *
@@ -40,36 +37,15 @@ import { ToolResultBlock } from "./ToolResultBlock";
  * `failed` ride along on the optimistic entry itself.
  */
 
-/** Links inside advisor Markdown never navigate the application. */
-function ExternalLink({ href, children }: { href?: string; children?: ReactNode }) {
-  return (
-    <Link href={href} target="_blank" rel="noopener noreferrer">
-      {children}
-    </Link>
-  );
-}
-
-const MARKDOWN_COMPONENTS = { a: ExternalLink };
-const REMARK_PLUGINS = [remarkGfm];
-
 /**
- * Typography for the rendered answer: GFM tables carry no borders of their own,
- * a wide table must scroll rather than push the bubble, and the first and last
- * block must not add margin inside the bubble's own padding. Palette tokens only.
+ * Typography for the rendered answer, merged after `UntrustedMarkdown`'s base
+ * sx: a wide table must scroll rather than push the bubble, and the first and
+ * last block must not add margin inside the bubble's own padding. Palette
+ * tokens only.
  */
 const MARKDOWN_SX = {
   "& > :first-of-type": { mt: 0 },
   "& > :last-child": { mb: 0 },
-  "& table": { borderCollapse: "collapse", my: 2 },
-  "& th, & td": {
-    border: 1,
-    borderColor: "divider",
-    px: 1,
-    py: 0.5,
-    textAlign: "left",
-  },
-  "& pre": { overflowX: "auto" },
-  "& a": { wordBreak: "break-word" },
   "& p": { my: 1 },
 } as const;
 
@@ -216,11 +192,7 @@ export function MessageBubble({
           {message.toolCalls.map((toolCall) => (
             <ToolResultBlock key={toolCall.id} toolCall={toolCall} />
           ))}
-          <Box sx={MARKDOWN_SX}>
-            <Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
-              {message.body}
-            </Markdown>
-          </Box>
+          <UntrustedMarkdown sx={MARKDOWN_SX}>{message.body}</UntrustedMarkdown>
           {message.recommendations.length > 0 && (
             <>
               <Typography variant="subtitle2" sx={{ mt: 1 }}>

@@ -59,6 +59,25 @@ describe("MessageBubble", () => {
     expect(within(table).getByRole("cell", { name: "35 kW" })).toBeInTheDocument();
   });
 
+  it("renders raw HTML in an advisor message as inert text, links as ExternalLink", () => {
+    const HTML_BODY =
+      "<script>alert(1)</script>\n\n<img src=x onerror=alert(1)>\n\n[docs](https://example.org)";
+
+    const { container } = renderWithProviders(
+      <MessageBubble message={message({ body: HTML_BODY })} />,
+    );
+
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toContain("<script>alert(1)</script>");
+    expect(container.textContent).toContain("<img src=x onerror=alert(1)>");
+
+    const link = screen.getByRole("link", { name: "docs" });
+
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
   it("renders a user message as plain pre-wrapped text, never as Markdown", () => {
     renderWithProviders(
       <MessageBubble message={message({ role: "user", body: MARKDOWN_BODY })} />,

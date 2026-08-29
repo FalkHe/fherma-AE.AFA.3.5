@@ -278,3 +278,24 @@ depend on. 1–3 bullets per step, no prose.
   this handler and yields the pinned envelope with nothing exception-derived
   in `detail`; FastAPI's default 422 `{"detail":[...]}` shape is unaffected
   (`backend/tests/api/test_error_handling.py`).
+
+### Step 5.12
+
+- `UntrustedMarkdown` (`frontend/src/components/UntrustedMarkdown.tsx`) is
+  the single shared renderer, final prop surface: `{ children: string;
+  components?: Components; sx?: SxProps<Theme> }` — no `remarkPlugins`/
+  `rehypePlugins` prop, ever. Base `a` is `ExternalLink` (module-local, not
+  exported); site `components` merge over it (`{ a: ExternalLink,
+  ...components }`), so overriding `a` from a call site is possible in theory
+  but no site does it. `BASE_MARKDOWN_SX` is exactly the ui-spec §4.2
+  intersection (`table`/`th,td`/`pre`/`a`); each site keeps its own sx/
+  components delta as a module constant merged via the `sx` prop (MUI array
+  form `[BASE_MARKDOWN_SX, ...sx]`).
+- `MessageBubble`, `ModelDocumentsPanel`, `CatalogueModelRoute` all migrated;
+  `ProseTable`/`ProseHeading3`/`ProseHeading4` stay in `CatalogueModelRoute`
+  (catalogue-only heading demotion, P4 §4.4). Rendering is byte-identical —
+  no visual/DOM diff versus the pre-migration configs.
+- Added `UntrustedMarkdown.test.tsx` (inertness, link attrs, GFM table,
+  `components` override merge) and the missing `MessageBubble` raw-HTML
+  inertness test; all three pre-existing per-site inertness tests
+  (catalogue, admin documents) stay green unchanged.

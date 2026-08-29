@@ -1,4 +1,3 @@
-import Box from "@mui/material/Box";
 import Chip from "@mui/material/Chip";
 import Divider from "@mui/material/Divider";
 import Grid from "@mui/material/Grid";
@@ -9,16 +8,15 @@ import ListItemText from "@mui/material/ListItemText";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
-import { useEffect, type ReactNode } from "react";
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import Markdown from "react-markdown";
 import { useSearchParams } from "react-router";
-import remarkGfm from "remark-gfm";
 
 import { useProductDocuments, type SourceDocument } from "../hooks/useProductReview";
 import type { Product } from "../hooks/useProducts";
 
 import { EmptyState } from "./EmptyState";
+import { UntrustedMarkdown } from "./UntrustedMarkdown";
 
 /**
  * The Documents tab: every source the ingestion retained, with its provenance
@@ -28,41 +26,18 @@ import { EmptyState } from "./EmptyState";
  * text the extraction actually read — is a graded requirement, not a nicety, so
  * the provenance line is always rendered and the source URL is shown in full.
  *
- * Retrieved prose is untrusted content: it renders through `react-markdown` with
- * GFM (tables, strikethrough) and **raw HTML off**, so any markup inside a
- * fetched page appears as text. Never add `rehype-raw` here. Links inside the
- * Markdown open in a new tab instead of navigating the SPA.
+ * Retrieved prose is untrusted content: it renders through the shared
+ * `UntrustedMarkdown` component (GFM tables, strikethrough, **raw HTML
+ * off**), so any markup inside a fetched page appears as text. Links inside
+ * the Markdown open in a new tab instead of navigating the SPA.
  */
-
-/** Links inside retrieved Markdown never navigate the application. */
-function ExternalLink({ href, children }: { href?: string; children?: ReactNode }) {
-  return (
-    <Link href={href} target="_blank" rel="noopener noreferrer">
-      {children}
-    </Link>
-  );
-}
-
-const MARKDOWN_COMPONENTS = { a: ExternalLink };
-const REMARK_PLUGINS = [remarkGfm];
 
 /**
- * Minimal typography for the rendered Markdown: GFM tables carry no borders of
- * their own, and a wide table or a long code line must not push the layout.
- * Palette tokens only.
+ * Typography for the rendered Markdown, merged after `UntrustedMarkdown`'s
+ * base sx: an inline image must not push the layout. Palette tokens only.
  */
 const MARKDOWN_SX = {
-  "& table": { borderCollapse: "collapse", my: 2 },
-  "& th, & td": {
-    border: 1,
-    borderColor: "divider",
-    px: 1,
-    py: 0.5,
-    textAlign: "left",
-  },
   "& img": { maxWidth: "100%", height: "auto" },
-  "& pre": { overflowX: "auto" },
-  "& a": { wordBreak: "break-word" },
 } as const;
 
 /** `example.org` out of a source URL; the raw value if it will not parse. */
@@ -186,11 +161,7 @@ export function ModelDocumentsPanel({ product }: { product: Product }) {
             </Typography>
           </Stack>
           <Divider sx={{ my: 2 }} />
-          <Box sx={MARKDOWN_SX}>
-            <Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
-              {selected.contentMarkdown}
-            </Markdown>
-          </Box>
+          <UntrustedMarkdown sx={MARKDOWN_SX}>{selected.contentMarkdown}</UntrustedMarkdown>
         </Paper>
       </Grid>
     </Grid>

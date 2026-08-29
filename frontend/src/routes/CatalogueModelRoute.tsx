@@ -10,15 +10,14 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import Markdown from "react-markdown";
 import { Link as RouterLink, useParams } from "react-router";
-import remarkGfm from "remark-gfm";
 
 import { EmptyState } from "../components/EmptyState";
 import { ModelImageGallery } from "../components/ModelImageGallery";
 import { ModelSources } from "../components/ModelSources";
 import { ModelSpecTable } from "../components/ModelSpecTable";
 import { formatSpecEnum } from "../components/specFields";
+import { UntrustedMarkdown } from "../components/UntrustedMarkdown";
 import { CatalogueError, useCatalogueModel } from "../hooks/useCatalogueModel";
 
 /**
@@ -33,20 +32,11 @@ import { CatalogueError, useCatalogueModel } from "../hooks/useCatalogueModel";
  * one not-found state — the backend deliberately cannot tell the two apart, and
  * neither does this screen.
  *
- * The article is retrieved web content, so it goes through the pinned
- * react-markdown configuration with **raw HTML off** (never add `rehype-raw`) —
- * the same rule as the chat bubbles, and the named domain security measure for
- * this surface.
+ * The article is retrieved web content, so it goes through the shared
+ * `UntrustedMarkdown` renderer with **raw HTML off** (never add `rehype-raw`)
+ * — the same rule as the chat bubbles, and the named domain security measure
+ * for this surface.
  */
-
-/** Links inside retrieved prose never navigate the application. */
-function ExternalLink({ href, children }: { href?: string; children?: ReactNode }) {
-  return (
-    <Link href={href} target="_blank" rel="noopener noreferrer">
-      {children}
-    </Link>
-  );
-}
 
 /**
  * The article's own headings are demoted: the page already owns its `h1` (the
@@ -85,7 +75,6 @@ function ProseTable({ children }: { children?: ReactNode }) {
 }
 
 const MARKDOWN_COMPONENTS = {
-  a: ExternalLink,
   table: ProseTable,
   h1: ProseHeading3,
   h2: ProseHeading3,
@@ -95,25 +84,12 @@ const MARKDOWN_COMPONENTS = {
   h6: ProseHeading4,
 };
 
-const REMARK_PLUGINS = [remarkGfm];
-
 /**
- * Typography for the rendered article: GFM tables carry no borders of their own
- * (a wide one scrolls inside the `ProseTable` wrapper above). Deliberately
- * not shared with `MessageBubble`'s bubble-scoped styling — two surfaces, two
- * sets of constraints; a shared module is a rule-of-three decision.
+ * Typography for the rendered article, merged after `UntrustedMarkdown`'s
+ * base sx: an inline image must not push the layout (a wide table scrolls
+ * inside the `ProseTable` wrapper above). Palette tokens only.
  */
 const MARKDOWN_SX = {
-  "& table": { borderCollapse: "collapse", my: 2 },
-  "& th, & td": {
-    border: 1,
-    borderColor: "divider",
-    px: 1,
-    py: 0.5,
-    textAlign: "left",
-  },
-  "& pre": { overflowX: "auto" },
-  "& a": { wordBreak: "break-word" },
   "& p": { my: 1 },
   "& img": { maxWidth: "100%" },
 } as const;
@@ -259,11 +235,9 @@ export function CatalogueModelRoute() {
           <Typography variant="h5" component="h2" sx={{ mt: 4, mb: 1 }}>
             {t("catalogue.detail.aboutHeading")}
           </Typography>
-          <Box sx={MARKDOWN_SX}>
-            <Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
-              {article}
-            </Markdown>
-          </Box>
+          <UntrustedMarkdown sx={MARKDOWN_SX} components={MARKDOWN_COMPONENTS}>
+            {article}
+          </UntrustedMarkdown>
         </>
       )}
       <ModelSources sources={sources} />
