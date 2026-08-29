@@ -218,6 +218,22 @@ milestone's demo passes (exception: 5.9's compat spike may run any time).
   cloud-only rework) is spent on it. The only permitted pytest-config change
   is a `filterwarnings` ignore **scoped to langfuse deprecation warnings**,
   and only if the suite forces it.
+  **Amendment (2026-08-29, coordinator, after the 5.9 compat spike):** verdict
+  **compatible with a caveat**, so 5.9 proceeds. Corrections to the outline:
+  (a) the SDK resolves to **langfuse 4.15.1**, not v3 — pin `langfuse~=4.0`;
+  (b) the import path `from langfuse.langchain import CallbackHandler` is
+  confirmed, but in v4 that constructor takes only `public_key` /
+  `trace_context` — **`secret_key` and `host` are not constructor arguments**.
+  `observability_callbacks` therefore constructs
+  `Langfuse(public_key=…, secret_key=…, host=…)` first (it registers as the
+  active client) and then returns `[CallbackHandler()]`; the all-three-keys-set
+  gate and the `[]` default are unchanged; (c) failure isolation is **proven**:
+  with an unresolvable host a real `ChatOpenRouter.invoke` completed in 1.33 s,
+  export failures surfaced only as `logging` output and `flush()` did not raise;
+  (d) **no `filterwarnings` ignore is needed** — the SDK emitted no
+  `warnings.warn` under `python -W error`; adding one anyway is a deviation.
+  The spike used `uv run --with langfuse` (no lockfile mutation), so 5.9 still
+  runs the real `uv add langfuse~=4.0` and reviews the `uv.lock` diff.
 - **D6 — Langfuse Compose profile (5.10):** profile `langfuse` in
   `compose.yaml` with `langfuse-web`, `langfuse-worker`, `clickhouse`,
   `valkey`, `minio`, and a **dedicated `langfuse-postgres`** service (simpler
