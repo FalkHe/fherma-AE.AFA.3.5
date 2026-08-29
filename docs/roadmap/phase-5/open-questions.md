@@ -49,6 +49,21 @@ the same day; see below)*
   derived-consistency validator in extraction (power > 35 kW ⇒ `a2Eligible`
   cannot be true), or dropping the extracted flag in favour of deriving it
   from power at query time. Owner decision needed on which.
+  **Update (2026-08-29, step 5.18 fresh-clone run):** did **not** reproduce —
+  the same bike extracted `a2Eligible: false` at 68 kW on a clean ingestion.
+  So this is non-deterministic extraction noise rather than a systematic bug,
+  which argues for the derived-consistency validator (cheap, catches the noise)
+  over reworking the field. Still owner's call; severity is lower than filed.
+
+- **Ingestion spec-quality: manufacturer names are inconsistent** (found
+  2026-08-29 during the 5.18 seed run). The pipeline extracted `Kawasaki` for
+  the Z400 and Z900 but `Kawasaki Motors` for the Versys 650, and the same
+  risk exists for `Honda` / `Honda Motor`. Consequence: the catalogue's
+  Manufacturer filter splits one marque across two entries. Out of Phase-5
+  scope (hardening, zero feature work). Candidate fixes for a later phase:
+  normalise against a known-marque list at extraction time, or fuzzy-merge
+  manufacturers in the review flow so an admin resolves the split before
+  approval. Owner decision needed.
 
 ---
 
