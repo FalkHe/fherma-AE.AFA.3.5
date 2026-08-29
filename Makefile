@@ -44,8 +44,11 @@ langfuse-up: ## Start the optional Langfuse tracing stack (bonus, profile "langf
 	$(COMPOSE) --profile langfuse up -d
 .PHONY: langfuse-up
 
-langfuse-down: ## Stop the optional Langfuse tracing stack
-	$(COMPOSE) --profile langfuse down
+langfuse-down: ## Stop the optional Langfuse tracing stack (leaves the app stack running)
+	# `down` is NEVER profile-scoped -- it tears down the whole project, and with
+	# -v it deletes postgres-data (the entire dev database). `stop` is scoped to
+	# the profile's services, which is what this target must do.
+	$(COMPOSE) --profile langfuse stop langfuse-web langfuse-worker clickhouse valkey minio langfuse-postgres
 .PHONY: langfuse-down
 
 test: backend-test frontend-test ## Run both test suites

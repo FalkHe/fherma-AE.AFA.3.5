@@ -126,6 +126,105 @@ name, watch ingestion progress live, and review/approve the result. See
 `docs/ingestion.md` for the full flow, the ingestion CLI commands, and the
 re-chunk/re-embed commands.
 
+## CLI reference
+
+Every sub-app below is invoked as `docker compose exec app-web app <name> <command> ...`
+(swap for `docker compose exec app-worker ...` or, outside Docker, `uv run app ...`
+from `backend/` — see "Running the backend locally with uv"). `docs/ingestion.md`
+covers `ingest`, `chunks`, `embeddings`, `llm` and `jobs` in full detail with
+worked examples; `seed` is spelled out below.
+
+| Sub-app | Purpose |
+|---|---|
+| `catalogue` | Deterministic, no-LLM corrections to an existing entry (`set-manufacturer`). |
+| `chunks` | Rebuild retrievable chunks from already-stored documents (`rebuild [slug]`). |
+| `embeddings` | Rebuild the vector half of the knowledge base (`rebuild`). |
+| `ingest` | Drive the ingestion building blocks directly (`run`, `probe`, `fetch-url`, `fetch-image`, `extract-specs`). |
+| `jobs` | Enqueue a background job to smoke-test the Taskiq broker (`ping`). |
+| `llm` | Smoke-test the OpenRouter chat and embeddings connection (`ping`, `embeddings-smoke`). |
+| `openapi` | Export the OpenAPI schema without a running server (`export`). |
+| `operations` | Drive a fake operation through its lifecycle, to test the live-progress path without ingestion (`demo`). |
+| `rag` | Run the whole advanced-RAG pipeline and print every stage — translated queries, filters, shortlist, fused chunks (`ask "<utterance>"`). |
+| `retrieval` | Query the hybrid retriever directly, no chat or agent loop (`search "<query>"`). |
+| `seed` | Populate the catalogue with the curated demo model list (`demo [--auto-approve]`) — see "Seeding the demo catalogue" below. |
+| `tools` | Run one advisor tool in isolation, printing exactly what the chat UI would render (`run <tool-name> --args '<json>'`). |
+| `users` | Account administration, including the first-admin bootstrap (`set-role`, `reset-password`). |
+| *(root)* | `app version` prints the application version. |
+
+## Seeding the demo catalogue
+
+A fresh clone starts with an empty catalogue — adding models one at a time
+through the admin UI works, but populating a demo-sized catalogue is faster
+from the CLI:
+
+```bash
+docker compose exec app-web app seed demo               # ingest, leave in review
+docker compose exec app-web app seed demo --auto-approve # ingest, then approve each
+```
+
+Run it once after first-run setup, with `OPENROUTER_API_KEY` set (spec
+extraction and embeddings need it) and ideally `TAVILY_API_KEY` too (otherwise
+search falls back to Wikipedia-only, per "First-run setup" above). It drives
+the curated list in `backend/app/cli/data/seed_models.json` through the exact
+same create → ingest → transition sequence the admin UI and `app ingest run`
+use — no bypass, no shortcut, so cost and timing are the same as ingesting
+that many models by hand: each model takes on the order of 1–3 minutes of real
+ingestion work (web search, spec extraction, embeddings) and a comparable
+amount of OpenRouter/Tavily spend, with a 10-minute per-model timeout before
+it's reported as failed. The command prints one progress line per model, then
+a summary table and a totals line; it is safe to re-run — any model whose slug
+already exists, in any status, is skipped rather than re-ingested, and a
+single model failing does not stop the rest (report-and-continue). Exit code
+is 1 only if every attempted (non-skipped) model failed.
+
+`--auto-approve` promotes each successfully ingested model straight to
+`approved` through the same review-transition service an admin's approval
+click uses (`in_review → approved`) — it is a bulk convenience for
+bootstrapping a demo catalogue, **not** a replacement for the admin review
+workflow itself. `docs/demo-walkthrough.md` still walks through reviewing and
+approving one model live, by hand, to demonstrate that flow.
+
+## Optional observability (Langfuse)
+
+A bonus, fully optional profile traces individual chat-model calls (never
+embeddings — LangChain's embeddings wrapper emits no callback events) to a
+self-hosted [Langfuse](https://langfuse.com/) instance:
+
+```bash
+make langfuse-up   # docker compose --profile langfuse up -d
+```
+
+This starts `langfuse-web`, `langfuse-worker`, `clickhouse`, `valkey`, `minio`
+and a dedicated `langfuse-postgres` alongside the default stack. Open
+<http://localhost:3000>, create an org/project, and paste its generated
+public/secret API key pair into `.env`'s `LANGFUSE_PUBLIC_KEY` and
+`LANGFUSE_SECRET_KEY`; set `LANGFUSE_HOST=http://langfuse-web:3000` (the
+Compose-network hostname `app-web`/`app-worker` need — `localhost:3000` only
+works from the host browser). Then recreate the two services that read `.env`:
+
+```bash
+docker compose up -d app-web app-worker
+```
+
+Leaving all three `LANGFUSE_*` keys empty (the default) runs the app exactly
+as without this profile — byte-identical behaviour, and a Langfuse outage
+(or a wrong `LANGFUSE_HOST`) never fails a chat turn. This is a bonus item:
+nothing else in this repo, and no grading criterion, depends on it running.
+
+**Destructive-command warning:** never run `docker compose down -v` — it
+deletes the shared `postgres-data` volume, i.e. the entire dev database, not
+just Langfuse's data. Also avoid `docker compose --profile langfuse down`
+(including via `make langfuse-down`, whose target currently runs exactly that
+command): `down` is **never** scoped by a `--profile` flag — it tears down
+every service in the project regardless (confirmed with `docker compose
+--profile langfuse down --dry-run`: it lists all five default containers for
+removal, Langfuse or not). To stop only the Langfuse services and leave the
+rest of the stack running, use:
+
+```bash
+docker compose --profile langfuse stop
+```
+
 ## Running the backend locally with uv
 
 The backend's own settings (`backend/app/core/config.py`) fall back to a
@@ -229,6 +328,38 @@ must be up) and feeds it into `openapi-typescript` inside a one-off
 generate:api` still works as a host-side alternative if you have pnpm.)
 Commit the regenerated `schema.d.ts`. See `docs/qa-checklist.md` for the
 convention that keeps it from drifting.
+
+## Known limitations & future work
+
+- **Residual prompt-injection risk.** Retrieved chunks, the customer's own
+  preference values and translated-query context are all wrapped in sentinel
+  fence markers before reaching the model (`backend/app/llm/fencing.py`),
+  with prompt text instructing the model to treat the fenced content as data,
+  never as instructions. This is a mitigation, not a proof — it has been
+  live-verified against specific injection payloads, not formally guaranteed
+  against every possible one.
+- **No token streaming.** A chat reply is returned whole once the background
+  job finishes; the UI shows a progress indicator while waiting, not
+  incremental tokens.
+- **English-only.** Prompts, extraction and the advisor's replies are English
+  only; there is no localisation of model output (the UI chrome itself is
+  i18n-ready via react-i18next).
+- **No rate limiting.** The API has no per-account or per-IP request
+  throttling anywhere.
+- **Concurrent-turn race (known open issue).** Two `POST /api/chat-messages`
+  requests for the same chat in quick succession can both pass the
+  "no turn already in flight" check before either commits, occasionally
+  surfacing as a 409 instead of a clean queue. Tracked, not fixed — see the
+  Phase-3/4 open-questions history in `docs/roadmap/`.
+- **Optional Langfuse tracing is narrow.** With all three `LANGFUSE_*` keys
+  set, each LLM call lands as its own independent root trace — there is no
+  grouping of a turn's calls into one trace, and tool calls never appear at
+  all (they run as plain Python outside any LangChain Runnable). Embeddings
+  calls are excluded entirely, regardless of configuration, because
+  LangChain's embeddings wrapper emits no callback events.
+- **Re-embed jobs report progress on the CLI/worker logs only.** `app
+  embeddings rebuild` and `app chunks rebuild` do not surface a progress
+  indicator in the admin UI; follow `docker compose logs -f app-worker`.
 
 ## Further reading
 

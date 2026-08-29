@@ -794,3 +794,61 @@ depend on. 1–3 bullets per step, no prose.
   `ruff format --check .` pass unchanged (no `backend/app/` file touched).
   Changes are uncommitted, confined to `compose.yaml`, `.env.dist`,
   `Makefile`, per the no-commit instruction.
+
+### Step 5.15
+
+- **Deviation found, not silently fixed: `make langfuse-down` is not the safe
+  alternative to `docker compose --profile langfuse down`.** The landed
+  Makefile target (5.10) is literally `docker compose --profile langfuse
+  down` (no `-v`) — confirmed live with `docker compose --profile langfuse
+  down --dry-run` (no state changed) that it lists all five **default**
+  containers (`postgres`, `app-web`, `redis`, `app-worker`, `frontend`) for
+  stop-and-remove, exactly the "`down` is never scoped by `--profile`"
+  behaviour the 2026-08-29 hard rule warns about. It does not delete the
+  `postgres-data` volume (no `-v`), so it is far less destructive than the
+  5.10 incident, but it is still not scoped to Langfuse and will tear down
+  the running dev stack. README's Langfuse section (5.15) documents the
+  target's actual behaviour and tells readers to use `docker compose
+  --profile langfuse stop` instead of `make langfuse-down`. Not fixed here
+  (out of docs-writer's scope to touch `Makefile`) — a future step should
+  change the target to `docker compose --profile langfuse stop` (or `rm -s`
+  the six named services) to match the hard rule it was supposedly added to
+  satisfy.
+- **D8's "guessed demo prices (Phase-4 OQ2)" limitation no longer applies and
+  was dropped from the README, not restated.** Verified live against the dev
+  DB (post-5.10-incident state, seed-only data): the three OQ2 models the
+  bullet refers to (BMW S 1000 XR, Honda CB500F, Suzuki GSR600) do not exist
+  in the current catalogue at all — the DB was wiped in 5.10 and only
+  `app seed demo` output survived. `motorbike_specs.msrp_eur`/`price_band`
+  on today's five (soon more, see below) approved models are either `NULL`
+  or pipeline-extracted (e.g. `Kawasaki Z400` 6445 €/`mid`, `Kawasaki Versys
+  650` 8595 €/`mid` — real extraction output, not hand-entered), confirmed by
+  a direct `SELECT` against `motorbikes`/`motorbike_specs`. README's
+  limitations list has no price-guessing bullet as a result. `Suzuki GSR600`
+  stays absent (reserved for 5.16's live-review chapter per the 5.11 landed
+  note) and was not created by this step's replay. Note for 5.16: the
+  `docs/demo-walkthrough.md` chapters that still cite the three OQ2 models
+  by name/ULID and call their prices "guesses" are stale in the same way —
+  already flagged as 5.16's job by D8, not touched here.
+- **Live replay side-effect, not cleaned up (intentional):** replaying `app
+  seed demo` (no `--auto-approve`) to verify the skip-if-exists/report-and-
+  continue output format ingested two more curated models for real
+  (`KTM 390 Duke` → `seeded`/`in_review`, `Yamaha YZF-R3` → started, still
+  `in_review` after the replay's own `timeout` cut the CLI's polling loop —
+  the worker itself is not gated by the CLI process and kept running).
+  These are legitimate catalogue rows from the pinned 12-model list, not
+  throwaway QA fixtures, so they were left in place rather than deleted;
+  the dev DB now has 7 motorbikes (5 approved + 2 in_review) instead of the
+  5 approved noted in this step's dispatch brief. `--auto-approve` itself
+  was not re-run live in this step (already live-verified twice in 5.11,
+  including failure-continuation and the summary/exit-code contract) to
+  avoid unnecessary further API spend.
+- **Stack docs contradiction found, not fixed (out of scope):**
+  `docs/backend-stack.md`'s stack-choice table still reads "Langfuse | Traces
+  why a tool was chosen; one callback handler" — written before Langfuse
+  landed. It is no longer accurate: per M2's landed, accepted gap (5.10),
+  Langfuse traces only individual `ChatOpenRouter` calls as independent root
+  traces; **tool calls never appear in Langfuse at all**. `docs/backend-
+  stack.md` is a stack doc, not README, and was not touched by this step —
+  flagging for the coordinator per the "flag contradictions rather than
+  silently rewriting decisions" instruction rather than editing it.

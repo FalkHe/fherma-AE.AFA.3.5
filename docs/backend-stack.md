@@ -100,7 +100,7 @@ Python Backend
 | OpenRouter embeddings | Model chosen via `.env`; model + dimensions stored per embedding, CLI re-embeds on change |
 | Web search API | Search-then-fetch ingestion ("Suzuki GSR 600" → top ~5 results); provider via `.env` |
 | Structured outputs | Reliable capture of firmness-tagged preferences |
-| Langfuse | Traces why a tool was chosen; one callback handler |
+| Langfuse | Traces the LLM calls of a turn; one callback handler. Tool calls are plain Python outside any Runnable, so they do **not** appear, and each call is its own root trace (no per-turn grouping) |
 | Markdown + Jinja2 | Prompts out of source, iteration visible in diffs |
 | HTTPX | Article fetching and any outbound API |
 | trafilatura | Main-text extraction from article HTML |
