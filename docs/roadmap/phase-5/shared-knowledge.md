@@ -260,3 +260,21 @@ Docs: `README.md` (5.15) · `docs/demo-walkthrough.md` (5.16).
 
 Appended by implementing agents when a step finishes — decisions later steps
 depend on. 1–3 bullets per step, no prose.
+
+### Step 5.4
+
+- `app.main.unhandled_exception_handler` registered via
+  `app.add_exception_handler(Exception, unhandled_exception_handler)`, right
+  after the existing `JsonApiError` handler — no new module, matches D1
+  exactly. Response body is always `jsonapi.error_document(500,
+  "internal-error", INTERNAL_ERROR_DETAIL)` with `INTERNAL_ERROR_DETAIL = "An
+  unexpected error occurred."` (a `main.py` module constant); `logger =
+  logging.getLogger(__name__)` in `main.py` (matches the `logging.getLogger`
+  convention used elsewhere), `logger.exception(...)` fires before the
+  response is built, so 5.17's forced-500 check can assert on the log line if
+  needed.
+- Verified under `TestClient(app, raise_server_exceptions=False)`: a bare
+  exception raised deep in a dependency (not just a route body) still reaches
+  this handler and yields the pinned envelope with nothing exception-derived
+  in `detail`; FastAPI's default 422 `{"detail":[...]}` shape is unaffected
+  (`backend/tests/api/test_error_handling.py`).

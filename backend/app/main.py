@@ -8,8 +8,9 @@ import mimetypes
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
@@ -27,9 +28,15 @@ from app.api.endpoints import (
     products,
 )
 from app.api.endpoints.events import LISTENER_STATE_ATTRIBUTE
-from app.api.jsonapi import JsonApiError, json_api_error_handler
+from app.api.jsonapi import JsonApiError, error_document, json_api_error_handler
 from app.core.config import Settings, get_settings
 from app.services.notification_listener import NotificationListener
+
+logger = logging.getLogger(__name__)
+
+# Never rendered to the client; kept generic so nothing derived from the
+# exception (type, message, args) can leak into the response.
+INTERNAL_ERROR_DETAIL = "An unexpected error occurred."
 
 # The Vite dev server origin (both hostname spellings browsers may use);
 # credentials are allowed because the SPA authenticates with a session cookie.
@@ -69,6 +76,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await listener.stop()
 
 
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all for anything a route or dependency didn't handle itself.
+
+    The traceback goes to the server log only; the response carries a generic
+    JSON:API error document with nothing derived from the exception (no type,
+    message or args), so an internal failure never leaks implementation
+    details to the client.
+    """
+    logger.exception("Unhandled exception while processing %s %s", request.method, request.url.path)
+    document = error_document(500, "internal-error", INTERNAL_ERROR_DETAIL)
+    return JSONResponse(status_code=500, content=document.model_dump())
+
+
 def create_app() -> FastAPI:
     """Build and configure the FastAPI application."""
     settings = get_settings()
@@ -93,6 +113,8 @@ def create_app() -> FastAPI:
     # Domain failures of the JSON:API resources render as an error document;
     # request validation and the auth dependencies keep FastAPI's own bodies.
     app.add_exception_handler(JsonApiError, json_api_error_handler)
+    # Anything else unhandled: generic JSON:API 500, traceback to the log only.
+    app.add_exception_handler(Exception, unhandled_exception_handler)
 
     app.include_router(health.router)
     # Authentication is plain JSON and exempt from JSON:API, hence no /api.
