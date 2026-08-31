@@ -9,6 +9,10 @@ it is safe to run against the live catalogue.
   the only manual correction path until an admin surface exists. Nothing else is
   touched — in particular no documents, chunks or embeddings, which is why the
   backfill goes through this command instead of a re-ingestion.
+- `app catalogue render-name` (step 6.11) is a debugging aid for
+  `naming_service.render_name`: no write, no LLM, no network. It prints the
+  same row's name at both `MODEL` and `YEAR_RANGE` min-levels, using any
+  `--context` ids supplied as the ambiguity set.
 
 Follows the CLI async pattern of `app.cli.ingest`: the Typer command body stays
 synchronous and calls `asyncio.run(...)`.
@@ -21,7 +25,7 @@ import typer
 
 from app.db.models.manufacturer import Manufacturer
 from app.db.session import get_sessionmaker
-from app.services import manufacturer_service, product_service
+from app.services import manufacturer_service, naming_service, product_service
 
 app = typer.Typer(
     help="Correct one catalogue entry, deterministically.",
@@ -69,6 +73,44 @@ async def _set_manufacturer(slug: str, name: str) -> Manufacturer:
             _fail(str(error))
         await product_service.assign_manufacturer(session, motorbike, manufacturer.id)
         return manufacturer
+
+
+@app.command("render-name")
+def render_name(
+    motorbike_id: Annotated[str, typer.Argument(help="Id of the catalogue entry to render.")],
+    context: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--context", help="Additional id(s) to render alongside, as the ambiguity set."
+        ),
+    ] = None,
+) -> None:
+    """Print `motorbike_id`'s name at both the `MODEL` and `YEAR_RANGE` levels.
+
+    `--context` supplies the other rows to check for a collision against, the
+    way a real caller's `context` set would (data-model doc §5's per-caller
+    table). An unknown `motorbike_id` reports itself and exits non-zero;
+    unknown `--context` ids are silently absent, exactly as
+    `naming_service.load_name_parts` documents.
+    """
+    for line in asyncio.run(_render_name(motorbike_id, context or [])):
+        typer.echo(line)
+
+
+async def _render_name(motorbike_id: str, context_ids: list[str]) -> list[str]:
+    async with get_sessionmaker()() as session:
+        parts = await naming_service.load_name_parts(session, [motorbike_id, *context_ids])
+        target = parts.get(motorbike_id)
+        if target is None:
+            _fail(f"No catalogue entry with id {motorbike_id!r}.")
+        context = [p for id_, p in parts.items() if id_ != motorbike_id]
+        model = naming_service.render_name(
+            target, context=context, min_level=naming_service.NameLevel.MODEL
+        )
+        year_range = naming_service.render_name(
+            target, context=context, min_level=naming_service.NameLevel.YEAR_RANGE
+        )
+        return [f"MODEL: {model}", f"YEAR_RANGE: {year_range}"]
 
 
 def _fail(message: str) -> NoReturn:

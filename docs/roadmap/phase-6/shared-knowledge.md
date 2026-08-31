@@ -615,6 +615,37 @@ contract and does not appear here is not finished.
   `FakeAsyncSession` test double does not interpret a single-column
   projection. Nothing is wired to these yet — 6.12 is the first caller.
 
+### Step 6.11
+
+- New `backend/app/services/naming_service.py`: `NameLevel(IntEnum)`
+  (`BUILDINGLINE=0, MODEL=1, YEAR_RANGE=2`), `NameParts` (frozen/slots
+  dataclass), `load_name_parts(session, motorbike_ids) -> dict[str, NameParts]`
+  (two selects — `Motorbike` by id, then `Manufacturer` by the collected
+  `manufacturer_id`s — no ORM relationships, unknown ids simply absent),
+  `render_name(parts, *, context=(), min_level=NameLevel.MODEL) -> str`,
+  `render_names(parts, *, min_level=NameLevel.MODEL) -> dict[str, str]`,
+  `render_buildingline(parts) -> str | None`. Wired nowhere (6.19/6.20 are the
+  first callers); `render_name` performs no query and no caching (D5).
+- **Frozen rendered spellings — 6.19/6.20/QA assert against these exactly:**
+  closed year range `(2019–2023)` (en dash `–`, no inner spaces); open
+  year range (`year_to is None`) `(from 2023)`; no year range at all
+  (`year_from is None`) — the year segment is omitted entirely, not an empty
+  `()`; the last-resort id-suffix collision (identical manufacturer, model
+  *and* year range on two rows — a data bug) appends `" [" + id[-6:] + "]"` to
+  the escalated (year-range) string, e.g. `"BMW R 1250 GS (2019–2023)
+  [a1b2c3]"`, alongside one `logger.warning` from
+  `app.services.naming_service`.
+- Escalation only re-tests the **colliding subset** at the year-range level
+  (algorithm step 4) — a third context row that was never ambiguous at MODEL
+  level is never even rendered at YEAR_RANGE, and stays short.
+  `render_name`'s ambiguity check excludes a context member sharing the
+  *same* `motorbike_id` as the row being rendered (so passing a row's own
+  list back as its `context`, as `render_names` does, cannot self-collide).
+- `app catalogue render-name <id> [--context <id> ...]` (new command in
+  `backend/app/cli/catalogue.py`) prints two lines, `MODEL: …` and
+  `YEAR_RANGE: …`; an unknown `motorbike_id` exits 1 via `_fail`, unknown
+  `--context` ids are silently dropped (matches `load_name_parts`).
+
 ### Step 6.24
 
 - New files: `frontend/src/components/ModelIdentityPanel.tsx` (identity form +

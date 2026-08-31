@@ -130,3 +130,51 @@ def test_the_command_never_reaches_the_service_without_a_brand(
 
     assert result.exit_code != 0
     assert calls == []
+
+
+# --- `app catalogue render-name` (step 6.11) --------------------------------
+
+
+def test_render_name_prints_the_query_name_fallback_when_no_identity_exists(
+    fake_session: FakeAsyncSession, motorbike: Motorbike
+) -> None:
+    """No `model_name` is set yet, so both levels fall back to `query_name`."""
+    result = runner.invoke(cli, ["catalogue", "render-name", motorbike.id])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [
+        f"MODEL: {motorbike.query_name}",
+        f"YEAR_RANGE: {motorbike.query_name}",
+    ]
+
+
+def test_render_name_escalates_against_the_supplied_context(
+    fake_session: FakeAsyncSession, motorbike: Motorbike
+) -> None:
+    manufacturer = asyncio.run(manufacturer_service.get_or_create(fake_session, "BMW"))
+    asyncio.run(product_service.assign_manufacturer(fake_session, motorbike, manufacturer.id))
+    motorbike.model_name = "R 1250 GS"
+    motorbike.year_from = 2019
+    motorbike.year_to = 2023
+
+    other = asyncio.run(product_service.create_backlog(fake_session, "BMW R 1250 GS (older)"))
+    asyncio.run(product_service.assign_manufacturer(fake_session, other, manufacturer.id))
+    other.model_name = "R 1250 GS"
+    other.year_from = 2010
+    other.year_to = 2013
+
+    result = runner.invoke(cli, ["catalogue", "render-name", motorbike.id, "--context", other.id])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [
+        "MODEL: BMW R 1250 GS (2019–2023)",
+        "YEAR_RANGE: BMW R 1250 GS (2019–2023)",
+    ]
+
+
+def test_render_name_of_an_unknown_id_exits_one(fake_session: FakeAsyncSession) -> None:
+    result = runner.invoke(cli, ["catalogue", "render-name", "01UNKNOWNUNKNOWNUNKNOWN"])
+
+    assert result.exit_code == 1
+    assert "01UNKNOWNUNKNOWNUNKNOWN" in result.stderr
+    assert result.stdout == ""
