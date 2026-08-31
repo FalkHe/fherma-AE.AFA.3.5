@@ -587,3 +587,30 @@ contract and does not appear here is not finished.
   `/api/catalogue-models?sort=name` via an authenticated session — the route
   requires `current_user`, so the literal unauthenticated curl in the step
   file was not meaningful) diffed **empty** before vs. after.
+
+### Step 6.10
+
+- Migration `06db655fd7b4` (`down_revision = "7d45a675ac5e"`) adds
+  `motorbikes.buildingline` (`String(64)` nullable), `type_codes` and
+  `variants` (JSONB `NOT NULL DEFAULT '[]'::jsonb`) plus
+  `ix_motorbikes_manufacturer_id_buildingline`. **6.13 chains its migration
+  onto `06db655fd7b4`.** Round trip proven inside the container. ORM:
+  `Motorbike.buildingline: str | None`, `.type_codes: list[Any]`,
+  `.variants: list[dict[str, Any]]`, `BUILDINGLINE_LENGTH = 64`.
+- New module `app/services/identity_validation.py`: `TYPE_CODE_PATTERN`,
+  `MAX_TYPE_CODES = 8`, `MAX_VARIANTS = 20`, `VARIANT_NAME_LENGTH = 64`,
+  `VARIANT_DESCRIPTION_LENGTH = 400`, `VARIANT_SPEC_KEYS` (per D1: `SPEC_FIELDS`
+  minus `source_hints`/`extracted_at`), the `Variant` Pydantic model (`slug`
+  always recomputed via `product_service.slugify(name)`, never trusted from
+  input) and `normalize_type_codes` / `normalize_variants`. Both return
+  **`(kept, warnings)`** — a dropped entry (or, for a variant, an unknown
+  `specs` key with the entry otherwise kept) always adds one warning string to
+  the list and **never raises**; this is the contract 6.12/6.15/6.20 must keep
+  reading warnings off, not exceptions.
+- `product_service.normalise_buildingline(session, manufacturer_id, name)` and
+  `product_service.list_buildinglines(session, manufacturer_id)` land in
+  `product_service.py` itself (not a new module) — reads only, no writes, no
+  commits; `list_buildinglines` reads whole `Motorbike` rows and dedupes/sorts
+  in Python (not a SQL `DISTINCT` projection), because the project's
+  `FakeAsyncSession` test double does not interpret a single-column
+  projection. Nothing is wired to these yet — 6.12 is the first caller.

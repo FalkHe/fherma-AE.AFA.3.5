@@ -419,3 +419,104 @@ def test_list_images_restricts_to_the_requested_moderation_states() -> None:
 
     assert "motorbike_images.status IN (__[POSTCOMPILE_status_1])" in _sql(session)
     assert _compiled(session).params["status_1"] == [ImageStatus.APPROVED]
+
+
+# `normalise_buildingline` / `list_buildinglines` — reads only, no writes.
+
+_MANUFACTURER_ID = "01J0MANUFACTURER00000000AA"
+_OTHER_MANUFACTURER_ID = "01J0MANUFACTURER00000000BB"
+
+
+def test_list_buildinglines_returns_distinct_non_null_values_sorted(
+    fake_session: FakeAsyncSession,
+) -> None:
+    gs = _backlog(fake_session, "BMW R 1250 GS")
+    gs.manufacturer_id = _MANUFACTURER_ID
+    gs.buildingline = "GS"
+    rt = _backlog(fake_session, "BMW R 1250 RT")
+    rt.manufacturer_id = _MANUFACTURER_ID
+    rt.buildingline = "RT"
+    duplicate_family = _backlog(fake_session, "BMW R 1300 GS")
+    duplicate_family.manufacturer_id = _MANUFACTURER_ID
+    duplicate_family.buildingline = "GS"
+    no_family = _backlog(fake_session, "BMW F 900 R")
+    no_family.manufacturer_id = _MANUFACTURER_ID
+    other_brand = _backlog(fake_session, "Honda Africa Twin")
+    other_brand.manufacturer_id = _OTHER_MANUFACTURER_ID
+    other_brand.buildingline = "Africa Twin"
+
+    result = asyncio.run(product_service.list_buildinglines(fake_session, _MANUFACTURER_ID))
+
+    assert result == ["GS", "RT"]
+
+
+def test_list_buildinglines_no_writes(fake_session: FakeAsyncSession) -> None:
+    asyncio.run(product_service.list_buildinglines(fake_session, _MANUFACTURER_ID))
+
+    assert fake_session.commit_count == 0
+
+
+def test_normalise_buildingline_trims_and_collapses_inner_whitespace(
+    fake_session: FakeAsyncSession,
+) -> None:
+    result = asyncio.run(
+        product_service.normalise_buildingline(fake_session, _MANUFACTURER_ID, "  GS   Adventure  ")
+    )
+
+    assert result == "GS Adventure"
+
+
+def test_normalise_buildingline_empty_or_none_is_none(fake_session: FakeAsyncSession) -> None:
+    assert (
+        asyncio.run(product_service.normalise_buildingline(fake_session, _MANUFACTURER_ID, "   "))
+        is None
+    )
+    assert (
+        asyncio.run(product_service.normalise_buildingline(fake_session, _MANUFACTURER_ID, None))
+        is None
+    )
+
+
+def test_normalise_buildingline_reuses_the_stored_casing(fake_session: FakeAsyncSession) -> None:
+    gs = _backlog(fake_session, "BMW R 1250 GS")
+    gs.manufacturer_id = _MANUFACTURER_ID
+    gs.buildingline = "GS"
+
+    result = asyncio.run(
+        product_service.normalise_buildingline(fake_session, _MANUFACTURER_ID, "gs")
+    )
+
+    assert result == "GS"
+
+
+def test_normalise_buildingline_first_writer_spelling_is_never_overwritten(
+    fake_session: FakeAsyncSession,
+) -> None:
+    # The match is case-insensitive, not whitespace-insensitive: "GS" and
+    # "G S" are different family names, so only a same-shaped later spelling
+    # joins the first writer's casing.
+    gs = _backlog(fake_session, "BMW R 1250 GS Adventure")
+    gs.manufacturer_id = _MANUFACTURER_ID
+    gs.buildingline = "GS Adventure"
+
+    result = asyncio.run(
+        product_service.normalise_buildingline(fake_session, _MANUFACTURER_ID, "gs   ADVENTURE")
+    )
+
+    assert result == "GS Adventure"
+
+
+def test_normalise_buildingline_new_spelling_stands_when_no_match_exists(
+    fake_session: FakeAsyncSession,
+) -> None:
+    result = asyncio.run(
+        product_service.normalise_buildingline(fake_session, _MANUFACTURER_ID, "GS")
+    )
+
+    assert result == "GS"
+
+
+def test_normalise_buildingline_no_writes(fake_session: FakeAsyncSession) -> None:
+    asyncio.run(product_service.normalise_buildingline(fake_session, _MANUFACTURER_ID, "GS"))
+
+    assert fake_session.commit_count == 0

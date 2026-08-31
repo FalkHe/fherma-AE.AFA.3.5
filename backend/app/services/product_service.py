@@ -117,6 +117,47 @@ async def get_by_slug(session: AsyncSession, slug: str) -> Motorbike | None:
     return result.scalar_one_or_none()
 
 
+async def normalise_buildingline(
+    session: AsyncSession, manufacturer_id: str, name: str | None
+) -> str | None:
+    """Return the family name to store for `manufacturer_id`, or `None`.
+
+    Trims and collapses inner whitespace; an empty result is `None`. The drift
+    guard (§2.1): a case-insensitive match against `manufacturer_id`'s existing
+    distinct `buildingline` values returns the value already on file, so the
+    first writer's spelling wins and every later writer joins it — the same
+    effect `get_or_create` has, without a row.
+
+    Read-only: no write, no commit.
+    """
+    if name is None:
+        return None
+    collapsed = " ".join(name.split())
+    if not collapsed:
+        return None
+
+    for existing in await list_buildinglines(session, manufacturer_id):
+        if existing.casefold() == collapsed.casefold():
+            return existing
+    return collapsed
+
+
+async def list_buildinglines(session: AsyncSession, manufacturer_id: str) -> list[str]:
+    """Return `manufacturer_id`'s distinct non-NULL `buildingline` values, sorted.
+
+    Backs the review form's `Autocomplete freeSolo` and
+    `normalise_buildingline` itself. Read-only: no write, no commit.
+    """
+    result = await session.execute(
+        select(Motorbike).where(
+            Motorbike.manufacturer_id == manufacturer_id,
+            Motorbike.buildingline.is_not(None),
+        )
+    )
+    values = {motorbike.buildingline for motorbike in result.scalars().all()}
+    return sorted(values)
+
+
 async def list_motorbikes(
     session: AsyncSession,
     *,
