@@ -785,3 +785,32 @@ contract and does not appear here is not finished.
   render is slow enough to need an explicit `it(..., fn, 15000)` timeout and a
   longer `findByLabelText` wait in `ModelIdentityPanel.test.tsx` — not a bug,
   just genuinely heavier DOM.
+
+### Coordinator note (2026-08-31) — approved-row count for 6.18
+
+- **The dev DB has 15 approved rows, not 3, and all 15 have a NULL identity**
+  (`manufacturer_id`/`model_name`/`year_from`), verified by psql against head
+  `06db655fd7b4`. The `## Environment prerequisites` line about "the 3
+  originally approved models" is **stale**: the approved set is
+  `bmw-r-1250-gs`, `honda-africa-twin`, `honda-cb650r`, `honda-cbr500r`,
+  `kawasaki-versys-650`, `kawasaki-z400`, `kawasaki-z900`, `ktm-390-duke`,
+  `suzuki-gsr600`, `suzuki-sv650`, `triumph-street-triple-765`, `yamaha-mt-07`,
+  `yamaha-mt-09`, `yamaha-tracer-9`, `yamaha-yzf-r3`. **6.18 must backfill a
+  sourced year range for all 15** before its `VALIDATE` can pass, and D4's
+  adjudication (read the range out of the row's already-ingested Wikipedia
+  document and quote the sentence in the report — never guess) applies to every
+  one of them. A row whose stored documents do not state a range is left
+  unapproved and printed, per OQ-6.
+- Corpus totals at the same head: 208 motorbikes, 200 carrying a `suggestion`
+  claim. `kawasaki-z400`/`kawasaki-z900` (`Kawasaki`) and `kawasaki-versys-650`
+  (`Kawasaki Motors`) are present as D14's real merge corpus for 6.16.
+- 6.12's live proof was run by the coordinator (the step's agent had no Docker):
+  `app catalogue set-identity bmw-r-1250-gs-adventure --manufacturer BMW
+  --model-name "R 1250 GS Adventure" --year-from 2019 --year-to 2023` →
+  slug `bmw/r-1250-gs-adventure/2019-2023`; `app catalogue render-name` printed
+  `MODEL: BMW R 1250 GS Adventure` / `YEAR_RANGE: BMW R 1250 GS Adventure
+  (2019–2023)`, independently confirming 6.11's frozen en-dash spelling. That
+  row is now an **identified `backlog` row** in the dev DB — the first one, and
+  useful as a fixture; its year range came from the step file, not a source
+  document, so 6.18/6.30 should treat it as test scaffolding rather than
+  reviewed catalogue data.
