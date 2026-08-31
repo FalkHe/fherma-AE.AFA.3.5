@@ -902,3 +902,48 @@ contract and does not appear here is not finished.
 - Not built here, deliberately (per the step's scope): no reader, no writer
   beyond the service, no CLI — 6.21/6.22 write snapshots, 6.23 wires the
   estimator/API reader and the `usedPrice` D11 shape.
+
+### Coordinator note (2026-08-31) — M1 verification result and two proofs deferred to 6.30
+
+M1 (6.9–6.13 ∥ 6.24) is merged on both tracks and tagged `phase-6-m1`. The
+demo criterion was run by the coordinator at head `d6545d99f81a`. What passed
+live: the full schema shape (`query_name` with no `name`; `buildingline`,
+`type_codes`, `variants` with their `'[]'` defaults and the composite index;
+`motorbike_used_prices` with every D9 column, the UNIQUE FK and a nullable
+`sample_count`); `app catalogue set-identity` recomputing the path-shaped slug
+`bmw/r-1250-gs-adventure/2019-2023`; `app catalogue render-name` printing the
+frozen spellings; `app tools run catalogue_search` still emitting the wire key
+`name` over the 15 approved rows (the rename's riskiest blast radius);
+`/api/products` and `/api/catalogue-models` both 200 with **no `suggestion`
+field anywhere on `catalogue-models`** (D6 holds); backend 1355 tests and
+frontend 225 tests green.
+
+**Two criterion lines could not be proven live and are hereby acceptance
+criteria for QA 6.30, which will have real ingested rows:**
+
+1. **The escalated name.** Escalation needs two rows sharing
+   `manufacturer_id` + `model_name`; the corpus contains no such pair
+   (`CRF 1000 L` / `CRF 1100 L Africa Twin` are distinct model names). No
+   duplicate row was fabricated to satisfy the demo line. 6.30 must render an
+   escalated name from a genuine generation pair produced by 6.15/6.18 and
+   assert the year range appears **only** where two rows would otherwise
+   collide.
+2. **The live 422 `incomplete-identity` refusal.** The D4 guard fires only on
+   `in_review → approved`, and `backlog → in_review` is illegal by design —
+   only a completed ingestion creates an `in_review` row. Verified live that
+   `LEGAL_TRANSITIONS` fires first (both attempts returned
+   `invalid-transition`, the documented ordering); the `incomplete-identity`
+   path itself is proven only by `tests/api/test_products.py`. 6.30 must drive
+   it through the real review screen on an ingested `in_review` row.
+
+Also recorded, because they are state a later step will meet:
+
+- The byte-identity capture **cannot be re-diffed after 6.12**: 6.9 proved it
+  empty, but 6.12 deliberately changed approval behaviour and the coordinator's
+  live proof mutated one row. Do not treat a non-empty diff today as a 6.9
+  regression; re-baseline instead.
+- Dev-DB admin `step69check` (created by 6.9's agent) had its password reset to
+  `M1demo!Pass123` for the M1 checks. It is a dev-only account in the dev DB.
+- `bmw-r-1250-gs-adventure` is an identified **`backlog`** row whose year range
+  came from the step file, **not** from a source document. Treat it as test
+  scaffolding, not reviewed catalogue data — 6.18 should re-source or clear it.
