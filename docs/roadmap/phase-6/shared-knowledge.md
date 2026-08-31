@@ -1206,3 +1206,50 @@ Also recorded from 6.15's live run, because later steps meet it:
   when deriving `model_name` mechanically — it relies on the canonical
   spellings `normalize_name` now enforces, not on whatever string an earlier
   extraction happened to store.
+
+### Step 6.17
+
+- `ingestion/search.py`: `SearchProvider.search`, `TavilySearchProvider.search`
+  and `OpenRouterSearchProvider.search` all gained the identical additive
+  keyword `templates: tuple[QueryTemplate, ...] = QUERY_TEMPLATES` — the loop
+  now iterates `templates`, the recursive "build my own client" branch forwards
+  it, and default-arg omission is byte-identical to pre-6.17 behaviour
+  (verified: existing tests untouched, one new test per provider proves a
+  non-default `templates` tuple actually runs). **6.22 reuses this exact
+  signature for its price templates — do not rename or drop the keyword.**
+  Public `strip_utm_source(url) -> str` is a thin alias of `_without_utm_source`.
+- `ingestion/service.py` module constants callers may rely on:
+  `MAX_SUGGESTED_LINKS = 3`, `SUGGESTED_LINK_SOURCE_TYPE = SourceType.TECHNICAL`
+  (a claimed link is never stored as `WIKIPEDIA`), `MAX_TYPE_CODE_TERMS = 2`.
+  The two pinned warning strings (verbatim — the review UI 6.27 and QA 6.30
+  grep for them, `.format(claimed=..., found=...)`):
+  `CLAIM_YEAR_WARNING = "Suggestion contradicted: claimed years {claimed}, sources say {found}."`
+  `CLAIM_CODE_WARNING = "Suggestion contradicted: claimed type codes {claimed}, sources printed {found}."`
+  Year ranges are rendered `f"{year_from}-{year_to}"` (or `f"{year_from}-"` when
+  open-ended) by the module-private `_year_range` — not `naming_service`'s
+  en-dash spelling, since this is a raw claim/finding diff, not a customer
+  name. `_search_stage` builds suggested candidates first (URL cleaned via
+  `search.strip_utm_source`, `suggestion` itself never written to) and dedupes
+  by URL against the provider's own candidates (suggested wins); `MAX_SUGGESTED_LINKS`
+  is **additive** to `INGESTION_MAX_WEB_DOCUMENTS`, so `_fetch_progress`'s
+  `total` still reflects the real candidate count. `_extraction_stage` feeds
+  6.15's `outcome.identity_warnings` to `_warn` first, then compares claim vs.
+  finding: a year contradiction needs the claim's `year_from` **and** the
+  extraction's `year_from` both present and the pairs to differ (an empty
+  extraction warns nothing); a code contradiction needs both lists non-empty
+  and disjoint (a found subset is not a contradiction). Neither the claim nor
+  the finding is overwritten by the other (D13).
+- Live smoke on the real backlog row `bmw-f-750-gs` (claim `[K80]`, 2018–2023,
+  a `?utm_source=chatgpt.com` German Wikipedia link) proved every leg at once:
+  a `technical` source document at
+  `https://de.wikipedia.org/wiki/BMW_F_750_GS` (utm-stripped) while
+  `motorbikes.suggestion->'links'` kept the tagged URL verbatim; the extra
+  type-code template ran (the provider's own candidate cap of 6 was reached,
+  so the fetched total was 7 — the suggested link's addition, confirmed live);
+  and the sources genuinely disagreed with the claim's end year (extraction
+  found `year_to = NULL`, i.e. still in production), so the completed
+  operation's `message` carried
+  `"Suggestion contradicted: claimed years 2018-2023, sources say 2018-."`
+  verbatim — a real, not synthetic, D13 contradiction. The row is now
+  `in_review` at slug `bmw/f-750-gs/2018-`; 6.18/6.30 may treat it as a genuine
+  ingestion output.

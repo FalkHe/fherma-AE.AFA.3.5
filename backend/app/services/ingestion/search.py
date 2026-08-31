@@ -96,6 +96,7 @@ class SearchProvider(Protocol):
         *,
         client: httpx2.AsyncClient | None = None,
         gate: fetch.PolitenessGate | None = None,
+        templates: tuple[QueryTemplate, ...] = QUERY_TEMPLATES,
     ) -> SearchResults:
         """Return the candidate pages for `name`, labelled by source type."""
         ...
@@ -117,8 +118,9 @@ class TavilySearchProvider:
         *,
         client: httpx2.AsyncClient | None = None,
         gate: fetch.PolitenessGate | None = None,
+        templates: tuple[QueryTemplate, ...] = QUERY_TEMPLATES,
     ) -> SearchResults:
-        """Run the three pinned queries and collect their candidates.
+        """Run `templates` (the three pinned queries, by default) and collect candidates.
 
         A query whose request fails costs its two candidates and adds a warning;
         the other queries still run. No key at all costs the whole web half of
@@ -133,14 +135,14 @@ class TavilySearchProvider:
 
         if client is None:
             async with fetch.build_client() as owned_client:
-                return await self.search(name, client=owned_client, gate=gate)
+                return await self.search(name, client=owned_client, gate=gate, templates=templates)
 
         limit = settings.ingestion_max_web_documents
         candidates: list[SearchCandidate] = []
         warnings: list[str] = []
         seen: set[str] = set()
 
-        for query_template in QUERY_TEMPLATES:
+        for query_template in templates:
             if len(candidates) >= limit:
                 break
 
@@ -235,8 +237,9 @@ class OpenRouterSearchProvider:
         *,
         client: httpx2.AsyncClient | None = None,
         gate: fetch.PolitenessGate | None = None,
+        templates: tuple[QueryTemplate, ...] = QUERY_TEMPLATES,
     ) -> SearchResults:
-        """Run the three pinned queries and collect their candidates.
+        """Run `templates` (the three pinned queries, by default) and collect candidates.
 
         Same semantics as `TavilySearchProvider.search`: a failed query costs
         its two candidates and adds a warning, a missing key costs the whole web
@@ -251,14 +254,14 @@ class OpenRouterSearchProvider:
 
         if client is None:
             async with fetch.build_client() as owned_client:
-                return await self.search(name, client=owned_client, gate=gate)
+                return await self.search(name, client=owned_client, gate=gate, templates=templates)
 
         limit = settings.ingestion_max_web_documents
         candidates: list[SearchCandidate] = []
         warnings: list[str] = []
         seen: set[str] = set()
 
-        for query_template in QUERY_TEMPLATES:
+        for query_template in templates:
             if len(candidates) >= limit:
                 break
 
@@ -420,6 +423,17 @@ def _openrouter_results(payload: Any) -> Iterator[tuple[str, str | None]]:
             title.strip() if isinstance(title, str) and title.strip() else None,
         )
         yielded += 1
+
+
+def strip_utm_source(url: str) -> str:
+    """Public alias of `_without_utm_source` for callers outside this module.
+
+    Used on `motorbikes.suggestion["links"]` entries before they become fetch
+    candidates (12 of the imported backlog links carry `?utm_source=chatgpt.com`)
+    — the stored claim itself is never modified (D6), only the cleaned copy the
+    fetch stage uses.
+    """
+    return _without_utm_source(url)
 
 
 def _without_utm_source(url: str) -> str:

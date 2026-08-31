@@ -122,13 +122,27 @@ def _stub_wikipedia(monkeypatch: pytest.MonkeyPatch, outcome: wikipedia.Wikipedi
     monkeypatch.setattr(wikipedia, "lookup", lookup)
 
 
-def _stub_search(monkeypatch: pytest.MonkeyPatch, results: search.SearchResults) -> None:
+def _stub_search(
+    monkeypatch: pytest.MonkeyPatch, results: search.SearchResults
+) -> list[tuple[search.QueryTemplate, ...]]:
+    """Stub the provider; returns the `templates` tuple(s) it was called with."""
+    captured: list[tuple[search.QueryTemplate, ...]] = []
+
     class _Provider:
-        async def search(self, name: str, *, client: Any = None, gate: Any = None):
+        async def search(
+            self,
+            name: str,
+            *,
+            client: Any = None,
+            gate: Any = None,
+            templates: tuple[search.QueryTemplate, ...] = search.QUERY_TEMPLATES,
+        ):
             assert client is CLIENT
+            captured.append(templates)
             return results
 
     monkeypatch.setattr(search, "get_search_provider", _Provider)
+    return captured
 
 
 def _stub_fetch(
@@ -753,3 +767,226 @@ def test_re_ingestion_replaces_the_documents_and_the_image_of_the_previous_run(
     assert not image_service.resolve(stale_original).exists()
     assert not image_service.resolve(stale_variant).exists()
     assert storage.resolve(documents[0].raw_path).is_file()
+
+
+# --- suggestion as research input (step 6.17) ----------------------------------
+
+
+def _stub_extraction_result(monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
+    """Answer the extraction stage with a fixed, identity-bearing result.
+
+    Unlike the autouse `extracted_specs` fixture (which never sets
+    `model_name` and so only exercises the manufacturer-only path), this lets
+    a test drive the full `assign_identity` merge and get back real
+    `year_from`/`year_to`/`type_codes` on `outcome.extracted`.
+    """
+    payload: dict[str, Any] = {"model_name": "GSR600", "manufacturer": "Suzuki"}
+    payload.update(fields)
+
+    async def extract_spec(name: str, documents: Any, *, model: str | None = None):
+        return extraction.ExtractedSpec.model_validate(payload)
+
+    monkeypatch.setattr(extraction, "extract_spec", extract_spec)
+
+
+def test_suggested_links_are_fetched_before_provider_candidates_and_deduped(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    motorbike.suggestion = {
+        "links": [
+            "https://suzuki.example/gsr600?utm_source=chatgpt.com",
+            "https://claimed.example/gsr600-extra",
+        ],
+        "type_codes": [],
+    }
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(
+        monkeypatch,
+        search.SearchResults(
+            candidates=(
+                # Same URL as the first claimed link once cleaned of `utm_source` —
+                # the provider's copy must be the one dropped, not the claim's.
+                _candidate("https://suzuki.example/gsr600", SourceType.PRODUCT),
+                _candidate("https://provider.example/gsr600", SourceType.MAGAZINE),
+            )
+        ),
+    )
+    fetched = _stub_fetch(
+        monkeypatch,
+        {
+            "https://suzuki.example/gsr600": _fetch_result("https://suzuki.example/gsr600"),
+            "https://claimed.example/gsr600-extra": _fetch_result(
+                "https://claimed.example/gsr600-extra"
+            ),
+            "https://provider.example/gsr600": _fetch_result("https://provider.example/gsr600"),
+        },
+    )
+    _stub_extract(monkeypatch, extract.ExtractResult(markdown="## Data\n\n599 cc."))
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    # Suggested links first, deduped against the provider's duplicate.
+    assert fetched == [
+        "https://suzuki.example/gsr600",
+        "https://claimed.example/gsr600-extra",
+        "https://provider.example/gsr600",
+    ]
+    documents = fake_session.rows(SourceDocument)
+    assert [document.source_type for document in documents] == [
+        SourceType.WIKIPEDIA,
+        SourceType.TECHNICAL,
+        SourceType.TECHNICAL,
+        SourceType.MAGAZINE,
+    ]
+    # The stored claim is never modified (D6) — the utm parameter survives there.
+    assert (
+        motorbike.suggestion["links"][0] == "https://suzuki.example/gsr600?utm_source=chatgpt.com"
+    )
+
+
+def test_claimed_type_codes_add_one_extra_query_template_to_the_provider_call(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    motorbike.suggestion = {"links": [], "type_codes": ["K80", "K81", "K82"]}
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    captured = _stub_search(monkeypatch, search.SearchResults())
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    # Only the first `MAX_TYPE_CODE_TERMS` (2) codes feed the extra template.
+    assert captured == [
+        (
+            *search.QUERY_TEMPLATES,
+            search.QueryTemplate(
+                SourceType.TECHNICAL, '"{name}" K80 K81 motorcycle specifications'
+            ),
+        )
+    ]
+
+
+def test_a_row_without_a_suggestion_behaves_byte_identically_to_today(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert motorbike.suggestion is None
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    captured = _stub_search(
+        monkeypatch,
+        search.SearchResults(
+            candidates=(_candidate("https://suzuki.example/gsr600", SourceType.PRODUCT),)
+        ),
+    )
+    _stub_fetch(
+        monkeypatch,
+        {"https://suzuki.example/gsr600": _fetch_result("https://suzuki.example/gsr600")},
+    )
+    _stub_extract(monkeypatch, extract.ExtractResult(markdown="## Data\n\n599 cc."))
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    assert captured == [search.QUERY_TEMPLATES]
+    documents = fake_session.rows(SourceDocument)
+    assert [document.source_type for document in documents] == [
+        SourceType.WIKIPEDIA,
+        SourceType.PRODUCT,
+    ]
+    assert operation.status is OperationStatus.SUCCEEDED
+
+
+def test_a_contradicted_claimed_year_range_is_warned_about(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    motorbike.suggestion = {"links": [], "type_codes": [], "year_from": 2004, "year_to": 2018}
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(monkeypatch, search.SearchResults())
+    _stub_extraction_result(monkeypatch, year_from=2004, year_to=2012)
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    assert operation.message is not None
+    assert (
+        service.CLAIM_YEAR_WARNING.format(claimed="2004-2018", found="2004-2012")
+        in operation.message
+    )
+
+
+def test_no_year_warning_when_the_finding_matches_the_claim(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    motorbike.suggestion = {"links": [], "type_codes": [], "year_from": 2004, "year_to": 2018}
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(monkeypatch, search.SearchResults())
+    _stub_extraction_result(monkeypatch, year_from=2004, year_to=2018)
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    assert operation.message is not None
+    assert "Suggestion contradicted" not in operation.message
+
+
+def test_a_contradicted_claimed_type_code_is_warned_about(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    motorbike.suggestion = {"links": [], "type_codes": ["K80"]}
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(monkeypatch, search.SearchResults())
+    _stub_extraction_result(monkeypatch, type_codes=["ZX9"])
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    assert operation.message is not None
+    assert service.CLAIM_CODE_WARNING.format(claimed="K80", found="ZX9") in operation.message
+
+
+def test_no_code_warning_when_the_finding_is_a_subset_of_the_claim(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    motorbike.suggestion = {"links": [], "type_codes": ["K80", "K81"]}
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(monkeypatch, search.SearchResults())
+    _stub_extraction_result(monkeypatch, type_codes=["K80"])
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    assert operation.message is not None
+    assert "Suggestion contradicted" not in operation.message
+
+
+def test_identity_warnings_from_extraction_are_fed_to_the_run(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """6.15's `identity_warnings` (dropped type-code/variant entries) reach `_warn`."""
+    motorbike.suggestion = None
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(monkeypatch, search.SearchResults())
+    # An invalid type code is dropped by `identity_validation.normalize_type_codes`
+    # with a warning, without failing the extraction.
+    _stub_extraction_result(monkeypatch, type_codes=["not a valid code!"])
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    assert operation.message is not None
+    assert operation.message.startswith(service.WARNING_SUMMARY_PREFIX)

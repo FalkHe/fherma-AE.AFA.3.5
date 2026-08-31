@@ -44,6 +44,7 @@ from app.db.models.motorbike_image import MotorbikeImage
 from app.db.models.operation import MAX_PROGRESS, Operation
 from app.db.models.source_document import SOURCE_TITLE_LENGTH, SourceDocument, SourceType
 from app.jobs import TransientJobError
+from app.llm import extraction
 from app.services import (
     document_service,
     embedding_service,
@@ -77,6 +78,25 @@ WARNING_SUMMARY_PREFIX = "Completed with warnings: "
 
 # Error text of the one deterministic failure of a run.
 NO_DOCUMENTS_ERROR = "No usable source documents could be ingested."
+
+# Step 6.17 — `motorbikes.suggestion` as research input (D6: an input hint, the
+# stored claim is never modified). At most this many claimed links become
+# fetch candidates, ahead of the provider's own results; a claimed type code
+# adds one extra query template to the provider call.
+MAX_SUGGESTED_LINKS = 3
+# A claimed reference is technical input, never `WIKIPEDIA` — that source type
+# is reserved for the vetted Wikipedia stage (the `_article` pick and the
+# extraction trust order both key off it).
+SUGGESTED_LINK_SOURCE_TYPE = SourceType.TECHNICAL
+MAX_TYPE_CODE_TERMS = 2
+
+# D13 — contradiction between the claim and what the sources actually printed;
+# recorded through `_Run._warn`, never a new column or table. Pinned verbatim:
+# the review UI (6.27) and QA (6.30) grep for these strings.
+CLAIM_YEAR_WARNING = "Suggestion contradicted: claimed years {claimed}, sources say {found}."
+CLAIM_CODE_WARNING = (
+    "Suggestion contradicted: claimed type codes {claimed}, sources printed {found}."
+)
 
 # Failure reasons that mean "the network was in the way", not "there is nothing
 # to find". A run that produced no document at all is worth retrying only when
@@ -247,15 +267,56 @@ class _Run:
         return outcome.image
 
     async def _search_stage(self) -> tuple[search.SearchCandidate, ...]:
-        """Ask the search provider for the pages to fetch after Wikipedia."""
+        """Ask the search provider for the pages to fetch after Wikipedia.
+
+        `motorbikes.suggestion`'s claimed links (D6: an input hint, never
+        catalogue data) become fetch candidates *first*, so a provider
+        duplicate is the one dropped, not the claim's link. A claimed type
+        code adds one extra query template to the provider's own search.
+        """
         await self._advance(*SEARCH_MILESTONE)
 
+        suggested = self._suggested_candidates()
         results = await search.get_search_provider().search(
-            self.motorbike.query_name, client=self.client, gate=self.gate
+            self.motorbike.query_name,
+            client=self.client,
+            gate=self.gate,
+            templates=self._search_templates(),
         )
         for warning in results.warnings:
             self._warn(warning)
-        return results.candidates
+        return _dedupe_by_url((*suggested, *results.candidates))
+
+    def _suggested_candidates(self) -> tuple[search.SearchCandidate, ...]:
+        """The first `MAX_SUGGESTED_LINKS` claimed links, as fetch candidates.
+
+        Only the fetch candidate's URL is cleaned of `utm_source` — the stored
+        `suggestion` JSON is never modified (D6).
+        """
+        suggestion = self.motorbike.suggestion
+        if not suggestion:
+            return ()
+        links = suggestion.get("links") or []
+        return tuple(
+            search.SearchCandidate(
+                url=search.strip_utm_source(link),
+                title=link,
+                source_type=SUGGESTED_LINK_SOURCE_TYPE,
+            )
+            for link in links[:MAX_SUGGESTED_LINKS]
+        )
+
+    def _search_templates(self) -> tuple[search.QueryTemplate, ...]:
+        """The pinned templates, plus one extra when the claim names type codes."""
+        suggestion = self.motorbike.suggestion
+        codes = (suggestion or {}).get("type_codes") or []
+        if not codes:
+            return search.QUERY_TEMPLATES
+        terms = " ".join(codes[:MAX_TYPE_CODE_TERMS])
+        extra_template = search.QueryTemplate(
+            SourceType.TECHNICAL, f'"{{name}}" {terms} motorcycle specifications'
+        )
+        return (*search.QUERY_TEMPLATES, extra_template)
 
     async def _fetch_stage(self, candidates: tuple[search.SearchCandidate, ...]) -> None:
         """Fetch, extract and store every candidate, counting them as it goes."""
@@ -367,6 +428,45 @@ class _Run:
         outcome = await spec_extraction_service.extract_draft_spec(self.session, self.motorbike)
         if isinstance(outcome, spec_extraction_service.ExtractionFailure):
             self._warn(outcome.detail)
+            return
+
+        for warning in outcome.identity_warnings:
+            self._warn(warning)
+        self._warn_on_suggestion_contradiction(outcome.extracted)
+
+    def _warn_on_suggestion_contradiction(self, extracted: extraction.ExtractedSpec) -> None:
+        """D13: record — never resolve — a claim the sources contradict.
+
+        The claim (`motorbike.suggestion`) and the finding (the just-extracted
+        values) are compared; neither overwrites the other, the run only
+        records both through `_warn` and the reviewer decides.
+        """
+        suggestion = self.motorbike.suggestion
+        if not suggestion:
+            return
+
+        claimed_year_from = suggestion.get("year_from")
+        if (
+            claimed_year_from is not None
+            and extracted.year_from is not None
+            and (extracted.year_from, extracted.year_to)
+            != (claimed_year_from, suggestion.get("year_to"))
+        ):
+            self._warn(
+                CLAIM_YEAR_WARNING.format(
+                    claimed=_year_range(claimed_year_from, suggestion.get("year_to")),
+                    found=_year_range(extracted.year_from, extracted.year_to),
+                )
+            )
+
+        claimed_codes = suggestion.get("type_codes") or []
+        found_codes = extracted.type_codes
+        if claimed_codes and found_codes and not (set(claimed_codes) & set(found_codes)):
+            self._warn(
+                CLAIM_CODE_WARNING.format(
+                    claimed="/".join(claimed_codes), found="/".join(found_codes)
+                )
+            )
 
     async def _embedding_stage(self) -> None:
         """Chunk the stored documents and embed them; a failure is a warning.
@@ -433,6 +533,27 @@ class _Run:
     def _warn(self, detail: str) -> None:
         """Record a partial failure; the adapters already logged it once."""
         self.warnings.append(detail)
+
+
+def _year_range(year_from: int | None, year_to: int | None) -> str:
+    """Render a `(year_from, year_to)` pair for a warning message."""
+    if year_from is None:
+        return "?"
+    return f"{year_from}-{year_to}" if year_to is not None else f"{year_from}-"
+
+
+def _dedupe_by_url(
+    candidates: tuple[search.SearchCandidate, ...],
+) -> tuple[search.SearchCandidate, ...]:
+    """Drop a later candidate sharing an earlier one's URL, order preserved."""
+    seen: set[str] = set()
+    deduped: list[search.SearchCandidate] = []
+    for candidate in candidates:
+        if candidate.url in seen:
+            continue
+        seen.add(candidate.url)
+        deduped.append(candidate)
+    return tuple(deduped)
 
 
 def _fetch_progress(index: int, total: int) -> int:

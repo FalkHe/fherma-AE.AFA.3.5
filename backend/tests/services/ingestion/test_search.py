@@ -185,6 +185,7 @@ def run(
     server: FakeTavily | FakeOpenRouter,
     *,
     gate: RecordingGate | None = None,
+    templates: tuple[search.QueryTemplate, ...] | None = None,
 ) -> search.SearchResults:
     """Run one provider search against the scripted API."""
 
@@ -193,7 +194,12 @@ def run(
             transport=httpx2.MockTransport(server.handle),
             headers={"User-Agent": fetch.USER_AGENT},
         ) as client:
-            return await provider.search(NAME, client=client, gate=gate or RecordingGate())
+            kwargs: dict[str, Any] = {}
+            if templates is not None:
+                kwargs["templates"] = templates
+            return await provider.search(
+                NAME, client=client, gate=gate or RecordingGate(), **kwargs
+            )
 
     return asyncio.run(call())
 
@@ -639,3 +645,69 @@ def test_pinned_call_shape_and_templates_match_the_phase_contract() -> None:
         (SourceType.TECHNICAL, '"{name}" technical data specifications'),
         (SourceType.MAGAZINE, '"{name}" review test'),
     ]
+
+
+# --- the `templates` keyword (step 6.17) ----------------------------------------
+
+
+def test_tavily_defaults_to_the_pinned_templates(
+    provider: search.TavilySearchProvider,
+) -> None:
+    """Omitting `templates` is byte-identical to today: the module constant runs."""
+    server = FakeTavily()
+
+    results = run(provider, server)
+
+    assert server.queries == [PRODUCT_QUERY, TECHNICAL_QUERY, MAGAZINE_QUERY]
+    assert len(results.candidates) == 6
+
+
+def test_tavily_runs_the_templates_it_is_given_instead_of_the_module_constant(
+    provider: search.TavilySearchProvider,
+    settings_override: Callable[..., None],
+) -> None:
+    # The default cap (6) is exactly filled by the three pinned templates'
+    # two results each, so the extra (4th) template never gets to run unless
+    # the cap is raised — a fact about the cap, not about `templates`.
+    settings_override(INGESTION_MAX_WEB_DOCUMENTS=8)
+    extra_query = f'"{NAME}" K80 K81 motorcycle specifications'
+    templates = (
+        *search.QUERY_TEMPLATES,
+        search.QueryTemplate(SourceType.TECHNICAL, '"{name}" K80 K81 motorcycle specifications'),
+    )
+    script = _default_script()
+    script[extra_query] = [_result("https://oem.test/k80", "Type K80 data sheet")]
+    server = FakeTavily(script)
+
+    results = run(provider, server, templates=templates)
+
+    assert server.queries == [PRODUCT_QUERY, TECHNICAL_QUERY, MAGAZINE_QUERY, extra_query]
+    assert results.candidates[-1].url == "https://oem.test/k80"
+
+
+def test_openrouter_runs_the_templates_it_is_given_instead_of_the_module_constant(
+    openrouter_provider: search.OpenRouterSearchProvider,
+    settings_override: Callable[..., None],
+) -> None:
+    settings_override(INGESTION_MAX_WEB_DOCUMENTS=8)
+    extra_query = f'"{NAME}" K80 K81 motorcycle specifications'
+    templates = (
+        *search.QUERY_TEMPLATES,
+        search.QueryTemplate(SourceType.TECHNICAL, '"{name}" K80 K81 motorcycle specifications'),
+    )
+    script = _default_openrouter_script()
+    script[extra_query] = _completion(_citation("https://oem.test/k80", "Type K80 data sheet"))
+    server = FakeOpenRouter(script)
+
+    results = run(openrouter_provider, server, templates=templates)
+
+    assert server.queries == [PRODUCT_QUERY, TECHNICAL_QUERY, MAGAZINE_QUERY, extra_query]
+    assert results.candidates[-1].url == "https://oem.test/k80"
+
+
+def test_strip_utm_source_is_the_public_alias_of_the_openrouter_cleaner() -> None:
+    tagged = "https://de.wikipedia.org/wiki/BMW_F_750_GS?utm_source=chatgpt.com"
+    assert search.strip_utm_source(tagged) == "https://de.wikipedia.org/wiki/BMW_F_750_GS"
+    # Every other query parameter is kept verbatim.
+    kept = "https://example.test/page?utm_source=chatgpt.com&lang=de"
+    assert search.strip_utm_source(kept) == "https://example.test/page?lang=de"
