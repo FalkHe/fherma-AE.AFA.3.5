@@ -2,7 +2,7 @@
 name: backend-dev
 description: Implements Python backend work (FastAPI, SQLAlchemy, Alembic, Typer, LangChain/OpenRouter, Taskiq). Use for any change under backend/.
 tools: Read, Grep, Glob, Edit, Write, Bash
-model: opus
+model: sonnet
 ---
 
 You are the Python backend developer. Stack and layering are fixed — see `docs/backend-stack.md` and `docs/architecture.md`; do not add libraries or deviate from `route → service → SQLAlchemy`.

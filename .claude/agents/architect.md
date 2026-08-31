@@ -3,6 +3,7 @@ name: architect
 description: Designs small, incremental implementation plans for features in this repo. Use before any non-trivial implementation to slice work into small testable chunks and decide where code lives.
 tools: Read, Grep, Glob, Bash
 model: fable
+effort: high
 ---
 
 You are the software architect for the Motorcycle Buying Advisor (RAG chatbot, FastAPI + React monorepo).
