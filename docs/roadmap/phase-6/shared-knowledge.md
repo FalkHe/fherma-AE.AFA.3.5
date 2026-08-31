@@ -692,5 +692,16 @@ contract and does not appear here is not finished.
   schema adds a read-side id and simplify this away if so.
 - D6 boundary is enforced by two tests in `ModelClaimPanel.test.tsx`: a
   `// @ts-expect-error` compile assertion that `suggestion` is not a member of
-  `CatalogueModelDetail`, and a filesystem scan asserting `ModelClaimPanel` is
-  imported by `ModelIdentityPanel.tsx` only within `frontend/src/components/`.
+  `CatalogueModelDetail`, and an import-graph scan (Vite's `import.meta.glob`
+  over `./*.tsx` with `{ query: "?raw", import: "default", eager: true }`, not
+  `node:fs`/`node:path` — this project's `tsconfig.app.json` carries no `node`
+  types and zero new dependencies is a hard rule) asserting `ModelClaimPanel`
+  is imported by `ModelIdentityPanel.tsx` only within `frontend/src/components/`.
+- Fixed after a coordinator-caught `pnpm typecheck` (the real gate — `tsc -b
+  --force`, not `tsc --noEmit`) failure: `TFunction` is exported by `i18next`,
+  not `react-i18next` (match `specFields.ts`'s import); a `t()` call needs a
+  **literal** key argument under this project's typed-i18n config — a
+  server-set RHF error message or a locally-tracked error-key string must be
+  routed through an exhaustive `switch` (`translateIdentityErrorKey`,
+  `defaultFieldErrorMessage` in `ModelIdentityPanel.tsx`) that calls `t()` with
+  a literal at every branch, never `t(someStringVariable)` directly.
