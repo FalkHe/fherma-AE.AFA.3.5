@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from app.cli.main import app as cli
 from app.db.models.manufacturer import Manufacturer
-from app.db.models.motorbike import Motorbike
+from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.services import manufacturer_service, product_service
 from tests.services.conftest import FakeAsyncSession
 
@@ -292,3 +292,119 @@ def test_set_identity_duplicate_slug_exits_one(fake_session: FakeAsyncSession) -
     assert "bmw/r-1250-gs/2019-2023" in result.stderr
     assert other.model_name is None
     assert other.slug != first.slug
+
+
+# --- `app catalogue backfill-identity` (step 6.18) --------------------------
+
+
+def test_backfill_identity_strips_the_manufacturer_prefix(
+    fake_session: FakeAsyncSession,
+) -> None:
+    manufacturer = asyncio.run(manufacturer_service.get_or_create(fake_session, "BMW"))
+    motorbike = asyncio.run(product_service.create_backlog(fake_session, "BMW S 1000 XR"))
+    motorbike.manufacturer_id = manufacturer.id
+
+    result = runner.invoke(cli, ["catalogue", "backfill-identity"])
+
+    assert result.exit_code == 0, result.output
+    assert motorbike.model_name == "S 1000 XR"
+    assert "S 1000 XR" in result.stdout
+
+
+def test_backfill_identity_keeps_query_name_verbatim_without_a_prefix_match(
+    fake_session: FakeAsyncSession,
+) -> None:
+    manufacturer = asyncio.run(manufacturer_service.get_or_create(fake_session, "Suzuki"))
+    motorbike = asyncio.run(product_service.create_backlog(fake_session, "GSR 600"))
+    motorbike.manufacturer_id = manufacturer.id
+
+    result = runner.invoke(cli, ["catalogue", "backfill-identity"])
+
+    assert result.exit_code == 0, result.output
+    assert motorbike.model_name == "GSR 600"
+
+
+def test_backfill_identity_leaves_suggestion_untouched(fake_session: FakeAsyncSession) -> None:
+    manufacturer = asyncio.run(manufacturer_service.get_or_create(fake_session, "BMW"))
+    motorbike = asyncio.run(product_service.create_backlog(fake_session, "BMW S 1000 XR"))
+    motorbike.manufacturer_id = manufacturer.id
+    motorbike.suggestion = {"links": ["https://example.invalid"], "year_from": 1999}
+
+    result = runner.invoke(cli, ["catalogue", "backfill-identity"])
+
+    assert result.exit_code == 0, result.output
+    assert motorbike.suggestion == {"links": ["https://example.invalid"], "year_from": 1999}
+
+
+def test_backfill_identity_dry_run_writes_nothing(fake_session: FakeAsyncSession) -> None:
+    manufacturer = asyncio.run(manufacturer_service.get_or_create(fake_session, "BMW"))
+    motorbike = asyncio.run(product_service.create_backlog(fake_session, "BMW S 1000 XR"))
+    motorbike.manufacturer_id = manufacturer.id
+    commits_before = fake_session.commit_count
+
+    result = runner.invoke(cli, ["catalogue", "backfill-identity", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "WOULD SET" in result.stdout
+    assert "S 1000 XR" in result.stdout
+    assert motorbike.model_name is None
+    assert fake_session.commit_count == commits_before
+
+
+def test_backfill_identity_rows_without_a_manufacturer_are_listed_as_skipped(
+    fake_session: FakeAsyncSession,
+) -> None:
+    motorbike = asyncio.run(product_service.create_backlog(fake_session, "Mystery Bike"))
+
+    result = runner.invoke(cli, ["catalogue", "backfill-identity"])
+
+    assert result.exit_code == 0, result.output
+    assert f"SKIPPED {motorbike.slug}" in result.stdout
+    assert motorbike.model_name is None
+
+
+def test_backfill_identity_reports_a_collision_and_leaves_the_row(
+    fake_session: FakeAsyncSession,
+) -> None:
+    manufacturer = asyncio.run(manufacturer_service.get_or_create(fake_session, "BMW"))
+    first = asyncio.run(product_service.create_backlog(fake_session, "BMW R 1250 GS import 1"))
+    first.manufacturer_id = manufacturer.id
+    first.year_from = 2019
+    first.query_name = "BMW R 1250 GS"
+    second = asyncio.run(product_service.create_backlog(fake_session, "BMW R 1250 GS import 2"))
+    second.manufacturer_id = manufacturer.id
+    second.year_from = 2019
+    second.query_name = "BMW R 1250 GS"
+    second_original_slug = second.slug
+
+    result = runner.invoke(cli, ["catalogue", "backfill-identity"])
+
+    assert result.exit_code == 0, result.output
+    assert first.model_name == "R 1250 GS"
+    assert first.slug == "bmw/r-1250-gs/2019-"
+    assert "COLLISION" in result.stdout
+    assert "bmw/r-1250-gs/2019-" in result.stdout
+    assert second.model_name is None
+    assert second.slug == second_original_slug
+
+
+def test_backfill_identity_prints_the_gap_table_and_flags_approved_rows(
+    fake_session: FakeAsyncSession,
+) -> None:
+    backlog_gap = asyncio.run(product_service.create_backlog(fake_session, "Backlog Gap Bike"))
+    approved_gap = asyncio.run(product_service.create_backlog(fake_session, "Approved Gap Bike"))
+    # Bypass `transition` (the DB CHECK constraint this step also adds is the
+    # real guard) to park a row `approved` without a year range, the same way
+    # `tests/services/test_product_service.py::_in_status` does.
+    approved_gap.status = MotorbikeStatus.APPROVED
+    complete = asyncio.run(product_service.create_backlog(fake_session, "Complete Bike"))
+    complete.year_from = 2020
+
+    result = runner.invoke(cli, ["catalogue", "backfill-identity"])
+
+    assert result.exit_code == 0, result.output
+    lines = result.stdout.splitlines()
+    gap_lines = lines[lines.index("--- Rows still missing a year range ---") + 1 :]
+    assert f"{backlog_gap.slug} (backlog)" in gap_lines
+    assert f"{approved_gap.slug} (approved) [APPROVED]" in gap_lines
+    assert not any(line.startswith(complete.slug) for line in gap_lines)

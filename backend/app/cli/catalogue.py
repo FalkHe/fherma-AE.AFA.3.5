@@ -18,6 +18,16 @@ it is safe to run against the live catalogue.
   writer of that block (D2) — and prints the row's (possibly recomputed)
   slug. It is the first caller of `assign_identity`; 6.18's backfill and the
   admin PATCH (6.20) call the same service function later.
+- `app catalogue backfill-identity` (step 6.18) is the deterministic,
+  never-re-ingestion backfill of `model_name` (the 2b rule: a fresh ingestion
+  run would delete that bike's documents and embeddings). For every row whose
+  `model_name IS NULL` and `manufacturer_id IS NOT NULL` it derives
+  `model_name` mechanically — the FK'd manufacturer's name stripped as a
+  case-insensitive prefix of `query_name`, verbatim `query_name` otherwise —
+  and writes it through `assign_identity`, unchanged `buildingline`/
+  `year_from`/`year_to`/`type_codes`/`variants`. Never reads `suggestion`
+  (D6). Then prints the pinned gap table of every row still missing a year
+  range, approved ones flagged (OQ-6/D4). `--dry-run` writes nothing.
 
 Follows the CLI async pattern of `app.cli.ingest`: the Typer command body stays
 synchronous and calls `asyncio.run(...)`.
@@ -28,8 +38,10 @@ import json
 from typing import Annotated, NoReturn
 
 import typer
+from sqlalchemy import select
 
 from app.db.models.manufacturer import Manufacturer
+from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.session import get_sessionmaker
 from app.services import manufacturer_service, naming_service, product_service
 
@@ -216,6 +228,99 @@ async def _set_identity(
         except product_service.DuplicateModelError as error:
             _fail(f"A catalogue entry with slug {error.args[0]!r} already exists.")
         return updated.slug
+
+
+@app.command("backfill-identity")
+def backfill_identity(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print what would change; write nothing."),
+    ] = False,
+) -> None:
+    """Derive `model_name` for every FK'd row that still lacks one.
+
+    Strips the FK'd manufacturer's name as a case-insensitive prefix of
+    `query_name` (`"BMW S 1000 XR"` − `"BMW"` → `"S 1000 XR"`), falling back
+    to `query_name` verbatim when it does not start with the manufacturer's
+    name. Writes through `product_service.assign_identity` (D2), passing the
+    row's current `buildingline`/`year_from`/`year_to`/`type_codes`/`variants`
+    unchanged — deterministic, never re-ingestion (the 2b rule), never reads
+    `suggestion` (D6). A recomputed-slug collision (`DuplicateModelError`) is
+    printed and the row is left unchanged, never deleted. Rows without a
+    `manufacturer_id` are listed as skipped, never touched. Finishes by
+    printing every row still missing a year range (`year_from IS NULL`),
+    flagging approved ones (OQ-6/D4). `--dry-run` prints what would be set and
+    writes nothing.
+    """
+    for line in asyncio.run(_backfill_identity(dry_run=dry_run)):
+        typer.echo(line)
+
+
+async def _backfill_identity(*, dry_run: bool) -> list[str]:
+    lines: list[str] = []
+    async with get_sessionmaker()() as session:
+        result = await session.execute(select(Motorbike).where(Motorbike.model_name.is_(None)))
+        candidates = sorted(result.scalars().all(), key=lambda motorbike: motorbike.slug)
+
+        fk_rows = [motorbike for motorbike in candidates if motorbike.manufacturer_id is not None]
+        skipped_rows = [motorbike for motorbike in candidates if motorbike.manufacturer_id is None]
+        manufacturers = await manufacturer_service.get_by_ids(
+            session, [motorbike.manufacturer_id for motorbike in fk_rows]
+        )
+
+        for motorbike in fk_rows:
+            manufacturer = manufacturers[motorbike.manufacturer_id]
+            model_name = _strip_manufacturer_prefix(motorbike.query_name, manufacturer.name)
+            if dry_run:
+                lines.append(f"WOULD SET {motorbike.slug}: model_name={model_name!r}")
+                continue
+            try:
+                updated = await product_service.assign_identity(
+                    session,
+                    motorbike,
+                    manufacturer_id=motorbike.manufacturer_id,
+                    buildingline=motorbike.buildingline,
+                    model_name=model_name,
+                    year_from=motorbike.year_from,
+                    year_to=motorbike.year_to,
+                    type_codes=motorbike.type_codes or [],
+                    variants=motorbike.variants or [],
+                )
+            except product_service.DuplicateModelError as error:
+                lines.append(
+                    f"COLLISION {motorbike.slug}: recomputed slug {error.args[0]!r} already "
+                    "exists, left unchanged"
+                )
+                continue
+            lines.append(f"SET {motorbike.slug}: model_name={model_name!r} (slug {updated.slug!r})")
+
+        for motorbike in skipped_rows:
+            lines.append(f"SKIPPED {motorbike.slug}: no manufacturer_id")
+
+        lines.append("--- Rows still missing a year range ---")
+        gap_result = await session.execute(select(Motorbike).where(Motorbike.year_from.is_(None)))
+        gap_rows = sorted(gap_result.scalars().all(), key=lambda motorbike: motorbike.slug)
+        if not gap_rows:
+            lines.append("(none)")
+        for motorbike in gap_rows:
+            flag = " [APPROVED]" if motorbike.status is MotorbikeStatus.APPROVED else ""
+            lines.append(f"{motorbike.slug} ({motorbike.status.value}){flag}")
+    return lines
+
+
+def _strip_manufacturer_prefix(query_name: str, manufacturer_name: str) -> str:
+    """Return `query_name` minus `manufacturer_name`'s case-insensitive prefix.
+
+    `"BMW S 1000 XR"` − `"BMW"` → `"S 1000 XR"`. When `query_name` does not
+    start with `manufacturer_name` (case-insensitively), or stripping it would
+    leave nothing behind, `query_name` is kept verbatim (never an empty
+    `model_name`).
+    """
+    if query_name.lower().startswith(manufacturer_name.lower()):
+        stripped = query_name[len(manufacturer_name) :].strip()
+        if stripped:
+            return stripped
+    return query_name
 
 
 def _fail(message: str) -> NoReturn:

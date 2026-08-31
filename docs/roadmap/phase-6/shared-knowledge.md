@@ -1288,3 +1288,56 @@ to make the constraint pass, and do not force the status with SQL.
 
 The backfill's mechanical half (`model_name` = `query_name` minus the FK'd
 manufacturer prefix) is unaffected and applies to all 15.
+
+### Step 6.18
+
+- Migration `c81874f63d70` (`down_revision = "d6545d99f81a"`) is **the phase's
+  final head** — all four pinned migrations are now landed. Adds
+  `ck_motorbikes_approved_identity_complete` (`status <> 'approved' OR
+  (manufacturer_id IS NOT NULL AND model_name IS NOT NULL AND year_from IS
+  NOT NULL)`), `NOT VALID` then `VALIDATE`d in the same migration, via plain
+  `op.execute` on both the create **and** the drop in `downgrade()` — not
+  `op.drop_constraint`, which would re-apply the `ck_` naming-convention
+  prefix on top of the already-prefixed literal name and fail to find it.
+  Round trip (`upgrade head` → `downgrade -1` → `upgrade head`) proven inside
+  the container; the constraint bites (`UPDATE motorbikes SET model_name =
+  NULL WHERE status='approved'` rejected, nothing committed).
+- `app catalogue backfill-identity [--dry-run]` (new command in
+  `backend/app/cli/catalogue.py`) derives `model_name` for every row with
+  `model_name IS NULL AND manufacturer_id IS NOT NULL`, writes through
+  `assign_identity` unchanged `buildingline`/`year_from`/`year_to`/
+  `type_codes`/`variants`, reports `DuplicateModelError` collisions and
+  no-manufacturer skips, then prints every row still missing `year_from`
+  (approved ones flagged `[APPROVED]`). Deterministic and idempotent — a
+  second run against an already-backfilled DB sets nothing.
+- The 15 approved rows found with a NULL identity all had 2–7 ingested source
+  documents; all 15 were sourced from those documents (never `suggestion`,
+  never the agent's own knowledge) via `app catalogue set-identity`. Final
+  canonical slugs, all 16 approved rows now slash-shaped:
+  `bmw/r-1250-gs/2019-2023`, `honda/africa-twin/1988-`,
+  `honda/cb650r/2019-`, `honda/cbr500r/2013-`, `kawasaki/ninja-650/2006-`
+  (pre-existing, from 6.15), `kawasaki/versys-650/2007-`,
+  `kawasaki/z400/2019-`, `kawasaki/z900/2017-`, `ktm/390-duke/2013-`,
+  `suzuki/gsr600/2006-2011`, `suzuki/sv650/1999-`,
+  `triumph/street-triple-765/2018-`, `yamaha/mt-07/2014-`,
+  `yamaha/mt-09/2014-`, `yamaha/tracer-9/2021-`, `yamaha/yzf-r3/2015-`.
+- **Two rows (`honda-africa-twin` → `Africa Twin`, `suzuki-sv650` →
+  `SV650`) carry a generic, non-generation-qualified `query_name`/
+  `model_name`** whose sources describe a decades-long nameplate spanning
+  several genuinely distinct generations (Africa Twin: XRV650 1988 → XRV750T
+  1990 → CRF1000L 2016 → CRF1100L 2020; SV650: 1999 → 2003 → Gladius 2009 →
+  2017). Backfill only derives `model_name`, never splits a row into
+  generations, so `year_from` was sourced as the nameplate's documented
+  first-production year (1988 / 1999 respectively), open-ended. This is
+  **not** a per-D1-definition "generation" row and is recorded here, not
+  silently fixed — a future step that wants per-generation Africa Twin/SV650
+  rows needs an explicit split, which is out of 6.18's scope.
+- Observed, not caused by this step: an unrelated background process
+  (already-queued jobs, picked up when `app-worker` restarted mid-session)
+  ran several `app ingest run`-equivalent ingestions during this step's live
+  work, moving `in_review` from 2 → 4 (`aprilia-tuono-125`,
+  `ducati/1200/2014-` newly `in_review`, alongside the pre-existing
+  `bmw/f-750-gs/2018-`, `bmw/r-1200-gs/2004-2012`). `total` (208) and
+  `approved` (16) — the counts this step actually touches — are unaffected;
+  the constraint only guards `approved`. Neither `app ingest run` nor `app
+  jobs enqueue` was invoked by this step.
