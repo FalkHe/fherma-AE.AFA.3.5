@@ -802,8 +802,24 @@ contract and does not appear here is not finished.
   one of them. A row whose stored documents do not state a range is left
   unapproved and printed, per OQ-6.
 - Corpus totals at the same head: 208 motorbikes, 200 carrying a `suggestion`
-  claim. `kawasaki-z400`/`kawasaki-z900` (`Kawasaki`) and `kawasaki-versys-650`
-  (`Kawasaki Motors`) are present as D14's real merge corpus for 6.16.
+  claim.
+- **Correction (same day, verified by psql): D14's "real merge corpus" for 6.16
+  no longer exists.** An earlier version of this note claimed
+  `kawasaki-versys-650` sat on `Kawasaki Motors`; that was inferred from slugs
+  and is wrong. All three Kawasaki rows (`z400`, `z900`, `versys-650`) are on
+  the single canonical `Kawasaki` manufacturer, and there is **no
+  `Kawasaki Motors` row in `manufacturers` at all** — the full set is
+  `BMW, Honda, Kawasaki, KTM, Suzuki, Triumph, Yamaha`. So 6.16's data-merge
+  half has nothing to merge and its "none on Kawasaki Motors" check is already
+  trivially true. 6.16 still lands `normalize_name` + `KNOWN_MARQUES` (the
+  point is preventing the split from recurring, and every caller inherits it),
+  and its **CLI probe becomes the primary live proof**: `app catalogue
+  set-manufacturer kawasaki-versys-650 "Kawasaki Motors"` must re-point to the
+  existing `Kawasaki` row without growing `manufacturers`.
+- The `KNOWN_MARQUES` tuple in `step-6.16.md` was verified against
+  `backend/resources/bike-list.txt` and is **exactly right** as written:
+  `Aprilia, BMW, Ducati, Harley-Davidson, Honda, Kawasaki, KTM, Suzuki,
+  Triumph, Yamaha`.
 - 6.12's live proof was run by the coordinator (the step's agent had no Docker):
   `app catalogue set-identity bmw-r-1250-gs-adventure --manufacturer BMW
   --model-name "R 1250 GS Adventure" --year-from 2019 --year-to 2023` →
