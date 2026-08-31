@@ -1140,3 +1140,38 @@ phase's open questions, not here.
   `variants = []`) — both rows are genuine `in_review` ingestion outputs in
   the dev DB now, not synthetic scaffolding; 6.17/6.18/QA may re-ingest or
   clear either.
+
+### Coordinator note (2026-08-31) — M1 debt #2 cleared: the live 422 is proven
+
+6.15's live verification left two genuine `in_review` rows in the dev DB
+(`bmw/r-1200-gs/2004-2012`, `kawasaki/ninja-650/2006-`), which finally made the
+D4 guard reachable through the real API. Both directions were proven live by
+the coordinator:
+
+- **Refusal.** With `model_name` temporarily set to NULL on the Ninja row,
+  `PATCH /api/products/{id}` `{"status":"approved"}` returned
+  **422 `incomplete-identity`**, detail `"Cannot approve: identity is
+  incomplete, missing model_name."` The `model_name` was then restored.
+- **Acceptance.** The same PATCH with the identity complete returned **200**
+  and the row is now `approved` with slug `kawasaki/ninja-650/2006-` — D3's
+  open-ended shape (`year_to IS NULL` → trailing hyphen), produced by the
+  extraction path rather than by hand. Approved-row count is now **16**.
+
+**The M1 coordinator note's deferred item 2 is therefore closed** and 6.30 no
+longer owes it; 6.30 should still drive the refusal through the *review screen*
+once 6.27 exists, but the API-level guarantee is established. **Deferred item 1
+(the escalated name) is still open** — the corpus still contains no two rows
+sharing `manufacturer_id` + `model_name`, so no genuine collision exists yet.
+
+Also recorded from 6.15's live run, because later steps meet it:
+
+- `bmw/r-1200-gs/2004-2012` was extracted as **2004–2012**, while the M3
+  milestone criterion in this document says **2004–2018**. Neither is a bug in
+  6.15 — the fetched English sources bound the generation differently from the
+  claim. This is exactly the claim-vs-finding case 6.17 records and 6.30
+  adjudicates; do **not** "fix" it by editing the row.
+- `type_codes` came back `[]` for that row: the fetched sources never print
+  `K25`/`K50` (verified against `content_markdown`), and D6 forbids extraction
+  from reading the `suggestion` claim that carries them. **This is the gap
+  6.17 exists to close** (search the claimed type codes), not an infrastructure
+  failure.
