@@ -42,8 +42,10 @@ from app.llm.agents.tools import (
     spec_comparison,
 )
 from app.llm.query_translation import SpecFilters
-from app.services import catalogue_search_service, cost_data, product_service
+from app.services import catalogue_search_service, cost_data, product_service, rag_pipeline_service
 from app.services.catalogue_search_service import COMPARISON_SPEC_FIELDS, VerifiedSpecs
+from app.services.rag_pipeline_service import RagResult
+from app.services.retrieval_service import RetrievedChunk
 
 BIKE_A = "01J0BIKE0000000000000000AA"
 BIKE_B = "01J0BIKE0000000000000000BB"
@@ -540,3 +542,132 @@ def test_cost_estimator_rejects_a_call_it_cannot_cost(
         _execute(cost_estimator.NAME, ctx, arguments)
 
     assert ctx.collector.tool_calls == []
+
+
+# --- retrieve_bike_knowledge (step 6.14: fencing sourceTitle and headingPath) --
+
+
+def _chunk(
+    *,
+    source_title: str = "Document doc-1",
+    heading_path: str | None = "Honda CB500F > Verdict",
+) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id="chunk-1",
+        motorbike_id=BIKE_A,
+        text="Plain prose.",
+        score=0.9,
+        source_document_id="doc-1",
+        source_url="https://example.test/doc-1",
+        source_title=source_title,
+        heading_path=heading_path,
+        page_number=None,
+        sequence=1,
+    )
+
+
+def _result(*chunks: RetrievedChunk) -> retrieve_bike_knowledge.RetrieveBikeKnowledgeResult:
+    return retrieve_bike_knowledge.RetrieveBikeKnowledgeResult(
+        queries=["q"],
+        applied_filters={},
+        candidate_motorbike_ids=[BIKE_A],
+        snippets=[retrieve_bike_knowledge._snippet(chunk) for chunk in chunks],
+    )
+
+
+@pytest.fixture
+def rag(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Stub `rag_pipeline_service.retrieve` to return one scripted `RagResult`."""
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.result: RagResult = RagResult(
+                queries=["q"], applied_filters={}, candidate_motorbike_ids=[], chunks=[]
+            )
+
+    recorder = _Recorder()
+
+    async def retrieve(session: Any, utterance: str, **kwargs: Any) -> RagResult:
+        return recorder.result
+
+    monkeypatch.setattr(rag_pipeline_service, "retrieve", retrieve)
+    return recorder
+
+
+def test_model_view_fences_text_source_title_and_heading_path(ctx: tools.ToolContext) -> None:
+    """Every attacker-controlled field gets exactly one sentinel pair (D7)."""
+    result = _result(_chunk())
+
+    view = retrieve_bike_knowledge._model_view(result)
+
+    (snippet,) = view["snippets"]
+    for field in ("text", "sourceTitle", "headingPath"):
+        assert snippet[field].startswith(retrieve_bike_knowledge.FENCE_START)
+        assert snippet[field].endswith(retrieve_bike_knowledge.FENCE_END)
+        assert snippet[field].count(retrieve_bike_knowledge.FENCE_START) == 1
+        assert snippet[field].count(retrieve_bike_knowledge.FENCE_END) == 1
+
+
+def test_model_view_truncates_title_and_heading_path_before_fencing(
+    ctx: tools.ToolContext,
+) -> None:
+    """A title/trail longer than the cap is cut first, so a sentinel is never cut."""
+    long_title = "T" * 500
+    long_path = "P" * 500
+    result = _result(_chunk(source_title=long_title, heading_path=long_path))
+
+    view = retrieve_bike_knowledge._model_view(result)
+
+    (snippet,) = view["snippets"]
+    assert snippet["sourceTitle"] == retrieve_bike_knowledge._fenced_text(
+        long_title[: retrieve_bike_knowledge.MODEL_VIEW_TITLE_CHARS]
+    )
+    assert snippet["headingPath"] == retrieve_bike_knowledge._fenced_text(
+        long_path[: retrieve_bike_knowledge.MODEL_VIEW_HEADING_PATH_CHARS]
+    )
+    # The cap bites before fencing: the fenced string never contains the tail.
+    assert "T" * retrieve_bike_knowledge.MODEL_VIEW_TITLE_CHARS + "T" not in snippet["sourceTitle"]
+
+
+def test_model_view_never_fences_a_null_heading_path(ctx: tools.ToolContext) -> None:
+    """`headingPath=None` (no ATX heading above the chunk) stays `None`, unfenced."""
+    result = _result(_chunk(heading_path=None))
+
+    view = retrieve_bike_knowledge._model_view(result)
+
+    (snippet,) = view["snippets"]
+    assert snippet["headingPath"] is None
+
+
+def test_execute_records_the_plain_dump_while_the_model_view_is_fenced(
+    ctx: tools.ToolContext, rag: Any
+) -> None:
+    """The 5.8 pin, still true after 6.14: recorded == plain `model_dump`, fences
+    and caps appear only in the value handed to the model.
+    """
+    long_title = "T" * 500
+    chunk = _chunk(source_title=long_title, heading_path="H" * 500)
+    rag.result = RagResult(
+        queries=["q"], applied_filters={}, candidate_motorbike_ids=[BIKE_A], chunks=[chunk]
+    )
+
+    payload = _execute(retrieve_bike_knowledge.NAME, ctx, {"query": "How is it regarded?"})
+
+    (entry,) = ctx.collector.tool_calls
+    snippet = retrieve_bike_knowledge._snippet(chunk)
+    result = retrieve_bike_knowledge.RetrieveBikeKnowledgeResult(
+        queries=["q"], applied_filters={}, candidate_motorbike_ids=[BIKE_A], snippets=[snippet]
+    )
+    plain = result.model_dump(by_alias=True)
+
+    assert entry["result"] == plain
+    assert entry["result"]["snippets"][0]["sourceTitle"] == long_title
+    assert entry["result"]["snippets"][0]["text"] == chunk.text
+    assert retrieve_bike_knowledge.FENCE_START not in json.dumps(entry["result"])
+
+    # What the model actually received (the tool's JSON return, per `execute`).
+    assert payload != plain
+    (model_snippet,) = payload["snippets"]
+    assert model_snippet["sourceTitle"] != long_title
+    assert model_snippet["sourceTitle"].startswith(retrieve_bike_knowledge.FENCE_START)
+    assert len(long_title) > retrieve_bike_knowledge.MODEL_VIEW_TITLE_CHARS

@@ -947,3 +947,38 @@ Also recorded, because they are state a later step will meet:
 - `bmw-r-1250-gs-adventure` is an identified **`backlog`** row whose year range
   came from the step file, **not** from a source document. Treat it as test
   scaffolding, not reviewed catalogue data — 6.18 should re-source or clear it.
+
+### Step 6.14
+
+- `retrieve_bike_knowledge.py` module constants `MODEL_VIEW_TITLE_CHARS = 160`
+  and `MODEL_VIEW_HEADING_PATH_CHARS = 160` (justified in a comment: both
+  columns allow 512 chars, the trail repeats on every chunk, worst case
+  `MAX_SNIPPETS = 6` x (512+512) ~= 6 KB before sentinels). `_model_view` now
+  fences three snippet fields — `text`, `sourceTitle`, `headingPath` — each
+  **truncated to its cap before fencing**; `headingPath: None` is never
+  fenced. `execute`'s recorded payload (`tool_calls[].result` / `sources[]`)
+  stays the plain, untruncated, unfenced `model_dump` — the 5.8 pin extends
+  cleanly to the two new fields. **6.19 and 6.23 must not drop these three
+  fences** when they next edit this file's payloads (merge-friction list).
+- **Audit 1 verdict (catalogue_search.py / spec_comparison.py):** nothing to
+  change, per D7. Both tools' payloads carry only `name` (approved-row query
+  name) and numeric/enum spec values sourced from
+  `catalogue_search_service`/`COMPARISON_SPEC_FIELDS`; `spec_comparison`
+  already excludes `extra`/`source_hints`/`extracted_at` via
+  `UNCOMPARED_SPEC_FIELDS`. Both pass the admin review gate (approved rows
+  only) — admin-reviewed identity is deliberately not fenced.
+- **Audit 2 verdict (remaining web-sourced columns):** nothing to change, per
+  the Theme-6.8 re-scope — no migration. Confirmed by reading the models:
+  `source_documents.source_title` `String(512)`, `.source_url`
+  `String(2048)`, `.raw_path` `String(512)`; `chunks.heading_path`
+  `String(512)` (chunker-truncated at write, `services/chunking.py`);
+  `motorbike_images.source_url` `String(2048)`. `source_documents
+  .content_markdown` is unbounded `Text`, but model exposure is bounded by
+  `extraction_max_input_chars = 60_000` and the chunk sizes — every web-sourced
+  column already carries a DB bound or an equivalent read-side cap.
+- One pre-existing 5.8-era test needed updating as a direct consequence:
+  `test_a_retrieved_chunk_is_fenced_for_the_model_but_persisted_unfenced`
+  (`tests/llm/agents/test_advisor.py`) asserted exactly one fence pair in the
+  `ToolMessage`; with `sourceTitle` now also fenced (its fixture's
+  `heading_path` is `None`, so only `text`+`sourceTitle` fence) the correct
+  count is two. Updated in place, same fixture, same poisoned string.
