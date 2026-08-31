@@ -17,6 +17,7 @@ from app.db.models.manufacturer import Manufacturer
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus, MotorbikeImage
 from app.db.models.motorbike_spec import MotorbikeSpec, SpecKind
+from app.db.models.motorbike_used_price import MotorbikeUsedPrice
 from app.db.models.operation import Operation, OperationStatus
 from app.db.models.session import Session
 from app.db.models.source_document import SourceDocument, SourceType
@@ -35,6 +36,7 @@ __all__ = [
     "MotorbikeImage",
     "MotorbikeSpec",
     "MotorbikeStatus",
+    "MotorbikeUsedPrice",
     "Operation",
     "OperationStatus",
     "PreferenceFirmness",

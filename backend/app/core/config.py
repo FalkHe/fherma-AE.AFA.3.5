@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     agent_max_tool_steps: int = 8
     agent_timeout_seconds: float = 120
 
+    # Used-price staleness: how many days old a `motorbike_used_prices`
+    # snapshot may be before `used_price_service` reports it as stale. Staleness
+    # is a caveat, never a refusal (D10) — the estimator still uses the price
+    # and names the date.
+    used_price_max_age_days: int = 180
+
     # Observability: Langfuse tracing of chat-model calls, entirely optional.
     # Empty (the default) means `observability_callbacks` attaches nothing and
     # the app behaves byte-identically; all three must be set to enable it.

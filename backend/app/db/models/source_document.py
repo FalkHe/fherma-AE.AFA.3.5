@@ -21,6 +21,11 @@ class SourceType(StrEnum):
     TECHNICAL = "technical"
     MAGAZINE = "magazine"
     UPLOAD = "upload"
+    # A used-price research source page (6.13/D12). Quarantined from RAG
+    # ingestion/embedding, from spec extraction, from re-ingestion deletes and
+    # from the customer-facing `sources[]` projection — enforced in 6.21, not
+    # here.
+    LISTING = "listing"
 
 
 class SourceDocument(ULIDPrimaryKeyMixin, Base):

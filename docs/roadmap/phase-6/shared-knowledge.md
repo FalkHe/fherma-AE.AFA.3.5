@@ -867,3 +867,38 @@ contract and does not appear here is not finished.
   "Market snapshot" chip's concatenated icon-ligature + label text
   (`"scheduleMarket snapshot"`) — same idiom as every other `Icon`-led `Chip`
   already in that suite, not a new pattern.
+
+### Step 6.13
+
+- Migration `d6545d99f81a` (`down_revision = "06db655fd7b4"`) adds
+  `source_type`'s `listing` enum value first, then `motorbike_used_prices`
+  exactly per D9. **6.18 chains its migration onto `d6545d99f81a`.** Round
+  trip proven inside the container; the documented D12 asymmetry was observed
+  directly: after `downgrade -1`, `enum_range(NULL::source_type)` still lists
+  `listing` while the table is gone, and a subsequent `upgrade head` re-adds
+  the table cleanly (`ADD VALUE IF NOT EXISTS` is idempotent).
+- New `app/db/models/motorbike_used_price.py`: `MotorbikeUsedPrice`
+  (`ULIDPrimaryKeyMixin, Base`), `__tablename__ = "motorbike_used_prices"`,
+  UNIQUE `motorbike_id` FK `ondelete="CASCADE"`. Pinned snake_case `sources`
+  entry shape (module docstring): `{"source_document_id", "url", "title",
+  "sample_count", "prices": [int, ...]}` — `sample_count` (row-level and
+  per-source) is `NULL` = unknown, never zero (D8/D9). Registered in
+  `app/db/models/__init__.py`. `SourceType.LISTING = "listing"` added to
+  `app/db/models/source_document.py`.
+- New `app/services/used_price_service.py`: `UsedPriceSnapshot` (frozen/slots
+  dataclass), `get_snapshot`, `upsert_snapshot` (full-object replace, commits
+  then announces `product.updated` via `operation_service.notify`, same
+  after-commit ordering as `product_service._announce`), `delete_snapshot`
+  (commits + announces only when a row existed, returns `bool`), and the
+  module-level `is_stale(as_of, *, now=None)` — strict `>`: exactly
+  `USED_PRICE_MAX_AGE_DAYS` (180) days old is **not** stale, one day older
+  **is**. `get_snapshot` computes `is_stale` at read time off
+  `get_settings().used_price_max_age_days` (D10) — nothing caches it.
+- `used_price_max_age_days: int = 180` landed in `app/core/config.py` and
+  `USED_PRICE_MAX_AGE_DAYS=180` in `.env.dist`, together, in this step only —
+  the phase's one new config key. Verified via `docker compose run --rm
+  app-cli python -c "from app.core.config import get_settings; print
+  (get_settings().used_price_max_age_days)"` → `180`.
+- Not built here, deliberately (per the step's scope): no reader, no writer
+  beyond the service, no CLI — 6.21/6.22 write snapshots, 6.23 wires the
+  estimator/API reader and the `usedPrice` D11 shape.
