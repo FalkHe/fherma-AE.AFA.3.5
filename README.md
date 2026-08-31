@@ -42,6 +42,11 @@ docker compose exec app-web app users set-role <username> admin
 ```
 Visit http://localhost:5173/admin or use main nav to switch to Admin UI
 
+# to stop the stack
+```bash
+make down
+```
+
 ## long version
 
 1. **Clone the repository** and `cd` into it.
