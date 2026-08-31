@@ -19,7 +19,20 @@ import { jsonResponse } from "./network";
  */
 
 type SummaryAttributes = components["schemas"]["CatalogueModelSummaryAttributes"];
-type ModelAttributes = components["schemas"]["CatalogueModelAttributes"];
+/**
+ * `variants` (data-model §2.5, ui-spec §8 API-2) is a local addition — the
+ * generated `CatalogueModelAttributes` does not carry it until backend step
+ * 6.23 lands, same "local member, deleted by 6.28" pattern as
+ * `useCatalogueModel.ts`'s `CatalogueVariant`.
+ */
+type ModelAttributes = components["schemas"]["CatalogueModelAttributes"] & {
+  variants?: {
+    slug: string;
+    name: string;
+    description?: string | null;
+    specs?: Partial<Record<string, unknown>>;
+  }[];
+};
 type SpecCategory = components["schemas"]["SpecCategory"];
 type PriceBand = components["schemas"]["PriceBand"];
 
@@ -192,6 +205,17 @@ const DETAILS: Record<string, ModelAttributes> = {
       priceBand: "budget",
       msrpEur: 4200,
     },
+    // Two trims — one description-only (chip row only), one carrying a
+    // spec delta (chip row + one `ModelSpecTable` trims-group row).
+    variants: [
+      { slug: "comfort", name: "Comfort", description: "Adds a taller screen and heated grips." },
+      {
+        slug: "sport",
+        name: "Sport",
+        description: "Adjustable suspension and a sportier seat.",
+        specs: { wetWeightKg: 192, seatHeightMm: 800 },
+      },
+    ],
     article: GSR600_ARTICLE,
     // Three rows, two of which are the interesting ones: an upload without a
     // URL, and a duplicate of the Wikipedia URL that de-duplication removes.

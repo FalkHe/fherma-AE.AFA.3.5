@@ -740,3 +740,48 @@ contract and does not appear here is not finished.
   directly were also updated to set `manufacturer_id`/`model_name`/`year_from`
   first (`_give_identity` helpers in `tests/api/test_products_qa.py` and
   `tests/services/test_product_service.py`).
+
+### Step 6.25
+
+- `ModelIdentityPanel.tsx` gains the trims editor as **part of the same
+  form/schema** (`identityFormSchema.variants: z.array(variantSchema).max(20)`,
+  a nested RHF `useFieldArray("variants")` plus, per trim, a nested
+  `useFieldArray("variants.{i}.specRows")` inside the new local `TrimCard`
+  component — not exported, same file). `useSaveIdentity` (`useProductReview.ts`)
+  changed signature: it now takes `{ values: IdentityBlock }` (the **full**
+  block, `variants` included) and is the **only** write path — the 6.24-era
+  "read `variants` off the cached row" fallback is gone. New exported type
+  `VariantWrite = Omit<ProductVariant, "slug">` is what `IdentityBlock.variants`
+  holds (the client never sends a trim `slug`, per D1); the panel's
+  `toVariantWrite` maps the form buffer to it at submit.
+- Delta-spec rows are restricted to exactly the eight `ModelSpecsPanel` fields
+  (ui-spec §3.1 pin) — **not** the backend's full `VARIANT_SPEC_KEYS` (D1). A
+  stored variant carrying a spec key outside those eight would lose that key
+  if re-saved from this editor; no such fixture exists yet and 6.27 should
+  re-check this against the real backend cap once it lands. `a2Eligible`'s
+  delta value is a yes/no `Select` with **no "unknown" option** (an absent key
+  already means "same as the base") — do not copy `ModelSpecsPanel`'s
+  three-state idiom here. New shared helper `formatVariantDeltaLine(t, specs)`
+  in `specFields.ts` (label+unit composition, ` · `-joined) is reused by both
+  the admin read-only trim card and the customer `ModelSpecTable` group — the
+  one place this composition lives.
+- Customer side: `useCatalogueModel.ts` gains a **local** `CatalogueVariant`
+  type and `CatalogueModelDetail.variants?: CatalogueVariant[]` (deliberately
+  decoupled from the admin-only `ProductVariant`/`VariantWrite` — that file
+  also carries the D6 claim boundary, this one never does); 6.28 deletes this
+  member and swaps to the generated one. `ModelSpecTable` takes an optional
+  `variants` prop and appends a `catalogue.detail.trims.heading` group for
+  trims that carry `specs` (description-only trims are chip-row-only).
+  `CatalogueModelRoute.tsx` renders the chip row directly under the `h1`
+  (before the existing manufacturer/category/A2 `Stack`) and passes `variants`
+  through to `ModelSpecTable`. `frontend/src/test/catalogueApi.ts`'s
+  `ModelAttributes` fixture type gained a local `variants?` member in the
+  data-model §2.5 shape (camelCase); the Suzuki GSR 600 detail fixture now
+  carries two trims (one description-only, one with a `specs` delta) — tests
+  that asserted the old two-chip list were updated.
+- i18n: `admin.identity.variants.*` (full subtree, ui-spec §7) and
+  `catalogue.detail.trims.heading` landed in `locales/en/translation.json`.
+- Test-suite note for whoever runs the full suite next: a 20-nested-field-array
+  render is slow enough to need an explicit `it(..., fn, 15000)` timeout and a
+  longer `findByLabelText` wait in `ModelIdentityPanel.test.tsx` — not a bug,
+  just genuinely heavier DOM.

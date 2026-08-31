@@ -31,16 +31,39 @@ export type CatalogueImage = components["schemas"]["CatalogueImage"];
 export type ModelSource = components["schemas"]["CatalogueSource"];
 
 /**
+ * One trim as the customer-facing payload will carry it once backend step
+ * 6.23 lands `variants` on `CatalogueModelAttributes` (data-model §2.5,
+ * ui-spec §8 API-2). A local type, deliberately decoupled from the admin-only
+ * `ProductVariant`/`VariantWrite` in `useProductReview.ts` (that file also
+ * carries the D6 claim boundary; this one never does) — 6.28 deletes this
+ * member and swaps to the generated one.
+ */
+export type CatalogueVariant = {
+  slug: string;
+  name: string;
+  description?: string | null;
+  // Loosely typed on purpose — `specFields.ts` (a presentation module) is not
+  // imported into this hook layer; `formatVariantDeltaLine` there narrows to
+  // the frozen `SpecFieldKey`s itself and skips anything else.
+  specs?: Partial<Record<string, unknown>>;
+};
+
+/**
  * Everything the detail page renders (ui-spec §4.6 "data needs"): the resource
  * id merged with its attributes.
  *
  * `specs` holds the **13 frozen fields**, every one of them explicitly nullable:
  * an approved model without a verified revision answers 13 nulls, and the table
  * omits what it does not know rather than guessing it.
+ *
+ * `variants` is `Partial` (step 6.25): today's payload does not carry it at
+ * all, and the trims chip row / spec-table group both degrade to "renders
+ * nothing" per display-spec §11 when the member is absent.
  */
 export type CatalogueModelDetail = {
   motorbikeId: string;
-} & components["schemas"]["CatalogueModelAttributes"];
+} & components["schemas"]["CatalogueModelAttributes"] &
+  Partial<{ variants: CatalogueVariant[] }>;
 
 /**
  * A failed catalogue read.

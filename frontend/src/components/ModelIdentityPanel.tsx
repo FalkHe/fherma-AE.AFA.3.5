@@ -3,10 +3,17 @@ import Alert from "@mui/material/Alert";
 import Autocomplete from "@mui/material/Autocomplete";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
 import Chip from "@mui/material/Chip";
 import CircularProgress from "@mui/material/CircularProgress";
 import Grid from "@mui/material/Grid";
 import Icon from "@mui/material/Icon";
+import IconButton from "@mui/material/IconButton";
+import InputAdornment from "@mui/material/InputAdornment";
+import List from "@mui/material/List";
+import ListItem from "@mui/material/ListItem";
+import MenuItem from "@mui/material/MenuItem";
 import Skeleton from "@mui/material/Skeleton";
 import Snackbar from "@mui/material/Snackbar";
 import Stack from "@mui/material/Stack";
@@ -18,7 +25,14 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import type { TFunction } from "i18next";
 import { useEffect, useRef, useState } from "react";
-import { Controller, useForm, useWatch } from "react-hook-form";
+import {
+  Controller,
+  useFieldArray,
+  useForm,
+  useWatch,
+  type Control,
+  type UseFormReturn,
+} from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
@@ -28,7 +42,9 @@ import type { Operation } from "../hooks/useOperations";
 import {
   SaveIdentityError,
   useSaveIdentity,
+  type DraftSpec,
   type ProductWithIdentity,
+  type VariantWrite,
 } from "../hooks/useProductReview";
 
 import {
@@ -39,6 +55,7 @@ import {
   unionTypeCodes,
 } from "./claimLogic";
 import { ClaimFieldRow, ModelClaimPanel } from "./ModelClaimPanel";
+import { formatVariantDeltaLine } from "./specFields";
 
 /**
  * The Identity tab (roadmap 6.1/6.3, ui-spec §1 + §2, display-spec §6.2): the
@@ -92,6 +109,128 @@ const yearInput = z
     return year;
   });
 
+// --- Trims (`variants`, ui-spec §3.1) ---------------------------------------
+
+const VARIANTS_CAP = 20;
+const VARIANT_NAME_LENGTH = 64;
+const VARIANT_DESCRIPTION_LENGTH = 400;
+
+/** Duplicated from `ModelSpecsPanel` (not exported there) — the same two pinned vocabularies. */
+const PRICE_BAND_OPTIONS = [
+  "budget",
+  "mid",
+  "upper",
+  "premium",
+] as const satisfies readonly NonNullable<DraftSpec["priceBand"]>[];
+
+const CATEGORY_OPTIONS = [
+  "naked",
+  "sport",
+  "sport_touring",
+  "touring",
+  "adventure",
+  "cruiser",
+  "classic",
+  "scrambler",
+  "enduro",
+  "supermoto",
+  "scooter",
+] as const satisfies readonly NonNullable<DraftSpec["category"]>[];
+
+/** Exactly the eight `ModelSpecsPanel` fields a trim may differ in (ui-spec §3.1 pin). */
+const VARIANT_SPEC_FIELDS = [
+  "engineCc",
+  "powerKw",
+  "torqueNm",
+  "wetWeightKg",
+  "seatHeightMm",
+  "a2Eligible",
+  "priceBand",
+  "category",
+] as const;
+
+type VariantSpecField = (typeof VARIANT_SPEC_FIELDS)[number];
+
+const VARIANT_NUMBER_UNITS = {
+  engineCc: "cc",
+  powerKw: "kw",
+  torqueNm: "nm",
+  wetWeightKg: "kg",
+  seatHeightMm: "mm",
+} as const;
+
+type VariantNumberField = keyof typeof VARIANT_NUMBER_UNITS;
+
+function isNumberSpecField(field: VariantSpecField): field is VariantNumberField {
+  return field in VARIANT_NUMBER_UNITS;
+}
+
+/** The value a newly-added delta row starts from — always valid, never empty for a `Select`. */
+function defaultSpecRowValue(field: VariantSpecField): string {
+  if (isNumberSpecField(field)) {
+    return "";
+  }
+  if (field === "a2Eligible") {
+    return "yes";
+  }
+  return field === "priceBand" ? PRICE_BAND_OPTIONS[0] : CATEGORY_OPTIONS[0];
+}
+
+/** One delta row's control value → its typed `specs` entry, or an issue on `value`. */
+const variantSpecRowSchema = z
+  .object({
+    field: z.enum([...VARIANT_SPEC_FIELDS] as [VariantSpecField, ...VariantSpecField[]]),
+    value: z.string(),
+  })
+  .transform((row, ctx) => {
+    if (isNumberSpecField(row.field)) {
+      const trimmed = row.value.trim();
+      const num = Number(trimmed);
+
+      if (trimmed === "" || !Number.isFinite(num) || num <= 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["value"],
+          message: "admin.review.specs.errors.numberInvalid",
+        });
+        return z.NEVER;
+      }
+      return { field: row.field, value: num };
+    }
+    if (row.field === "a2Eligible") {
+      return { field: row.field, value: row.value === "yes" };
+    }
+    return { field: row.field, value: row.value };
+  });
+
+/** One trim card's control values → the required checks §3.1 pins (uniqueness is cross-item, below). */
+const variantSchema = z
+  .object({
+    name: z.string(),
+    description: z.string(),
+    specRows: z.array(variantSpecRowSchema).max(VARIANT_SPEC_FIELDS.length),
+  })
+  .transform((variant, ctx) => {
+    const name = variant.name.trim();
+
+    if (name === "") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["name"],
+        message: "admin.identity.variants.errors.nameRequired",
+      });
+    }
+    if (variant.description.length > VARIANT_DESCRIPTION_LENGTH) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["description"],
+        message: "admin.identity.variants.errors.descriptionTooLong",
+      });
+    }
+
+    return { name, description: variant.description.trim(), specRows: variant.specRows };
+  });
+
 const identityFormSchema = z
   .object({
     // Curated by the manufacturer Autocomplete; nothing to validate beyond
@@ -110,6 +249,7 @@ const identityFormSchema = z
       .refine((codes) => codes.every((code) => TYPE_CODE_PATTERN.test(code)), {
         message: "admin.identity.errors.typeCodeInvalid",
       }),
+    variants: z.array(variantSchema).max(VARIANTS_CAP),
   })
   .superRefine((values, ctx) => {
     if (
@@ -123,6 +263,27 @@ const identityFormSchema = z
         message: "admin.identity.errors.yearOrder",
       });
     }
+
+    // Case-insensitive uniqueness (§3.1) — every name after the first
+    // occurrence of its lower-cased spelling is flagged; an already-required
+    // empty name is left to the `nameRequired` issue above.
+    const seen = new Set<string>();
+    values.variants.forEach((variant, index) => {
+      const key = variant.name.toLowerCase();
+
+      if (key === "") {
+        return;
+      }
+      if (seen.has(key)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["variants", index, "name"],
+          message: "admin.identity.variants.errors.nameDuplicate",
+        });
+      } else {
+        seen.add(key);
+      }
+    });
   });
 
 type IdentityFormInput = z.input<typeof identityFormSchema>;
@@ -155,6 +316,20 @@ function translateIdentityErrorKey(t: TFunction, key: string): string {
     default:
       // Unreachable in practice — every message this form sets is one of the
       // six keys above — but a `t()` call still needs a literal key.
+      return t("common.errors.serverError");
+  }
+}
+
+/** The three §3.1 trim-field messages, translated the same literal-key way. */
+function translateVariantFieldErrorKey(t: TFunction, key: string): string {
+  switch (key) {
+    case "admin.identity.variants.errors.nameRequired":
+      return t("admin.identity.variants.errors.nameRequired");
+    case "admin.identity.variants.errors.nameDuplicate":
+      return t("admin.identity.variants.errors.nameDuplicate");
+    case "admin.identity.variants.errors.descriptionTooLong":
+      return t("admin.identity.variants.errors.descriptionTooLong");
+    default:
       return t("common.errors.serverError");
   }
 }
@@ -193,6 +368,30 @@ function numberToInput(value: number | null | undefined): string {
   return value === null || value === undefined ? "" : String(value);
 }
 
+/** A stored spec value → the control's string, per field type (mirrors `defaultSpecRowValue`). */
+function specValueToInput(field: VariantSpecField, value: unknown): string {
+  if (isNumberSpecField(field)) {
+    return String(value);
+  }
+  if (field === "a2Eligible") {
+    return value === true ? "yes" : "no";
+  }
+  return String(value);
+}
+
+/** A stored trim's `specs` → the form's delta rows, in the eight fields' canonical order. */
+function specRowsFromSpecs(
+  specs: Partial<DraftSpec> | undefined,
+): { field: VariantSpecField; value: string }[] {
+  if (specs === undefined) {
+    return [];
+  }
+
+  return VARIANT_SPEC_FIELDS.filter(
+    (field) => specs[field] !== undefined && specs[field] !== null,
+  ).map((field) => ({ field, value: specValueToInput(field, specs[field]) }));
+}
+
 function toFormValues(product: ProductWithIdentity): IdentityFormInput {
   return {
     // Resolved once the manufacturer options load (see the effect below): the
@@ -203,6 +402,24 @@ function toFormValues(product: ProductWithIdentity): IdentityFormInput {
     yearFrom: numberToInput(product.yearFrom),
     yearTo: numberToInput(product.yearTo),
     typeCodes: product.typeCodes ?? [],
+    variants: (product.variants ?? []).map((variant) => ({
+      name: variant.name,
+      description: variant.description ?? "",
+      specRows: specRowsFromSpecs(variant.specs),
+    })),
+  };
+}
+
+/** The submitted form buffer's one trim → the write shape `useSaveIdentity` sends (no `slug`, D1). */
+function toVariantWrite(variant: IdentityFormValues["variants"][number]): VariantWrite {
+  const specs = Object.fromEntries(
+    variant.specRows.map((row) => [row.field, row.value]),
+  ) as Partial<DraftSpec>;
+
+  return {
+    name: variant.name,
+    description: variant.description === "" ? undefined : variant.description,
+    specs: Object.keys(specs).length > 0 ? specs : undefined,
   };
 }
 
@@ -248,6 +465,313 @@ function previewLevels(
   const level2 = yearRange === null ? level1 : `${level1} (${yearRange})`;
 
   return { level1, level2 };
+}
+
+/**
+ * One delta row's value control, typed per `field` (ui-spec §3.1): a number
+ * `TextField` with its unit adornment and the positive-finite rule, the
+ * yes/no `Select` with **no** "unknown" option for `a2Eligible` (an absent
+ * key already means "same as the base" — the risk note this step carries),
+ * or the pinned `priceBand`/`category` enum `Select`.
+ */
+function VariantSpecValueInput({
+  t,
+  control,
+  name,
+  field,
+  disabled,
+  error,
+}: {
+  t: TFunction;
+  control: Control<IdentityFormInput, unknown, IdentityFormValues>;
+  name: `variants.${number}.specRows.${number}.value`;
+  field: VariantSpecField;
+  disabled: boolean;
+  error: boolean;
+}) {
+  if (isNumberSpecField(field)) {
+    return (
+      <Controller
+        control={control}
+        name={name}
+        render={({ field: controllerField }) => (
+          <TextField
+            {...controllerField}
+            type="number"
+            size="small"
+            disabled={disabled}
+            label={t("admin.identity.variants.specValue")}
+            error={error}
+            helperText={error ? t("admin.review.specs.errors.numberInvalid") : undefined}
+            slotProps={{
+              input: {
+                endAdornment: (
+                  <InputAdornment position="end">
+                    {t(`admin.review.specs.units.${VARIANT_NUMBER_UNITS[field]}`)}
+                  </InputAdornment>
+                ),
+              },
+            }}
+          />
+        )}
+      />
+    );
+  }
+
+  if (field === "a2Eligible") {
+    return (
+      <Controller
+        control={control}
+        name={name}
+        render={({ field: controllerField }) => (
+          <TextField
+            {...controllerField}
+            select
+            size="small"
+            disabled={disabled}
+            label={t("admin.identity.variants.specValue")}
+          >
+            <MenuItem value="yes">{t("common.yes")}</MenuItem>
+            <MenuItem value="no">{t("common.no")}</MenuItem>
+          </TextField>
+        )}
+      />
+    );
+  }
+
+  if (field === "priceBand") {
+    return (
+      <Controller
+        control={control}
+        name={name}
+        render={({ field: controllerField }) => (
+          <TextField
+            {...controllerField}
+            select
+            size="small"
+            disabled={disabled}
+            label={t("admin.identity.variants.specValue")}
+          >
+            {PRICE_BAND_OPTIONS.map((option) => (
+              <MenuItem key={option} value={option}>
+                {t(`common.specEnums.priceBand.${option}`, { defaultValue: option })}
+              </MenuItem>
+            ))}
+          </TextField>
+        )}
+      />
+    );
+  }
+
+  // `category` — the eight fields are exhaustive, but the switch above is by
+  // string equality, so TS still needs this final branch spelled out.
+  return (
+    <Controller
+      control={control}
+      name={name}
+      render={({ field: controllerField }) => (
+        <TextField
+          {...controllerField}
+          select
+          size="small"
+          disabled={disabled}
+          label={t("admin.identity.variants.specValue")}
+        >
+          {CATEGORY_OPTIONS.map((option) => (
+            <MenuItem key={option} value={option}>
+              {t(`common.specEnums.category.${option}`, { defaultValue: option })}
+            </MenuItem>
+          ))}
+        </TextField>
+      )}
+    />
+  );
+}
+
+/**
+ * One trim card of the editor (ui-spec §3.1/display-spec §6.2): the name and
+ * description fields, its own nested `useFieldArray` over `specRows`, and the
+ * reorder/remove `IconButton`s the parent wires to `fieldArray.move`/`remove`.
+ */
+function TrimCard({
+  t,
+  form,
+  index,
+  isPending,
+  isFirst,
+  isLast,
+  onMoveUp,
+  onMoveDown,
+  onRemove,
+}: {
+  t: TFunction;
+  form: UseFormReturn<IdentityFormInput, unknown, IdentityFormValues>;
+  index: number;
+  isPending: boolean;
+  isFirst: boolean;
+  isLast: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onRemove: () => void;
+}) {
+  const specRows = useFieldArray({
+    control: form.control,
+    name: `variants.${index}.specRows` as const,
+  });
+  const description = useWatch({ control: form.control, name: `variants.${index}.description` }) ?? "";
+  const watchedRows =
+    useWatch({ control: form.control, name: `variants.${index}.specRows` }) ?? [];
+  const usedFields = watchedRows
+    .map((row) => row?.field)
+    .filter((field): field is VariantSpecField => field !== undefined);
+
+  const variantErrors = form.formState.errors.variants?.[index];
+  const nameErrorMessage = variantErrors?.name?.message;
+  const descriptionErrorMessage = variantErrors?.description?.message;
+
+  function addDifference() {
+    const nextField = VARIANT_SPEC_FIELDS.find((field) => !usedFields.includes(field));
+
+    if (nextField !== undefined) {
+      specRows.append({ field: nextField, value: defaultSpecRowValue(nextField) });
+    }
+  }
+
+  return (
+    <ListItem disableGutters sx={{ display: "block", mb: 2 }}>
+      <Card variant="outlined">
+        <CardContent>
+          <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mb: 1 }}>
+            <TextField
+              {...form.register(`variants.${index}.name` as const)}
+              fullWidth
+              size="small"
+              disabled={isPending}
+              label={t("admin.identity.variants.name")}
+              error={nameErrorMessage !== undefined}
+              helperText={
+                nameErrorMessage !== undefined
+                  ? translateVariantFieldErrorKey(t, nameErrorMessage)
+                  : undefined
+              }
+              slotProps={{ htmlInput: { maxLength: VARIANT_NAME_LENGTH } }}
+            />
+            <IconButton
+              size="small"
+              disabled={isPending || isFirst}
+              onClick={onMoveUp}
+              aria-label={t("admin.identity.variants.moveUp")}
+            >
+              <Icon>arrow_upward</Icon>
+            </IconButton>
+            <IconButton
+              size="small"
+              disabled={isPending || isLast}
+              onClick={onMoveDown}
+              aria-label={t("admin.identity.variants.moveDown")}
+            >
+              <Icon>arrow_downward</Icon>
+            </IconButton>
+            <IconButton
+              size="small"
+              disabled={isPending}
+              onClick={onRemove}
+              aria-label={t("admin.identity.variants.remove")}
+            >
+              <Icon>delete</Icon>
+            </IconButton>
+          </Stack>
+          <TextField
+            {...form.register(`variants.${index}.description` as const)}
+            fullWidth
+            multiline
+            rows={3}
+            disabled={isPending}
+            label={t("admin.identity.variants.description")}
+            error={descriptionErrorMessage !== undefined}
+            helperText={
+              descriptionErrorMessage !== undefined
+                ? translateVariantFieldErrorKey(t, descriptionErrorMessage)
+                : t("admin.identity.variants.descriptionCount", { count: description.length })
+            }
+          />
+          {specRows.fields.length > 0 && (
+            <Stack spacing={1} sx={{ mt: 2 }}>
+              {specRows.fields.map((row, rowIndex) => {
+                const rowField = watchedRows[rowIndex]?.field ?? row.field;
+                const options = VARIANT_SPEC_FIELDS.filter(
+                  (candidate) => candidate === rowField || !usedFields.includes(candidate),
+                );
+                const valueErrorMessage =
+                  variantErrors?.specRows?.[rowIndex]?.value?.message;
+
+                return (
+                  <Stack key={row.id} direction="row" spacing={1} alignItems="flex-start">
+                    <Controller
+                      control={form.control}
+                      name={`variants.${index}.specRows.${rowIndex}.field` as const}
+                      render={({ field: controllerField }) => (
+                        <TextField
+                          {...controllerField}
+                          select
+                          size="small"
+                          sx={{ minWidth: 200 }}
+                          disabled={isPending}
+                          label={t("admin.identity.variants.specField")}
+                          onChange={(event) => {
+                            const nextField = event.target.value as VariantSpecField;
+
+                            controllerField.onChange(nextField);
+                            specRows.update(rowIndex, {
+                              field: nextField,
+                              value: defaultSpecRowValue(nextField),
+                            });
+                          }}
+                        >
+                          {options.map((option) => (
+                            <MenuItem key={option} value={option}>
+                              {t(`admin.review.specs.fields.${option}`)}
+                            </MenuItem>
+                          ))}
+                        </TextField>
+                      )}
+                    />
+                    <VariantSpecValueInput
+                      t={t}
+                      control={form.control}
+                      name={`variants.${index}.specRows.${rowIndex}.value` as const}
+                      field={rowField}
+                      disabled={isPending}
+                      error={valueErrorMessage !== undefined}
+                    />
+                    <IconButton
+                      size="small"
+                      disabled={isPending}
+                      onClick={() => specRows.remove(rowIndex)}
+                      aria-label={t("admin.identity.variants.removeSpec")}
+                    >
+                      <Icon>delete</Icon>
+                    </IconButton>
+                  </Stack>
+                );
+              })}
+            </Stack>
+          )}
+          {specRows.fields.length < VARIANT_SPEC_FIELDS.length && (
+            <Button
+              size="small"
+              startIcon={<Icon>add</Icon>}
+              disabled={isPending}
+              onClick={addDifference}
+              sx={{ mt: 1 }}
+            >
+              {t("admin.identity.variants.addSpec")}
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+    </ListItem>
+  );
 }
 
 /** The `admin.identity.slug` / `admin.identity.queryName` read-only context rows (§1.1). */
@@ -331,6 +855,28 @@ function ReadOnlyIdentity({ product }: { product: ProductWithIdentity }) {
         </TableBody>
       </Table>
       <ContextRows slug={product.slug} queryName={product.queryName ?? product.name} />
+      {(product.variants ?? []).length > 0 && (
+        <Box sx={{ mt: 3 }}>
+          <Typography variant="subtitle1">{t("admin.identity.variants.heading")}</Typography>
+          <Stack spacing={1} sx={{ mt: 1 }}>
+            {(product.variants ?? []).map((variant) => (
+              <Card key={variant.slug} variant="outlined">
+                <CardContent>
+                  <Typography variant="subtitle2">{variant.name}</Typography>
+                  {variant.description != null && variant.description !== "" && (
+                    <Typography variant="body2">{variant.description}</Typography>
+                  )}
+                  {variant.specs !== undefined && Object.keys(variant.specs).length > 0 && (
+                    <Typography variant="body2" color="text.secondary">
+                      {formatVariantDeltaLine(t, variant.specs)}
+                    </Typography>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </Stack>
+        </Box>
+      )}
     </Box>
   );
 }
@@ -379,6 +925,8 @@ export function ModelIdentityPanel({
   });
   const manufacturerId = watchedManufacturer?.id ?? null;
   const buildinglines = useBuildinglines(manufacturerId);
+  // Called unconditionally too, above the approved-row early return.
+  const variantsArray = useFieldArray({ control: form.control, name: "variants" });
 
   // The dirty flag belongs to the page (the approve dialog needs it); the
   // cleanup covers unmounting too, so there is nothing left to warn about once
@@ -510,6 +1058,7 @@ export function ModelIdentityPanel({
           yearFrom: formValues.yearFrom,
           yearTo: formValues.yearTo,
           typeCodes: formValues.typeCodes,
+          variants: formValues.variants.map(toVariantWrite),
         },
       },
       {
@@ -808,6 +1357,52 @@ export function ModelIdentityPanel({
       </Grid>
 
       <ContextRows slug={product.slug} queryName={product.queryName ?? product.name} />
+
+      <Box sx={{ mt: 3 }}>
+        <Typography variant="subtitle1">{t("admin.identity.variants.heading")}</Typography>
+        <Typography variant="body2" color="text.secondary" gutterBottom>
+          {t("admin.identity.variants.baseHint")}
+        </Typography>
+        {variantsArray.fields.length === 0 ? (
+          // Empty state is normal copy, never an error (§3.1 pin) — no
+          // `EmptyState` component, no warning colour.
+          <Typography variant="body2" color="text.secondary">
+            {t("admin.identity.variants.empty")}
+          </Typography>
+        ) : (
+          <List disablePadding>
+            {variantsArray.fields.map((field, index) => (
+              <TrimCard
+                key={field.id}
+                t={t}
+                form={form}
+                index={index}
+                isPending={isPending}
+                isFirst={index === 0}
+                isLast={index === variantsArray.fields.length - 1}
+                onMoveUp={() => variantsArray.move(index, index - 1)}
+                onMoveDown={() => variantsArray.move(index, index + 1)}
+                onRemove={() => variantsArray.remove(index)}
+              />
+            ))}
+          </List>
+        )}
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
+          <Button
+            size="small"
+            startIcon={<Icon>add</Icon>}
+            disabled={isPending || variantsArray.fields.length >= VARIANTS_CAP}
+            onClick={() => variantsArray.append({ name: "", description: "", specRows: [] })}
+          >
+            {t("admin.identity.variants.add")}
+          </Button>
+          {variantsArray.fields.length >= VARIANTS_CAP && (
+            <Typography variant="caption" color="text.secondary">
+              {t("admin.identity.variants.errors.max")}
+            </Typography>
+          )}
+        </Stack>
+      </Box>
 
       <Box sx={{ mt: 3 }}>
         <Typography variant="subtitle2">{t("admin.identity.preview.heading")}</Typography>

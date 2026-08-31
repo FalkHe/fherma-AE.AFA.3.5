@@ -270,6 +270,28 @@
         "useA11y": "Use the claimed {{field}}",
         "noManufacturerMatch": "No matching manufacturer in the catalogue."
       },
+      "variants": {
+        "heading": "Trims",
+        "baseHint": "This catalogue entry is the base trim; list only what a trim changes or adds.",
+        "empty": "No trims recorded — this entry is the base model.",
+        "add": "Add trim",
+        "remove": "Remove trim",
+        "moveUp": "Move up",
+        "moveDown": "Move down",
+        "name": "Trim name",
+        "description": "Description",
+        "descriptionCount": "{{count}}/400",
+        "addSpec": "Add difference",
+        "removeSpec": "Remove difference",
+        "specField": "Specification",
+        "specValue": "Value",
+        "errors": {
+          "nameRequired": "Every trim needs a name.",
+          "nameDuplicate": "Trim names must be unique.",
+          "descriptionTooLong": "At most 400 characters.",
+          "max": "At most 20 trims."
+        }
+      },
       "preview": {
         "heading": "Preview",
         "level": "Level {{n}}"
@@ -337,7 +359,10 @@
       "sourcesLabel": "Sources",
       "sourcesHint": "Specifications and prose on this page are derived from these retrieved documents.",
       "sourcesEmpty": "No source documents are recorded for this model.",
-      "sourceNoUrl": "Uploaded document"
+      "sourceNoUrl": "Uploaded document",
+      "trims": {
+        "heading": "Trims"
+      }
     }
   },
   "consultations": {

@@ -8,11 +8,12 @@ import Typography from "@mui/material/Typography";
 import { Fragment } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { CatalogueModelDetail } from "../hooks/useCatalogueModel";
+import type { CatalogueModelDetail, CatalogueVariant } from "../hooks/useCatalogueModel";
 
 import {
   formatSpecEnum,
   formatSpecValue,
+  formatVariantDeltaLine,
   specFieldLabel,
   specFieldUnit,
   type SpecFieldKey,
@@ -57,7 +58,17 @@ const SPEC_GROUPS: readonly SpecGroup[] = [
 
 type Specs = CatalogueModelDetail["specs"];
 
-export function ModelSpecTable({ specs }: { specs: Specs }) {
+export function ModelSpecTable({
+  specs,
+  variants,
+}: {
+  specs: Specs;
+  /**
+   * The row's trims (data-model §2.5, ui-spec §3.2/§6.5) — optional so a
+   * payload that predates step 6.23 (today's) renders exactly as before.
+   */
+  variants?: CatalogueVariant[];
+}) {
   const { t, i18n } = useTranslation();
 
   /**
@@ -98,12 +109,25 @@ export function ModelSpecTable({ specs }: { specs: Specs }) {
       .filter((row): row is { field: SpecFieldKey; value: string } => row.value !== null),
   })).filter((group) => group.rows.length > 0);
 
+  // The trims group (ui-spec §3.2, display-spec §6.5): one row per trim that
+  // carries `specs` (a description-only trim is chip-row-only, no table row);
+  // never phrased as a filter promise — the group heading is "Trims", not
+  // "Also available with…" (D4's known gap).
+  const variantRows = (variants ?? [])
+    .filter((variant) => variant.specs !== undefined && Object.keys(variant.specs).length > 0)
+    .map((variant) => ({
+      slug: variant.slug,
+      name: variant.name,
+      delta: formatVariantDeltaLine(t, variant.specs ?? {}),
+    }))
+    .filter((row) => row.delta !== "");
+
   return (
     <>
       <Typography variant="h5" component="h2" sx={{ mb: 1 }}>
         {t("catalogue.detail.specsHeading")}
       </Typography>
-      {groups.length === 0 ? (
+      {groups.length === 0 && variantRows.length === 0 ? (
         // Approved without a verified revision: unusual, but legal.
         <Typography variant="body2" color="text.secondary">
           {t("catalogue.detail.noSpecs")}
@@ -131,6 +155,25 @@ export function ModelSpecTable({ specs }: { specs: Specs }) {
                   ))}
                 </Fragment>
               ))}
+              {variantRows.length > 0 && (
+                <Fragment key="trims">
+                  <TableRow>
+                    <TableCell colSpan={2} sx={{ bgcolor: "action.hover" }}>
+                      <Typography variant="subtitle2">
+                        {t("catalogue.detail.trims.heading")}
+                      </Typography>
+                    </TableCell>
+                  </TableRow>
+                  {variantRows.map((row) => (
+                    <TableRow key={row.slug}>
+                      <TableCell component="th" scope="row" sx={{ width: "55%", fontWeight: 600 }}>
+                        {row.name}
+                      </TableCell>
+                      <TableCell>{row.delta}</TableCell>
+                    </TableRow>
+                  ))}
+                </Fragment>
+              )}
             </TableBody>
           </Table>
         </TableContainer>

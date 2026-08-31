@@ -7,6 +7,7 @@ import Link from "@mui/material/Link";
 import Paper from "@mui/material/Paper";
 import Skeleton from "@mui/material/Skeleton";
 import Stack from "@mui/material/Stack";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -179,7 +180,7 @@ export function CatalogueModelRoute() {
     );
   }
 
-  const { name, manufacturer, specs, article, sources, images } = model.data;
+  const { name, manufacturer, specs, article, sources, images, variants } = model.data;
 
   return (
     <>
@@ -192,6 +193,22 @@ export function CatalogueModelRoute() {
       <Typography variant="h4" component="h1">
         {name}
       </Typography>
+      {variants !== undefined && variants.length > 0 && (
+        // The trims chip row (ui-spec §3.2, display-spec §6.5) — directly
+        // under the `h1`, one outlined `Chip` per entry, description as a
+        // `Tooltip`; the chips are labels, they link nowhere.
+        <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: "wrap" }}>
+          {variants.map((variant) =>
+            variant.description != null && variant.description !== "" ? (
+              <Tooltip key={variant.slug} title={variant.description} describeChild>
+                <Chip variant="outlined" label={variant.name} />
+              </Tooltip>
+            ) : (
+              <Chip key={variant.slug} variant="outlined" label={variant.name} />
+            ),
+          )}
+        </Stack>
+      )}
       <Stack
         direction="row"
         spacing={1}
@@ -227,7 +244,7 @@ export function CatalogueModelRoute() {
           <ModelImageGallery images={images} name={name} />
         </Grid>
         <Grid size={{ xs: 12, md: 7 }}>
-          <ModelSpecTable specs={specs} />
+          <ModelSpecTable specs={specs} variants={variants} />
         </Grid>
       </Grid>
       {article !== null && (

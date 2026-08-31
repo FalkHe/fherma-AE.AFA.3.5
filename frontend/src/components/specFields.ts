@@ -86,6 +86,41 @@ export function formatSpecEnum(
 }
 
 /**
+ * A trim's spec deltas (`variants[].specs`, data-model §2.5) as one composed
+ * line — `"Tank capacity: 30 l · Wet weight: 268 kg"` — the same
+ * label-and-unit idiom `CatalogueModelCard`/`RecommendationCard` already use,
+ * reused here so the customer trims group (`ModelSpecTable`) and the admin
+ * read-only trim card (`ModelIdentityPanel`, approved rows) render the same
+ * string for the same data. An unrecognised key is skipped (never rendered
+ * verbatim into a labelled sentence); an entry that produces nothing (a null
+ * value, an empty string) is dropped rather than shown as a blank segment.
+ */
+export function formatVariantDeltaLine(
+  t: TFunction,
+  specs: Partial<Record<string, unknown>>,
+): string {
+  return Object.entries(specs)
+    .filter((entry): entry is [SpecFieldKey, unknown] => isSpecFieldKey(entry[0]))
+    .map(([field, value]) => {
+      const formatted =
+        (field === "category" || field === "priceBand") && typeof value === "string"
+          ? formatSpecEnum(t, field, value)
+          : formatSpecValue(t, value);
+
+      if (formatted === null) {
+        return null;
+      }
+
+      const unit = specFieldUnit(t, field);
+      const withUnit = unit === "" ? formatted : `${formatted} ${unit}`;
+
+      return `${specFieldLabel(t, field)}: ${withUnit}`;
+    })
+    .filter((line): line is string => line !== null)
+    .join(" · ");
+}
+
+/**
  * One spec value as text, or `null` when there is nothing verified to show —
  * the caller renders the em dash, because "unknown" needs its own markup
  * (`aria-label`) in a table cell and none at all in a card line.

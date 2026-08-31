@@ -91,6 +91,13 @@ export type ProductIdentityFields = {
 
 export type ProductWithIdentity = Product & Partial<ProductIdentityFields>;
 
+/**
+ * A trim as the client **writes** it (step 6.25, ui-spec §3.1): the same
+ * shape as `ProductVariant` minus `slug` — the server always derives the slug
+ * from `name`, and the client never sends one.
+ */
+export type VariantWrite = Omit<ProductVariant, "slug">;
+
 /** The writable `identity` block of `PATCH /api/products/{id}` (ui-spec §8 API-1). */
 export type IdentityBlock = {
   manufacturerId: string | null;
@@ -99,7 +106,7 @@ export type IdentityBlock = {
   yearFrom: number | null;
   yearTo: number | null;
   typeCodes: string[];
-  variants: ProductVariant[];
+  variants: VariantWrite[];
 };
 
 /** Provenance class of a source document (`source_type` in the catalogue). */
@@ -454,11 +461,11 @@ export function useSaveDraftSpec(
  * Saves the identity block (`PATCH /api/products/{id}` `identity`, ui-spec
  * §8 API-1).
  *
- * The trims editor is step 6.25's, not this one's: the form this hook serves
- * (`ModelIdentityPanel`) never edits `variants`, so the write carries the
- * **last-fetched** `variants` list unchanged — same full-object-replace
- * pattern as `useSaveDraftSpec`'s merge, so a save from this step's UI cannot
- * silently wipe trims a later step (or the extraction run) already wrote.
+ * Since step 6.25, `variants` travels as part of the caller's own `values` —
+ * the trims field array inside `ModelIdentityPanel` is the single source of
+ * truth for the write, matching `assign_identity`'s full-object replace (D2).
+ * This is the **only** write path for `variants`; there is no second one that
+ * reads the cached row.
  *
  * Invalidation is `["products", "detail", id]` only (ui-spec §0): the response
  * carries the recomputed `slug`, and the refetched row is what the read-only
@@ -466,17 +473,11 @@ export function useSaveDraftSpec(
  */
 export function useSaveIdentity(
   id: string,
-): UseMutationResult<void, Error, { values: Omit<IdentityBlock, "variants"> }> {
+): UseMutationResult<void, Error, { values: IdentityBlock }> {
   const queryClient = useQueryClient();
 
-  return useMutation<void, Error, { values: Omit<IdentityBlock, "variants"> }>({
-    mutationFn: ({ values }) => {
-      const cached = queryClient.getQueryData<ProductWithIdentity>(
-        queryKeys.products.detail(id),
-      );
-
-      return patchIdentity(id, { ...values, variants: cached?.variants ?? [] });
-    },
+  return useMutation<void, Error, { values: IdentityBlock }>({
+    mutationFn: ({ values }) => patchIdentity(id, values),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.products.detail(id) });
     },

@@ -7,6 +7,7 @@ import {
   SaveIdentityError,
   type IdentityBlock,
   type ProductSuggestion,
+  type ProductVariant,
   type ProductWithIdentity,
 } from "../hooks/useProductReview";
 import { jsonResponse, stubFetch } from "../test/network";
@@ -345,5 +346,148 @@ describe("ModelIdentityPanel — approved (read-only)", () => {
         "Imported from a suggestion list — research must confirm it before it becomes catalogue data.",
       ),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders trim cards read-only, one composed delta line each, no buttons", async () => {
+    renderPanel({
+      ...PRODUCT,
+      status: "approved",
+      manufacturer: "Suzuki",
+      modelName: "GSR 600",
+      yearFrom: 2006,
+      yearTo: 2011,
+      variants: [
+        {
+          slug: "sport",
+          name: "Sport",
+          description: "Adjustable suspension.",
+          specs: { wetWeightKg: 192, seatHeightMm: 800 },
+        },
+      ],
+    });
+
+    expect(screen.getByText("Sport")).toBeInTheDocument();
+    expect(screen.getByText("Adjustable suspension.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Wet weight: 192 kg · Seat height: 800 mm"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add trim" })).not.toBeInTheDocument();
+  });
+});
+
+describe("ModelIdentityPanel — trims editor (ui-spec §3.1)", () => {
+  it("shows the empty state as normal copy, never an error", async () => {
+    renderPanel();
+
+    await screen.findByLabelText("Manufacturer");
+
+    expect(
+      screen.getByText("No trims recorded — this entry is the base model."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add trim" })).toBeEnabled();
+  });
+
+  it("adds, edits, reorders, removes and saves trims, resetting the form on success", async () => {
+    save.mutate.mockImplementation((_input, options: { onSuccess: () => void }) => {
+      options.onSuccess();
+    });
+
+    renderPanel();
+    await screen.findByLabelText("Manufacturer");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add trim" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add trim" }));
+
+    const nameInputs = screen.getAllByLabelText("Trim name");
+
+    await userEvent.type(nameInputs[0], "Adventure");
+    await userEvent.type(nameInputs[1], "Triple Black");
+
+    const descriptionInputs = screen.getAllByLabelText("Description");
+
+    await userEvent.type(descriptionInputs[0], "Big screen and spoked wheels");
+    await userEvent.click(screen.getAllByRole("button", { name: "Add difference" })[0]);
+
+    const valueInputs = screen.getAllByLabelText("Value");
+
+    await userEvent.clear(valueInputs[0]);
+    await userEvent.type(valueInputs[0], "30");
+
+    // Reorder: move the second trim ("Triple Black") to the top.
+    await userEvent.click(screen.getAllByRole("button", { name: "Move up" })[1]);
+
+    expect(
+      screen.getAllByLabelText("Trim name").map((input) => (input as HTMLInputElement).value),
+    ).toEqual(["Triple Black", "Adventure"]);
+
+    // Remove the (now second) "Adventure" trim — the one carrying the edits.
+    await userEvent.click(screen.getAllByRole("button", { name: "Remove trim" })[1]);
+    expect(screen.getAllByLabelText("Trim name")).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Save identity" }));
+
+    const values = savedIdentity();
+
+    expect(values.variants).toEqual([
+      { name: "Triple Black", description: undefined, specs: undefined },
+    ]);
+    // `onSuccess` reset the buffer to what was sent — no longer dirty.
+    expect(screen.getByRole("button", { name: "Save identity" })).toBeDisabled();
+  });
+
+  it(
+    "disables Add trim at the 20-entry cap and shows the caption",
+    async () => {
+      const twentyVariants: ProductVariant[] = Array.from({ length: 20 }, (_unused, index) => ({
+        slug: `trim-${index}`,
+        name: `Trim ${index}`,
+      }));
+
+      renderPanel({ ...PRODUCT, variants: twentyVariants });
+
+      // Twenty nested field-array cards render more slowly than the default
+      // find timeout allows.
+      await screen.findByLabelText("Manufacturer", {}, { timeout: 10000 });
+
+      expect(screen.getByRole("button", { name: "Add trim" })).toBeDisabled();
+      expect(screen.getByText("At most 20 trims.")).toBeInTheDocument();
+      expect(screen.getAllByLabelText("Trim name")).toHaveLength(20);
+    },
+    15000,
+  );
+
+  it("rejects two trims with the same name, case-insensitively", async () => {
+    renderPanel();
+    await screen.findByLabelText("Manufacturer");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add trim" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add trim" }));
+
+    const nameInputs = screen.getAllByLabelText("Trim name");
+
+    await userEvent.type(nameInputs[0], "Adventure");
+    await userEvent.type(nameInputs[1], "adventure");
+
+    await userEvent.click(screen.getByRole("button", { name: "Save identity" }));
+
+    expect(await screen.findByText("Trim names must be unique.")).toBeInTheDocument();
+    expect(save.mutate).not.toHaveBeenCalled();
+  });
+
+  it("drops a used delta field from the Select once another row already claims it", async () => {
+    renderPanel();
+    await screen.findByLabelText("Manufacturer");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add trim" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add difference" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add difference" }));
+
+    const fieldSelects = screen.getAllByRole("combobox", { name: "Specification" });
+
+    await userEvent.click(fieldSelects[1]);
+
+    // The second row cannot re-offer the first row's field ("Engine displacement").
+    expect(screen.queryByRole("option", { name: "Engine displacement" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Power" })).toBeInTheDocument();
   });
 });

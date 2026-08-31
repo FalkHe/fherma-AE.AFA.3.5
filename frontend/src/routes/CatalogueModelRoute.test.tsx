@@ -59,12 +59,13 @@ describe("CatalogueModelRoute", () => {
       "/catalogue",
     );
     expect(screen.getByText("Suzuki")).toBeInTheDocument();
-    // Chips: category and price band through the hoisted enum labels — and no
+    // Chips: the two trims first (the chip row directly under the `h1`, §3.2),
+    // then category and price band through the hoisted enum labels — and no
     // A2 chip, because this bike is not A2-eligible (a null would say nothing
     // either; only a verified `true` earns the badge).
     expect(
       Array.from(container.querySelectorAll(".MuiChip-root"), (chip) => chip.textContent),
-    ).toEqual(["Naked", "Budget (under €5,000)"]);
+    ).toEqual(["Comfort", "Sport", "Naked", "Budget (under €5,000)"]);
 
     const gallery = screen.getByRole("group", { name: "Photos of Suzuki GSR 600" });
 
@@ -119,6 +120,44 @@ describe("CatalogueModelRoute", () => {
     expect(within(table).queryByText("Top speed")).toBeNull();
     // …and a group nobody could extract renders no header either.
     expect(within(table).queryByText("Licence & safety")).toBeNull();
+  });
+
+  it("renders the trims chip row and the spec-table delta group (ui-spec §3.2)", async () => {
+    const { container } = renderRoute(IDS.full);
+
+    await screen.findByRole("heading", { level: 1, name: "Suzuki GSR 600" });
+
+    // Two chips — one description-only, one carrying a delta.
+    expect(
+      Array.from(container.querySelectorAll(".MuiChip-root"), (chip) => chip.textContent),
+    ).toEqual(["Comfort", "Sport", "Naked", "Budget (under €5,000)"]);
+
+    // One delta row, appended as a final group titled "Trims", never phrased
+    // as a filter promise.
+    const table = specTable();
+
+    expect(within(table).getByText("Trims")).toBeInTheDocument();
+    expect(
+      within(table).getByRole("rowheader", { name: "Sport" }),
+    ).toBeInTheDocument();
+    expect(
+      within(table).getByText("Wet weight: 192 kg · Seat height: 800 mm"),
+    ).toBeInTheDocument();
+    // The description-only trim never gets a table row of its own.
+    expect(within(table).queryByText("Comfort")).toBeNull();
+  });
+
+  it("renders no trim chips and no trims group when `variants` is absent (§11 degradation)", async () => {
+    const { container } = renderRoute(IDS.sparse);
+
+    await screen.findByText("Engine & performance");
+
+    expect(screen.queryByText("Trims")).toBeNull();
+    // Only the category/price-band chips this fixture already carries — no
+    // trim chip is mixed in ahead of them.
+    expect(
+      Array.from(container.querySelectorAll(".MuiChip-root"), (chip) => chip.textContent),
+    ).toEqual(["Cruiser", "Mid (€5,000–10,000)"]);
   });
 
   it("renders the article as GFM and leaves raw HTML inert", async () => {

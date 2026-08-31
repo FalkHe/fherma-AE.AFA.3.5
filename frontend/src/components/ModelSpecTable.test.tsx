@@ -1,7 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { CatalogueModelDetail } from "../hooks/useCatalogueModel";
+import type { CatalogueModelDetail, CatalogueVariant } from "../hooks/useCatalogueModel";
 import { i18n } from "../i18n";
 import { renderWithProviders } from "../test/render";
 
@@ -47,6 +47,16 @@ const FULL_SPECS: CatalogueModelDetail["specs"] = {
   msrpEur: 4200,
 };
 
+const TWO_VARIANTS: CatalogueVariant[] = [
+  { slug: "comfort", name: "Comfort", description: "Adds anti-lock braking as standard." },
+  {
+    slug: "sport",
+    name: "Sport",
+    description: "Adjustable suspension and a sportier seat.",
+    specs: { wetWeightKg: 192, seatHeightMm: 800 },
+  },
+];
+
 describe("ModelSpecTable", () => {
   it("renders every frozen spec field exactly once, in four groups", () => {
     renderWithProviders(<ModelSpecTable specs={FULL_SPECS} />);
@@ -77,5 +87,28 @@ describe("ModelSpecTable", () => {
     expect(
       screen.getByText("No verified specifications are available for this model yet."),
     ).toBeInTheDocument();
+  });
+
+  it("appends one Trims row per trim that carries a spec delta (ui-spec §3.2)", () => {
+    renderWithProviders(<ModelSpecTable specs={FULL_SPECS} variants={TWO_VARIANTS} />);
+
+    const table = screen.getByRole("table", { name: "Verified specifications" });
+
+    expect(within(table).getByText("Trims")).toBeInTheDocument();
+    expect(within(table).getByRole("rowheader", { name: "Sport" })).toBeInTheDocument();
+    expect(
+      within(table).getByText("Wet weight: 192 kg · Seat height: 800 mm"),
+    ).toBeInTheDocument();
+    // Description-only trims never earn a row of their own.
+    expect(within(table).queryByText("Comfort")).toBeNull();
+  });
+
+  it("renders no Trims group when `variants` is absent or empty", () => {
+    const { rerender } = renderWithProviders(<ModelSpecTable specs={FULL_SPECS} />);
+
+    expect(screen.queryByText("Trims")).toBeNull();
+
+    rerender(<ModelSpecTable specs={FULL_SPECS} variants={[]} />);
+    expect(screen.queryByText("Trims")).toBeNull();
   });
 });
