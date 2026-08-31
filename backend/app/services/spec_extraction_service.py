@@ -22,10 +22,18 @@ Re-running is idempotent by construction: `upsert_draft_spec` is a full-object
 replace of the single `draft` row, so a second run replaces the first result
 instead of adding anything.
 
-One extracted field is not a specification column: the **manufacturer**. It gets
-a `manufacturers` row (get-or-create on the brand's slug) and the catalogue entry
-starts pointing at it — after, and only after, the draft specification was
-written, and never loudly enough to cost the run its specification.
+Some extracted fields are not specification columns: the **manufacturer** and
+the **identity block** (`buildingline`, `model_name`, `year_from`, `year_to`,
+`type_codes`, `variants` — `motorbikes` itself). They are written after, and
+only after, the draft specification was written, and never loudly enough to
+cost the run its specification.
+
+The identity write additionally follows **D2b**
+(`docs/roadmap/phase-6/shared-knowledge.md`): `product_service.assign_identity`
+is a full-object replace, so this service **merges first** — the row's current
+identity wins over the extraction, field by field, and `type_codes` are
+unioned. A first ingestion therefore fills everything; a re-ingestion fills
+only what is still missing; an admin's correction, once made, is permanent.
 """
 
 import logging
@@ -43,7 +51,12 @@ from app.db.models.motorbike_spec import MotorbikeSpec
 from app.db.models.source_document import SourceDocument, SourceType
 from app.llm import extraction
 from app.llm.models import MissingApiKeyError
-from app.services import document_service, manufacturer_service, product_service
+from app.services import (
+    document_service,
+    identity_validation,
+    manufacturer_service,
+    product_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +87,12 @@ class ExtractionResult:
     extracted: extraction.ExtractedSpec
     values: dict[str, Any]
     documents: int
+    # Dropped-entry warnings from `identity_validation.normalize_type_codes` /
+    # `normalize_variants`, already logged here. Empty on the manufacturer-only
+    # path (`extracted.model_name is None`) and on a failed identity write.
+    # Not surfaced to the run's own warnings by this step — 6.17's
+    # `_extraction_stage` edit feeds this to `_Run._warn`.
+    identity_warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,7 +187,7 @@ async def extract_draft_spec(
 
     values = extracted.to_spec_values(extracted_at=datetime.now(UTC))
     spec = await product_service.upsert_draft_spec(session, motorbike.id, values)
-    await _assign_manufacturer(session, motorbike, extracted.manufacturer)
+    identity_warnings = await _assign_identity(session, motorbike, extracted)
     logger.info(
         "Extracted %d specification field(s) for motorbike %s from %d document(s): %s.",
         len(extracted.filled_fields()),
@@ -176,18 +195,128 @@ async def extract_draft_spec(
         len(documents),
         ", ".join(extracted.filled_fields()) or "none",
     )
-    return ExtractionResult(spec=spec, extracted=extracted, values=values, documents=len(documents))
+    return ExtractionResult(
+        spec=spec,
+        extracted=extracted,
+        values=values,
+        documents=len(documents),
+        identity_warnings=identity_warnings,
+    )
 
 
-async def _assign_manufacturer(
+async def _assign_identity(
+    session: AsyncSession, motorbike: Motorbike, extracted: extraction.ExtractedSpec
+) -> tuple[str, ...]:
+    """Merge the extracted identity into `motorbike` — never at the cost of the run.
+
+    **D2b**: `product_service.assign_identity` is a full-object replace, so
+    this caller merges first. Per field, an existing non-NULL value already on
+    `motorbike` wins over the extraction (`model_name`, `year_from`,
+    `year_to`, `buildingline`, `manufacturer_id`); `type_codes` are the
+    **union** of stored and extracted (additive retrieval metadata); `variants`
+    is only replaced from an **empty** stored list. So the first ingestion
+    fills everything, a re-ingestion fills only what is still missing, and an
+    admin's correction is permanent.
+
+    When `extracted.model_name is None`, nothing structured was found: only
+    the manufacturer is assigned, exactly as before this step
+    (`manufacturer_service.normalize_name` + `get_or_create`, skipped when the
+    extraction named none) — `assign_identity` is never called on this path,
+    because a full-object replace with every other field `null` would wipe an
+    existing identity.
+
+    Any exception — including `DuplicateModelError` on a slug collision — is
+    logged once and swallowed: the draft specification always stands and the
+    run continues.
+
+    Returns:
+        The identity normalisers' dropped-entry warnings (already logged
+        here too), empty on the manufacturer-only path or on a failed write.
+    """
+    if extracted.model_name is None:
+        await _assign_manufacturer_only(session, motorbike, extracted.manufacturer)
+        return ()
+
+    type_codes, type_code_warnings = identity_validation.normalize_type_codes(extracted.type_codes)
+    variants, variant_warnings = identity_validation.normalize_variants(extracted.variants)
+    # `assign_identity` re-validates whatever it is handed and only
+    # `logger.warning`s a drop, without surfacing it to the caller — so the
+    # union below is pre-capped here, through the same normaliser, rather
+    # than risking a silent second-stage drop nobody's `identity_warnings`
+    # would carry.
+    merged_type_codes, cap_warnings = identity_validation.normalize_type_codes(
+        sorted(set(motorbike.type_codes or []) | set(type_codes))
+    )
+    warnings = (*type_code_warnings, *cap_warnings, *variant_warnings)
+    for warning in warnings:
+        logger.warning("Motorbike %s: %s", motorbike.id, warning)
+
+    try:
+        manufacturer_id = await _resolve_manufacturer_id(session, motorbike, extracted.manufacturer)
+        await product_service.assign_identity(
+            session,
+            motorbike,
+            manufacturer_id=(
+                motorbike.manufacturer_id
+                if motorbike.manufacturer_id is not None
+                else manufacturer_id
+            ),
+            buildingline=(
+                motorbike.buildingline
+                if motorbike.buildingline is not None
+                else extracted.buildingline
+            ),
+            model_name=(
+                motorbike.model_name if motorbike.model_name is not None else extracted.model_name
+            ),
+            year_from=(
+                motorbike.year_from if motorbike.year_from is not None else extracted.year_from
+            ),
+            year_to=motorbike.year_to if motorbike.year_to is not None else extracted.year_to,
+            type_codes=merged_type_codes,
+            variants=list(motorbike.variants) if motorbike.variants else variants,
+        )
+    except Exception as error:
+        logger.warning(
+            "Motorbike %s: extracted identity was not assigned.", motorbike.id, exc_info=error
+        )
+        return warnings
+
+    logger.info("Motorbike %s: identity merged and assigned from extraction.", motorbike.id)
+    return warnings
+
+
+async def _resolve_manufacturer_id(
+    session: AsyncSession, motorbike: Motorbike, name: str | None
+) -> str | None:
+    """Return the manufacturer id to feed the D2b merge, or `None`.
+
+    Resolves the extracted brand via get-or-create; falls back to the row's
+    already-stored `manufacturer_id` when the extraction named none, so the
+    merge in `_assign_identity` always has a value to compare against. May
+    raise (an unusable name, a write failure) — the caller decides how loud
+    that is.
+    """
+    normalized = manufacturer_service.normalize_name(name)
+    if normalized is None:
+        return motorbike.manufacturer_id
+    manufacturer = await manufacturer_service.get_or_create(session, normalized)
+    return manufacturer.id
+
+
+async def _assign_manufacturer_only(
     session: AsyncSession, motorbike: Motorbike, name: str | None
 ) -> None:
     """Point `motorbike` at the extracted brand — never at the cost of the run.
 
-    The brand is not a specification column: it is a `manufacturers` row, so it
-    is written here rather than by `upsert_draft_spec`. Nothing about it is worth
-    losing an extraction over — an unusable name (`"???"`, which `get_or_create`
-    rejects) or a failing write is logged and the draft specification stands.
+    The cheap short-circuit for an extraction with no structured identity
+    (`extracted.model_name is None`): the brand is not a specification column,
+    it is a `manufacturers` row, so it is written here rather than by
+    `upsert_draft_spec`. Nothing about it is worth losing an extraction over —
+    an unusable name (`"???"`, which `get_or_create` rejects) or a failing
+    write is logged and the draft specification stands. Unlike
+    `_assign_identity`'s merge, this is a plain (non-merging) assignment,
+    exactly as it was before this step.
     """
     normalized = manufacturer_service.normalize_name(name)
     if normalized is None:

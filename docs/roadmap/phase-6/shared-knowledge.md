@@ -1042,3 +1042,101 @@ a turn where the customer had just described themselves as experienced, and
 filtered touring candidates by A2 as a result. That is Phase-3/5 preference
 persistence behaviour, not naming/pricing/fencing — it belongs in a later
 phase's open questions, not here.
+
+### Step 6.15
+
+- `NON_SPEC_FIELDS = ("manufacturer", "buildingline", "model_name",
+  "year_from", "year_to", "type_codes", "variants")`. New module constants
+  `YEAR_MIN = 1900`, `YEAR_MAX = 2100`, `BUILDINGLINE_LENGTH = 64`,
+  `MODEL_NAME_LENGTH = 128`, `MAX_RAW_TYPE_CODES = 16`, `MAX_RAW_VARIANTS =
+  30`. `ExtractedSpec.to_identity_values()` returns exactly `{buildingline,
+  model_name, year_from, year_to, type_codes, variants}` — the
+  `assign_identity` kwargs minus `manufacturer_id`, plain Python, no Enums.
+  `year_from`/`year_to` reuse the existing `_Quantity`/`_quantity_validator`
+  machinery (two new `_QUANTITIES` entries, `conversions=()`); a
+  `@model_validator(mode="after")` drops `year_to` (never `year_from`) when
+  both are set and `year_to < year_from`.
+- **Disclosed deviation, discovered only through a live OpenRouter call (a
+  unit test cannot catch this — the stub never round-trips real JSON
+  schema):** `variants: list[dict[str, Any]]`'s naive schema
+  (`additionalProperties: true` on each array item) is flatly rejected by
+  OpenAI/Azure's `json_schema` validator, and the schema is a **provider
+  wire-format concern only** — a dynamically-keyed `specs` mapping cannot be
+  made strict-compliant by any combination of `additionalProperties`, closed
+  or open, once nested inside another closed object. The fix (confined to
+  `ExtractedSpec.model_json_schema`, the file's one pre-existing
+  provider-concession seam, plus one `BeforeValidator` helper —
+  `SPEC_FIELDS`/`to_spec_values`/the chain itself are untouched): `variants`'
+  **wire** schema sends each entry's `specs` as an array of `{key, value}`
+  string pairs instead of an object, and `_reshape_raw_specs_pairs` (called
+  from the `variants` field's `BeforeValidator`, `_cap_raw_variants`) turns
+  that back into a flat mapping before Pydantic parses the response — so the
+  field's Python type, `to_identity_values()`'s shape and everything
+  downstream (`identity_validation.normalize_variants`) are exactly as the
+  step outline specified; only the JSON actually sent to/parsed from the
+  provider differs. `_reshape_raw_specs_pairs` also accepts a plain dict
+  as-is (what every hand-built `ExtractedSpec` in tests, and
+  `spec_extraction_service`'s own fixtures, still pass) — only the wire's
+  array-of-pairs shape needs reshaping. Locked in by
+  `test_the_variants_wire_schema_never_has_a_bare_additionalproperties_true`
+  (`tests/llm/test_extraction.py`) so a regression is caught without another
+  live call.
+- `spec_extraction_service._assign_identity(session, motorbike, extracted)`
+  replaces `_assign_manufacturer` at the same call site (after
+  `upsert_draft_spec`). **The `extracted.model_name is None` skip is the
+  cheap short-circuit 6.17/6.18 must know about**: on that path only the
+  manufacturer is assigned (`_assign_manufacturer_only`, the old
+  `_assign_manufacturer` body verbatim, a plain non-merging write) and
+  `assign_identity` is never called. Otherwise, **D2b's per-field merge**
+  runs before the single `assign_identity` call: `manufacturer_id`,
+  `buildingline`, `model_name`, `year_from`, `year_to` each keep
+  `motorbike`'s current value when it is non-`None`, else take the
+  extracted one; `type_codes` is `sorted(set(stored) | set(extracted-kept))`,
+  itself re-run through `identity_validation.normalize_type_codes` a second
+  time so the union's own ≤ 8 cap is enforced *here* (with its own warning)
+  rather than silently a second time inside `assign_identity`; `variants` is
+  `list(motorbike.variants)` unchanged when non-empty, else the
+  extraction's (already `normalize_variants`-validated) list. Manufacturer
+  resolution (`_resolve_manufacturer_id`) does `normalize_name` +
+  `get_or_create`, falling back to `motorbike.manufacturer_id` when
+  extraction named no brand — its result is itself subject to the same
+  "existing wins" merge, not written directly.
+- New `ExtractionResult.identity_warnings: tuple[str, ...] = ()` — the
+  dropped-entry warnings from `normalize_type_codes`/`normalize_variants`
+  (already `logger.warning`'d here too), empty on the manufacturer-only path
+  and on a failed identity write. **6.17 wires this to `_Run._warn`**; this
+  step does not touch `ingestion/service.py`. Any exception raised assigning
+  the identity — `DuplicateModelError` on a slug collision included — is
+  caught with one `logger.warning`; the draft specification always stands
+  and the run continues.
+- `motorbike.type_codes`/`.variants` can be `None` (not `[]`) in the test
+  double `FakeAsyncSession` (its own docstring: "everything else — enum and
+  JSONB defaults — is set by the services in Python"; `create_backlog`
+  doesn't set them, so only Postgres's real `server_default` fills them) —
+  the merge code guards with `motorbike.type_codes or []`. Real Postgres
+  rows never hit this, but a future caller of `_assign_identity` against a
+  freshly-`Motorbike()`-constructed row (not yet flushed) should assume the
+  same.
+- Live smoke, run by the implementing agent (no Docker access for the
+  coordinator's usual proxy this time): **`Yamaha MT-07` could not be used —
+  it is already `approved`, and `LEGAL_TRANSITIONS[APPROVED]` is empty, so
+  `app ingest run` fails loudly with `invalid-transition` before touching
+  any of this step's code** (a pre-existing, unrelated rule; not something
+  6.15 changed). Substituted `BMW R 1200 GS` (the exact M3 milestone demo
+  bike, claim `[K25/K50]`, 2004–2018, `bmw-r-1200-gs`) instead: `app ingest
+  run "BMW R 1200 GS"` → operation `succeeded` → `model_name = "R 1200 GS"`,
+  `year_from = 2004`, `year_to = 2012`, `buildingline = "GS"`,
+  `manufacturer_id` set to BMW, `type_codes = []`. The empty `type_codes` is
+  the **correct** result, not a bug: the actually-fetched English-language
+  sources (English Wikipedia, Visordown, Rider Magazine) never print `K25`
+  or `K50` anywhere (`content_markdown ~* 'K25|K50'` is false on all three);
+  D6 means extraction never reads the `suggestion` claim that does carry
+  them. `year_to = 2012` (not the claim's 2018) likely reflects the sources
+  describing only the K25 sub-generation — a finding-vs-claim question for
+  QA 6.30/the review screen, not an extraction-infrastructure bug. A second
+  real row, `kawasaki-ninja-650`, was also ingested and left `in_review`
+  during the live debugging of the schema fix above (`model_name = "Ninja
+  650"`, `year_from = 2006`, manufacturer set, `type_codes = []`,
+  `variants = []`) — both rows are genuine `in_review` ingestion outputs in
+  the dev DB now, not synthetic scaffolding; 6.17/6.18/QA may re-ingest or
+  clear either.

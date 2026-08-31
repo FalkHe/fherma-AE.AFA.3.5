@@ -61,15 +61,28 @@ def test_schema_mirrors_the_frozen_column_set() -> None:
     assert set(extraction.ExtractedSpec.model_fields) == _SCHEMA_FIELDS
 
 
-def test_the_only_field_outside_the_frozen_set_is_the_manufacturer() -> None:
-    """It describes the bike but lives in its own table (step 2b.2)."""
-    assert extraction.NON_SPEC_FIELDS == ("manufacturer",)
-    assert "manufacturer" not in SPEC_FIELDS
+def test_the_non_spec_fields_are_the_manufacturer_and_the_identity_block() -> None:
+    """They describe the bike but live elsewhere: `manufacturers`, `motorbikes`."""
+    assert extraction.NON_SPEC_FIELDS == (
+        "manufacturer",
+        "buildingline",
+        "model_name",
+        "year_from",
+        "year_to",
+        "type_codes",
+        "variants",
+    )
+    assert not set(extraction.NON_SPEC_FIELDS) & set(SPEC_FIELDS)
 
 
 def test_every_field_is_optional() -> None:
     """ "The documents do not say" is the normal answer, never a validation error."""
-    assert _extracted().model_dump() == dict.fromkeys((*extraction.NON_SPEC_FIELDS, *SPEC_FIELDS))
+    expected = dict.fromkeys((*extraction.NON_SPEC_FIELDS, *SPEC_FIELDS))
+    # `type_codes`/`variants` default to an empty list, not `None` — they are
+    # JSONB `NOT NULL DEFAULT '[]'` columns, mirrored here.
+    expected["type_codes"] = []
+    expected["variants"] = []
+    assert _extracted().model_dump() == expected
 
 
 def test_an_invented_field_is_ignored_not_rejected() -> None:
@@ -310,6 +323,212 @@ def test_filled_fields_names_what_the_extraction_found() -> None:
     assert _extracted(engine_cc=599, power_kw=72).filled_fields() == ("engine_cc", "power_kw")
 
 
+# --- identity fields (step 6.15) -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("field", "answer", "expected"),
+    [
+        ("year_from", 2019, 2019),
+        ("year_from", "2019", 2019),
+        ("year_from", "2019.0", 2019),
+        ("year_from", extraction.YEAR_MIN, extraction.YEAR_MIN),
+        ("year_from", extraction.YEAR_MIN - 1, None),
+        ("year_from", extraction.YEAR_MAX, extraction.YEAR_MAX),
+        ("year_from", extraction.YEAR_MAX + 1, None),
+        ("year_from", "not a year", None),
+        ("year_to", 2023, 2023),
+        ("year_to", None, None),
+    ],
+)
+def test_year_fields_are_clamped_to_the_plausible_window(
+    field: str, answer: Any, expected: int | None
+) -> None:
+    assert getattr(_extracted(**{field: answer}), field) == expected
+
+
+def test_year_to_before_year_from_is_dropped() -> None:
+    """Each field is individually plausible; the pair is not — drop the end."""
+    parsed = _extracted(year_from=2019, year_to=2015)
+
+    assert parsed.year_from == 2019
+    assert parsed.year_to is None
+
+
+def test_year_to_equal_to_year_from_is_kept() -> None:
+    """A one-year generation is not "before" its own start."""
+    parsed = _extracted(year_from=2019, year_to=2019)
+
+    assert parsed.year_to == 2019
+
+
+def test_year_to_with_no_year_from_is_kept_as_is() -> None:
+    """The model-validator only compares the two when both are present."""
+    parsed = _extracted(year_to=2019)
+
+    assert parsed.year_to == 2019
+
+
+def test_buildingline_and_model_name_are_trimmed_text_or_null() -> None:
+    parsed = _extracted(buildingline="  GS  ", model_name=" R 1300 GS ")
+
+    assert (parsed.buildingline, parsed.model_name) == ("GS", "R 1300 GS")
+    assert _extracted(buildingline="   ").buildingline is None
+    assert _extracted(model_name=42).model_name is None
+
+
+def test_buildingline_and_model_name_are_truncated_to_the_column_width() -> None:
+    parsed = _extracted(buildingline="x" * 100, model_name="y" * 200)
+
+    assert len(parsed.buildingline) == extraction.BUILDINGLINE_LENGTH
+    assert len(parsed.model_name) == extraction.MODEL_NAME_LENGTH
+
+
+def test_type_codes_default_to_an_empty_list() -> None:
+    assert _extracted().type_codes == []
+
+
+def test_type_codes_are_schema_level_coercion_only() -> None:
+    """Trimmed strings kept, junk entries dropped — shape/caps live elsewhere."""
+    parsed = _extracted(type_codes=["k50", " sc82 ", 12, None, {"code": "x"}])
+
+    assert parsed.type_codes == ["k50", "sc82"]
+
+
+def test_type_codes_a_non_list_answer_becomes_empty() -> None:
+    assert _extracted(type_codes="K50").type_codes == []
+
+
+def test_type_codes_are_defensively_capped() -> None:
+    """Wider than the real ≤ 8 cap (`identity_validation`), just no unbounded blob."""
+    parsed = _extracted(type_codes=[f"code{index}" for index in range(30)])
+
+    assert len(parsed.type_codes) == extraction.MAX_RAW_TYPE_CODES
+
+
+def test_variants_default_to_an_empty_list() -> None:
+    assert _extracted().variants == []
+
+
+def test_variants_a_non_list_answer_becomes_empty() -> None:
+    assert _extracted(variants={"name": "Adventure"}).variants == []
+
+
+def test_non_dict_variant_entries_are_dropped_not_rejected() -> None:
+    parsed = _extracted(variants=[{"name": "Adventure"}, "junk", 12, None])
+
+    assert parsed.variants == [{"name": "Adventure"}]
+
+
+def test_variants_are_defensively_capped() -> None:
+    """Wider than the real ≤ 20 cap (`identity_validation`), just no unbounded blob."""
+    parsed = _extracted(variants=[{"name": f"Trim {index}"} for index in range(40)])
+
+    assert len(parsed.variants) == extraction.MAX_RAW_VARIANTS
+
+
+def test_a_variant_with_no_specs_key_is_left_exactly_as_it_came_in() -> None:
+    parsed = _extracted(variants=[{"name": "Trophy", "description": "Rally kit"}])
+
+    assert parsed.variants == [{"name": "Trophy", "description": "Rally kit"}]
+
+
+def test_a_variants_specs_wire_shape_of_key_value_pairs_is_reshaped_to_a_mapping() -> None:
+    """The wire shape a real provider call actually returns (see the schema
+    override's docstring): OpenAI/Azure reject a dynamically-keyed object
+    nested inside a strict one, so `specs` travels as `[{key, value}, ...]`
+    and is put back into a flat mapping here."""
+    parsed = _extracted(
+        variants=[
+            {
+                "name": "Adventure",
+                "description": None,
+                "specs": [
+                    {"key": "tank_capacity_l", "value": "30"},
+                    {"key": "seat_height_mm", "value": "890"},
+                ],
+            }
+        ]
+    )
+
+    assert parsed.variants[0]["specs"] == {"tank_capacity_l": "30", "seat_height_mm": "890"}
+
+
+def test_a_variants_specs_plain_mapping_is_kept_as_is() -> None:
+    """A caller building `ExtractedSpec` directly (every test in this suite,
+    `spec_extraction_service`'s own answers) may still hand `specs` a plain
+    dict — only the wire's array-of-pairs shape needs reshaping."""
+    parsed = _extracted(variants=[{"name": "Adventure", "specs": {"tank_capacity_l": 30}}])
+
+    assert parsed.variants[0]["specs"] == {"tank_capacity_l": 30}
+
+
+def test_a_malformed_specs_pair_is_dropped_not_rejected() -> None:
+    parsed = _extracted(
+        variants=[
+            {
+                "name": "Adventure",
+                "specs": [{"key": "tank_capacity_l", "value": "30"}, {"key": "no value"}, "junk"],
+            }
+        ]
+    )
+
+    assert parsed.variants[0]["specs"] == {"tank_capacity_l": "30"}
+
+
+def test_to_identity_values_is_the_assign_identity_kwargs_minus_the_manufacturer() -> None:
+    parsed = _extracted(
+        manufacturer="BMW",
+        buildingline="GS",
+        model_name="R 1300 GS",
+        year_from=2023,
+        year_to=None,
+        type_codes=["K50"],
+        variants=[{"name": "Adventure"}],
+    )
+
+    assert parsed.to_identity_values() == {
+        "buildingline": "GS",
+        "model_name": "R 1300 GS",
+        "year_from": 2023,
+        "year_to": None,
+        "type_codes": ["K50"],
+        "variants": [{"name": "Adventure"}],
+    }
+
+
+def test_to_identity_values_on_an_empty_extraction() -> None:
+    assert _extracted().to_identity_values() == {
+        "buildingline": None,
+        "model_name": None,
+        "year_from": None,
+        "year_to": None,
+        "type_codes": [],
+        "variants": [],
+    }
+
+
+def test_to_spec_values_is_unaffected_by_the_identity_fields() -> None:
+    """`SPEC_FIELDS`/`to_spec_values` stay exactly what they were (untouched)."""
+    parsed = _extracted(
+        engine_cc=599,
+        buildingline="X",
+        model_name="GSR 600",
+        year_from=2006,
+        year_to=2011,
+        type_codes=["K1"],
+        variants=[{"name": "T"}],
+    )
+
+    values = parsed.to_spec_values(extracted_at=EXTRACTED_AT)
+
+    assert list(values) == list(SPEC_FIELDS)
+    for identity_field in extraction.NON_SPEC_FIELDS:
+        if identity_field == "manufacturer":
+            continue
+        assert identity_field not in values
+
+
 # --- the prompt ---------------------------------------------------------------
 
 
@@ -386,6 +605,22 @@ def test_the_chain_constrains_the_answer_to_the_json_schema() -> None:
     assert set(schema["required"]) == _SCHEMA_FIELDS
     assert "manufacturer" in schema["required"]
     assert "additionalProperties" not in schema
+
+
+@pytest.mark.usefixtures("configured")
+def test_the_variants_wire_schema_never_has_a_bare_additionalproperties_true() -> None:
+    """The exact live-provider rejection this step hit (`additionalProperties:
+    true` inside `variants.items`), locked into a unit test so a future change
+    to this override cannot silently reintroduce it without a real API call."""
+    chain = extraction.build_extraction_chain()
+    schema = chain.steps[0].kwargs["response_format"]["json_schema"]["schema"]
+
+    items = schema["properties"]["variants"]["items"]
+    assert items.get("additionalProperties") is False
+    assert set(items["required"]) == set(items["properties"])
+    specs_items = items["properties"]["specs"]["items"]
+    assert specs_items["additionalProperties"] is False
+    assert set(specs_items["required"]) == set(specs_items["properties"]) == {"key", "value"}
 
 
 def test_the_json_schema_is_the_frozen_column_set() -> None:

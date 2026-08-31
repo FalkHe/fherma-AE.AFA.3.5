@@ -36,7 +36,7 @@ from typing import Annotated, Any, cast
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import Runnable
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from app.db.models.motorbike_spec import PRICE_BANDS, SPEC_CATEGORIES, SPEC_FIELDS
 from app.llm.fencing import FENCE_END, FENCE_START, fence
@@ -50,10 +50,42 @@ PROMPT_NAME = "spec_extraction"
 
 # Fields of this schema that are **not** part of the frozen specification column
 # set: they describe the motorbike, but they are stored elsewhere (the brand gets
-# a `manufacturers` row of its own). `to_spec_values` iterates `SPEC_FIELDS`, so
-# they are excluded from the spec write by construction — passing one of them to
-# `upsert_draft_spec` would raise.
-NON_SPEC_FIELDS = ("manufacturer",)
+# a `manufacturers` row of its own; the rest is the identity block on
+# `motorbikes` itself — buildingline, model name, year range, type codes and
+# variants, per `docs/roadmap/model-naming-data-model.md` §2.4/§2.5).
+# `to_spec_values` iterates `SPEC_FIELDS`, so they are excluded from the spec
+# write by construction — passing one of them to `upsert_draft_spec` would
+# raise. `to_identity_values` is the counterpart for these fields.
+NON_SPEC_FIELDS = (
+    "manufacturer",
+    "buildingline",
+    "model_name",
+    "year_from",
+    "year_to",
+    "type_codes",
+    "variants",
+)
+
+# Plausibility window for a production year: wide enough to never reject a real
+# motorcycle, narrow enough to catch a stray number (a price, a spec value) the
+# model mistook for a year.
+YEAR_MIN = 1900
+YEAR_MAX = 2100
+
+# The identity text fields' column widths (`motorbikes.buildingline` /
+# `.model_name`), mirrored here so a long answer is truncated rather than
+# rejected.
+BUILDINGLINE_LENGTH = 64
+MODEL_NAME_LENGTH = 128
+
+# Defensive-only caps at the schema boundary. The *real* validation — shape,
+# dedup, the ≤ 8 / ≤ 20 caps that actually matter — happens in
+# `identity_validation.normalize_type_codes` / `normalize_variants`, called by
+# `spec_extraction_service._assign_identity`. These are wider, just enough to
+# keep a hallucinated long tail from becoming an unbounded payload before that
+# real validation ever sees it.
+MAX_RAW_TYPE_CODES = 16
+MAX_RAW_VARIANTS = 30
 
 # The pinned vocabularies as enums, so they reach the JSON schema the model is
 # constrained by instead of living in prose only. Built from the single source
@@ -172,6 +204,11 @@ _QUANTITIES: dict[str, _Quantity] = {
         minimum=100,
         maximum=1_000_000,
     ),
+    # No unit to convert — a year is a year. Reusing the `_Quantity` machinery
+    # buys the same text-parsing and plausibility-window handling every other
+    # numeric field gets, for free.
+    "year_from": _Quantity(conversions=(), minimum=YEAR_MIN, maximum=YEAR_MAX),
+    "year_to": _Quantity(conversions=(), minimum=YEAR_MIN, maximum=YEAR_MAX),
 }
 
 # A price in another currency is not convertible here (no rate, no date), so it
@@ -331,6 +368,93 @@ def _normalize_mapping(value: Any) -> Any:
     return normalized or None
 
 
+def _capped_text_validator(max_length: int) -> Callable[[Any], Any]:
+    """Return a before-validator: trimmed text, truncated to `max_length`."""
+
+    def validate(value: Any) -> Any:
+        text = _to_text(value)
+        return None if text is None else text[:max_length]
+
+    return validate
+
+
+def _normalize_raw_type_codes(value: Any) -> list[str]:
+    """Schema-level coercion only: trimmed strings, capped defensively.
+
+    The real validation — shape, upper-casing, dedup, the ≤ 8 cap that
+    actually matters — happens in `identity_validation.normalize_type_codes`,
+    called by `spec_extraction_service._assign_identity`, so its `warnings`
+    are not lost inside a Pydantic validator. A non-list or non-string entry
+    is dropped rather than raising.
+    """
+    if not isinstance(value, list):
+        return []
+    codes: list[str] = []
+    for entry in value:
+        text = _to_text(entry)
+        if text is None:
+            continue
+        codes.append(text)
+        if len(codes) >= MAX_RAW_TYPE_CODES:
+            break
+    return codes
+
+
+def _reshape_raw_specs_pairs(value: Any) -> dict[str, Any]:
+    """Turn a variant's `specs` back into a flat mapping, accepting two shapes.
+
+    The **wire** shape (what the provider actually returns — see
+    `ExtractedSpec.model_json_schema`'s docstring) is an array of `{key,
+    value}` pairs: `[{"key": "tank_capacity_l", "value": "30"}, ...]` →
+    `{"tank_capacity_l": "30"}`. A JSON-schema object cannot carry both
+    dynamically-named keys and full strict validation at the same time, so the
+    provider is asked for pairs instead, and this puts them back into the
+    shape `identity_validation.normalize_variants`'s `Variant` model actually
+    expects. A plain mapping (a caller building an `ExtractedSpec` directly,
+    as the tests do) is returned as-is. A malformed pair is dropped, never
+    raised on; anything else becomes `{}`.
+    """
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, list):
+        return {}
+    specs: dict[str, str] = {}
+    for pair in value:
+        if not isinstance(pair, dict):
+            continue
+        key, val = pair.get("key"), pair.get("value")
+        if isinstance(key, str) and isinstance(val, str):
+            specs[key] = val
+    return specs
+
+
+def _cap_raw_variants(value: Any) -> list[dict[str, Any]]:
+    """Schema-level coercion only: at most `MAX_RAW_VARIANTS` dict entries.
+
+    Also reshapes each entry's `specs`, when present, through
+    `_reshape_raw_specs_pairs` — into the flat mapping
+    `identity_validation.normalize_variants` and `to_identity_values()` both
+    deal in. An entry with no `specs` key is left exactly as it came in.
+
+    The real validation — the `Variant` model, the ≤ 20 cap, the `specs` key
+    whitelist — happens in `identity_validation.normalize_variants`, called by
+    `spec_extraction_service._assign_identity`. A non-dict entry is dropped
+    rather than raising (a `list[dict[str, Any]]` field would otherwise fail
+    to validate on it).
+    """
+    if not isinstance(value, list):
+        return []
+    kept: list[dict[str, Any]] = []
+    for entry in value[:MAX_RAW_VARIANTS]:
+        if not isinstance(entry, dict):
+            continue
+        reshaped = dict(entry)
+        if "specs" in reshaped:
+            reshaped["specs"] = _reshape_raw_specs_pairs(reshaped["specs"])
+        kept.append(reshaped)
+    return kept
+
+
 class ExtractedSpec(BaseModel):
     """What the model returns: the frozen specification column set, all optional.
 
@@ -355,14 +479,67 @@ class ExtractedSpec(BaseModel):
         already is, so listing all of them changes nothing about what the model
         may answer: a field it cannot fill comes back as `null`.
 
-        What is *not* added is `additionalProperties: false`: the schema has to
-        stay open for `extra` and `source_hints`, and — verified live through
-        OpenRouter against both providers — a non-strict `json_schema` format is
-        accepted without it. This is why the pinned method still carries the
-        frozen field set.
+        What is *not* added, at the top level, is `additionalProperties: false`:
+        the schema has to stay open for `extra` and `source_hints`, and —
+        verified live through OpenRouter against both providers — a non-strict
+        `json_schema` format is accepted without it. This is why the pinned
+        method still carries the frozen field set.
+
+        **A second provider concession, added in step 6.15 and discovered the
+        same way** (three live OpenRouter calls, not a unit test): Pydantic's
+        default schema for `variants: list[dict[str, Any]]` gives each array
+        item `additionalProperties: true` — the literal boolean, not a schema
+        — which OpenAI/Azure's `json_schema` validator rejects outright
+        ("'additionalProperties' is required to be supplied and to be
+        false"). Closing that object (`properties` + `"additionalProperties":
+        False`) trades one rejection for another: every property in a closed
+        object's `required` list must itself be a fully strict schema, and a
+        dynamically-keyed `specs` mapping — the entire point of a spec
+        *delta* — cannot be one, closed or open. There is no schema shape
+        that lets one JSON object carry both fixed keys (`name`,
+        `description`) *and* arbitrary ones (`specs`) under this provider's
+        strict validation.
+
+        The fix, a step further than `extra`/`source_hints`' plain open dict:
+        `specs` goes over the wire as an **array of `{key, value}` pairs**
+        instead of an object — a fully strict, statically-shaped schema with
+        no dynamic keys anywhere — and `_reshape_raw_specs_pairs` (called from
+        `_cap_raw_variants`, a `BeforeValidator` on the `variants` field) turns
+        it back into a flat mapping before Pydantic ever sees it. So the fix
+        stays confined to this file's two established provider-concession
+        seams (this method for the *wire* schema, a `BeforeValidator` for the
+        *parsed* shape): the field's Python type stays exactly
+        `list[dict[str, Any]]`, `to_identity_values()`'s shape is unaffected,
+        and `identity_validation.normalize_variants` (unchanged) still decides
+        what is kept. See `docs/roadmap/phase-6/shared-knowledge.md` — Step
+        6.15's landed decisions record this as a disclosed deviation from the
+        step's literal outline text.
         """
         schema = super().model_json_schema(*args, **kwargs)
         schema["required"] = list(schema["properties"])
+        schema["properties"]["variants"]["items"] = {
+            "type": "object",
+            "properties": {
+                "name": {"type": ["string", "null"]},
+                "description": {"type": ["string", "null"]},
+                "specs": {
+                    "type": "array",
+                    "description": "Spec-delta entries as {key, value} pairs, e.g. "
+                    '{"key": "tank_capacity_l", "value": "30"}.',
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "key": {"type": "string"},
+                            "value": {"type": "string"},
+                        },
+                        "required": ["key", "value"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["name", "description", "specs"],
+            "additionalProperties": False,
+        }
         return schema
 
     # Not a specification column: the brand becomes a `manufacturers` row, which
@@ -370,6 +547,42 @@ class ExtractedSpec(BaseModel):
     manufacturer: Annotated[str | None, BeforeValidator(_to_text)] = Field(
         default=None,
         description="Brand name only, without the model designation; null if unclear.",
+    )
+    # Not specification columns either: the identity block on `motorbikes`
+    # itself (`buildingline`, `model_name`, `year_from`, `year_to`,
+    # `type_codes`, `variants`). `spec_extraction_service._assign_identity`
+    # merges these into the row per D2b and writes them through
+    # `product_service.assign_identity`. Only schema-level coercion happens
+    # here; the real shape/cap validation is `identity_validation`'s.
+    buildingline: Annotated[
+        str | None, BeforeValidator(_capped_text_validator(BUILDINGLINE_LENGTH))
+    ] = Field(
+        default=None,
+        description="The model family this generation belongs to (e.g. GS, MT, CBR), if the "
+        "documents name one; null otherwise. Never a table/alias lookup, just the family word.",
+    )
+    model_name: Annotated[
+        str | None, BeforeValidator(_capped_text_validator(MODEL_NAME_LENGTH))
+    ] = Field(
+        default=None,
+        description="The marketing model name without the brand, e.g. 'R 1300 GS', 'MT-07'.",
+    )
+    year_from: Annotated[int | None, BeforeValidator(_quantity_validator("year_from"))] = Field(
+        default=None, description="First production year of this generation."
+    )
+    year_to: Annotated[int | None, BeforeValidator(_quantity_validator("year_to"))] = Field(
+        default=None,
+        description="Last production year of this generation; null while still built.",
+    )
+    type_codes: Annotated[list[str], BeforeValidator(_normalize_raw_type_codes)] = Field(
+        default_factory=list,
+        description="Every manufacturer type code the documents print for this generation "
+        "(e.g. K50, SC82, RM33) — invent none.",
+    )
+    variants: Annotated[list[dict[str, Any]], BeforeValidator(_cap_raw_variants)] = Field(
+        default_factory=list,
+        description="Other trims of this generation, as spec deltas from the base trim above "
+        "plus a short description — never the base itself, never a full spec set.",
     )
     category: Annotated[
         ExtractedCategory | None, BeforeValidator(_vocabulary_validator(SPEC_CATEGORIES))
@@ -424,6 +637,20 @@ class ExtractedSpec(BaseModel):
         default=None, description="Always null: the system records the extraction time."
     )
 
+    @model_validator(mode="after")
+    def _drop_an_impossible_year_range(self) -> "ExtractedSpec":
+        """An end year before the start year cannot be a range: drop the end.
+
+        Each field already passed its own plausibility window individually;
+        this catches the pair being internally inconsistent (a model reading
+        two unrelated years off a page). `year_from` is kept — it is still a
+        plausible single fact — only `year_to` is cleared.
+        """
+        year_from, year_to = self.year_from, self.year_to
+        if year_from is not None and year_to is not None and year_to < year_from:
+            self.year_to = None
+        return self
+
     def to_spec_values(self, *, extracted_at: datetime) -> dict[str, Any]:
         """Return the full-object mapping for `product_service.upsert_draft_spec`.
 
@@ -446,6 +673,26 @@ class ExtractedSpec(BaseModel):
     def filled_fields(self) -> tuple[str, ...]:
         """Names of the frozen fields this extraction actually filled."""
         return tuple(field for field in SPEC_FIELDS if getattr(self, field) is not None)
+
+    def to_identity_values(self) -> dict[str, Any]:
+        """Return the identity kwargs of `product_service.assign_identity` minus
+        the manufacturer (`spec_extraction_service` resolves that separately).
+
+        Exactly the keys `buildingline, model_name, year_from, year_to,
+        type_codes, variants`, as plain Python — no Enums, nothing else in
+        this schema is part of the identity block. The caller
+        (`spec_extraction_service._assign_identity`) still has to merge these
+        against the row's current identity per D2b before writing them;
+        this method only shapes the extracted side of that merge.
+        """
+        return {
+            "buildingline": self.buildingline,
+            "model_name": self.model_name,
+            "year_from": self.year_from,
+            "year_to": self.year_to,
+            "type_codes": list(self.type_codes),
+            "variants": [dict(variant) for variant in self.variants],
+        }
 
 
 def render_extraction_prompt(name: str, documents: Sequence[ExtractionDocument]) -> str:

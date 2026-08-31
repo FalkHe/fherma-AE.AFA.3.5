@@ -422,3 +422,172 @@ def test_an_empty_extraction_still_records_the_attempt(
     assert outcome.spec.engine_cc is None
     assert outcome.spec.extracted_at is not None
     assert outcome.spec.extra == {}
+
+
+# --- identity (step 6.15) -------------------------------------------------------
+
+IDENTITY_ANSWER = extraction.ExtractedSpec.model_validate(
+    {
+        "manufacturer": "BMW",
+        "model_name": "R 1250 GS",
+        "buildingline": "GS",
+        "year_from": 2019,
+        "year_to": 2023,
+        "type_codes": ["K50"],
+        "variants": [{"name": "Adventure", "specs": {"tank_capacity_l": 30}}],
+    }
+)
+
+
+def test_identity_is_assigned_from_a_full_extraction(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    stub_model: Callable[..., list[Any]],
+) -> None:
+    stub_model(answer=IDENTITY_ANSWER)
+    _store_document(fake_session, motorbike, SourceType.WIKIPEDIA, "R 1250 GS")
+
+    outcome = asyncio.run(spec_extraction_service.extract_draft_spec(fake_session, motorbike))
+
+    assert isinstance(outcome, spec_extraction_service.ExtractionResult)
+    assert outcome.identity_warnings == ()
+    assert motorbike.model_name == "R 1250 GS"
+    assert motorbike.buildingline == "GS"
+    assert (motorbike.year_from, motorbike.year_to) == (2019, 2023)
+    assert motorbike.type_codes == ["K50"]
+    assert [variant["name"] for variant in motorbike.variants] == ["Adventure"]
+    manufacturer = fake_session.rows(Manufacturer)[0]
+    assert manufacturer.name == "BMW"
+    assert motorbike.manufacturer_id == manufacturer.id
+    assert motorbike.slug == "bmw/r-1250-gs/2019-2023"
+
+
+def test_model_name_none_assigns_the_manufacturer_only(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    stub_model: Callable[..., list[Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A full-object `assign_identity` replace with nulls must not wipe an identity."""
+    calls: list[Any] = []
+
+    async def _spy(*args: Any, **kwargs: Any) -> Motorbike:
+        calls.append((args, kwargs))
+        return motorbike
+
+    monkeypatch.setattr(product_service, "assign_identity", _spy)
+    stub_model(answer=_answer(manufacturer="Suzuki", engine_cc="599 cc"))
+    _store_document(fake_session, motorbike, SourceType.WIKIPEDIA, "599 cc")
+
+    outcome = asyncio.run(spec_extraction_service.extract_draft_spec(fake_session, motorbike))
+
+    assert isinstance(outcome, spec_extraction_service.ExtractionResult)
+    assert calls == []
+    assert outcome.identity_warnings == ()
+    manufacturer = fake_session.rows(Manufacturer)[0]
+    assert manufacturer.name == "Suzuki"
+    assert motorbike.manufacturer_id == manufacturer.id
+    assert motorbike.model_name is None
+
+
+def test_extraction_merge_prefers_the_existing_non_null_identity(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    stub_model: Callable[..., list[Any]],
+) -> None:
+    """D2b: a stored non-NULL value wins, type codes union, empty variants only."""
+    honda = asyncio.run(manufacturer_service.get_or_create(fake_session, "Honda"))
+    asyncio.run(
+        product_service.assign_identity(
+            fake_session,
+            motorbike,
+            manufacturer_id=honda.id,
+            buildingline="Adventure",
+            model_name="R 1300 GS",
+            year_from=2023,
+            year_to=None,
+            type_codes=["K81"],
+            variants=[{"name": "Trophy", "description": "Rally kit"}],
+        )
+    )
+    stub_model(answer=IDENTITY_ANSWER)  # manufacturer BMW, model_name R 1250 GS, ...
+    _store_document(fake_session, motorbike, SourceType.WIKIPEDIA, "R 1250 GS")
+
+    outcome = asyncio.run(spec_extraction_service.extract_draft_spec(fake_session, motorbike))
+
+    assert isinstance(outcome, spec_extraction_service.ExtractionResult)
+    # Existing non-NULL values win over the (differing) extracted ones.
+    assert motorbike.manufacturer_id == honda.id
+    assert motorbike.buildingline == "Adventure"
+    assert motorbike.model_name == "R 1300 GS"
+    assert motorbike.year_from == 2023
+    # Existing NULL is filled from the extraction.
+    assert motorbike.year_to == 2023
+    # type_codes: union of stored and extracted.
+    assert motorbike.type_codes == ["K50", "K81"]
+    # variants: the non-empty stored list is kept, the extracted one discarded.
+    assert [variant["name"] for variant in motorbike.variants] == ["Trophy"]
+
+
+def test_extraction_fills_null_identity_fields_but_keeps_an_existing_manufacturer(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    stub_model: Callable[..., list[Any]],
+) -> None:
+    """A partially-corrected row (manufacturer only) still gets the rest filled."""
+    honda = asyncio.run(manufacturer_service.get_or_create(fake_session, "Honda"))
+    asyncio.run(product_service.assign_manufacturer(fake_session, motorbike, honda.id))
+    stub_model(answer=IDENTITY_ANSWER)  # extracted manufacturer is BMW, ignored below
+    _store_document(fake_session, motorbike, SourceType.WIKIPEDIA, "R 1250 GS")
+
+    asyncio.run(spec_extraction_service.extract_draft_spec(fake_session, motorbike))
+
+    assert motorbike.manufacturer_id == honda.id
+    assert motorbike.model_name == "R 1250 GS"
+    assert motorbike.year_from == 2019
+
+
+def test_a_raising_assign_identity_does_not_fail_the_extraction(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    stub_model: Callable[..., list[Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`DuplicateModelError` included — the draft specification always stands."""
+
+    async def _explode(*args: Any, **kwargs: Any) -> Motorbike:
+        raise product_service.DuplicateModelError("bmw/r-1250-gs/2019-2023")
+
+    monkeypatch.setattr(product_service, "assign_identity", _explode)
+    stub_model(answer=IDENTITY_ANSWER)
+    _store_document(fake_session, motorbike, SourceType.WIKIPEDIA, "R 1250 GS")
+
+    outcome = asyncio.run(spec_extraction_service.extract_draft_spec(fake_session, motorbike))
+
+    assert isinstance(outcome, spec_extraction_service.ExtractionResult)
+    assert outcome.spec.extracted_at is not None
+    assert motorbike.model_name is None
+    assert outcome.identity_warnings == ()
+
+
+def test_identity_warnings_carry_the_normalisers_dropped_entries(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    stub_model: Callable[..., list[Any]],
+) -> None:
+    stub_model(
+        answer=_answer(
+            model_name="R 1250 GS",
+            year_from=2019,
+            type_codes=["not a valid code!!", "K50"],
+            variants=[{"name": "Adventure", "specs": {"bogus_key": 1}}],
+        )
+    )
+    _store_document(fake_session, motorbike, SourceType.WIKIPEDIA, "R 1250 GS")
+
+    outcome = asyncio.run(spec_extraction_service.extract_draft_spec(fake_session, motorbike))
+
+    assert isinstance(outcome, spec_extraction_service.ExtractionResult)
+    assert len(outcome.identity_warnings) == 2
+    assert motorbike.type_codes == ["K50"]
+    assert motorbike.variants[0]["specs"] == {}

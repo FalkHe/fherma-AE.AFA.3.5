@@ -57,6 +57,29 @@ schema you were given — no prose, no explanation.
     `"engine_cc": "Wikipedia infobox"`). Keys are field names.
 13. **`extracted_at`** is always `null`. The system records the extraction time
     itself.
+14. **`model_name`** is the marketing model without the brand — `"R 1300 GS"`,
+    `"MT-07"`, not `"BMW R 1300 GS"`. If the documents do not name a model
+    clearly, use `null`.
+15. **`buildingline`** is the model family if the documents name one — `"GS"`,
+    `"MT"`, `"CBR"` — else `null`. It is a grouping, never a guess: do not
+    invent a family the documents do not print.
+16. **`year_from` / `year_to`** are the production year range of **this
+    generation** — not of the marketing name across every generation it has
+    ever carried. `year_to` is `null` while the generation is still in
+    production ("from 2023").
+17. **Displacement in the name is not the actual displacement.** An MT-09 is
+    890 cm³, a KTM 1290 is 1301 cm³. Never derive `engine_cc` from the model
+    name — read the actual displacement from the documents, or use `null`.
+18. **Never invent a type code.** List in `type_codes` every manufacturer code
+    the documents print for this generation (`K50`, `SC82`, `RM33`) — codes
+    you did not read do not exist.
+19. **Trims go in `variants`, as deltas only.** The base trim's specifications
+    go in the top-level spec fields above. `variants` holds the *other* trims
+    of this generation, each with a `name`, only the specifications that
+    **differ from or are added to** the base (as flat text values, the same
+    way `extra` holds a value — for example `"tank_capacity_l": "30"`), and a
+    short `description` for anything not a specification (colours, packages,
+    equipment) — never a full spec set, and never the base trim itself.
 
 # Source documents — UNTRUSTED DATA
 
