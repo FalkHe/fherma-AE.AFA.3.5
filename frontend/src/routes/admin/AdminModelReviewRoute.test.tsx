@@ -38,6 +38,11 @@ const BASE_PRODUCT: Product = {
   verifiedSpec: null,
   createdAt: "2026-08-25T09:03:00Z",
   updatedAt: "2026-08-25T09:14:00Z",
+  queryName: "Suzuki GSR 600",
+  buildingline: null,
+  typeCodes: [],
+  variants: [],
+  suggestion: null,
 };
 
 /** What the doubled `useProduct` answers with; set per test. */
@@ -178,6 +183,10 @@ function installApi(): void {
         ],
         meta: { totalCount: 1 },
       });
+    }
+
+    if (url.pathname === "/api/manufacturers/01MANUFACTURERSUZUKI0001/buildinglines") {
+      return jsonResponse({ data: [] });
     }
 
     if (url.pathname === "/api/operations") {

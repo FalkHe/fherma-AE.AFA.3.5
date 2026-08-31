@@ -20,23 +20,16 @@ import { jsonResponse } from "./network";
 
 type SummaryAttributes = components["schemas"]["CatalogueModelSummaryAttributes"];
 /**
- * `variants` (data-model §2.5, ui-spec §8 API-2) is a local addition — the
- * generated `CatalogueModelAttributes` does not carry it until backend step
- * 6.23 lands, same "local member, deleted by 6.28" pattern as
- * `useCatalogueModel.ts`'s `CatalogueVariant`.
+ * `variants` is real since backend step 6.20 (`CatalogueModelAttributes`
+ * carries it, required — every fixture below now supplies it, `[]` where
+ * there is none).
  */
 type ModelAttributes = components["schemas"]["CatalogueModelAttributes"] & {
-  variants?: {
-    slug: string;
-    name: string;
-    description?: string | null;
-    specs?: Partial<Record<string, unknown>>;
-  }[];
   /**
    * `usedPrice` (data-model §2.5-adjacent, ui-spec §8 API-3) is a local
    * addition — the generated `CatalogueModelAttributes` does not carry it
    * until backend step 6.23 lands, same "local member, deleted by 6.28"
-   * pattern as `variants` above.
+   * pattern noted on `useCatalogueModel.ts`'s `CatalogueModelDetail`.
    */
   usedPrice?: {
     medianEur: number;
@@ -223,7 +216,12 @@ const DETAILS: Record<string, ModelAttributes> = {
     // Two trims — one description-only (chip row only), one carrying a
     // spec delta (chip row + one `ModelSpecTable` trims-group row).
     variants: [
-      { slug: "comfort", name: "Comfort", description: "Adds a taller screen and heated grips." },
+      {
+        slug: "comfort",
+        name: "Comfort",
+        description: "Adds a taller screen and heated grips.",
+        specs: null,
+      },
       {
         slug: "sport",
         name: "Sport",
@@ -291,6 +289,7 @@ const DETAILS: Record<string, ModelAttributes> = {
       },
     ],
     images: [],
+    variants: [],
   },
 };
 

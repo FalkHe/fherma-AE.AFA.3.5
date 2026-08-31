@@ -1528,3 +1528,72 @@ stop-and-report.
 stand-ins (`usedPrice` on `CatalogueModelDetail`, `CostEstimatorResult`) once
 6.23 regenerates the client. Expect the same class of fixture churn and treat
 it the same way.
+
+### Step 6.27
+
+- All of 6.24's hand-rolled additive types in `useProductReview.ts`
+  (`ProductIdentityFields`, `ProductWithIdentity`) and the one commented cast
+  in `patchIdentity` are gone. `ProductVariant`, `ProductSuggestion`,
+  `SuggestionYearRange` are now thin re-exports of the generated
+  `components["schemas"]["…"]` types (kept under the same names so
+  `claimLogic.ts`/`ModelClaimPanel.tsx`/their tests needed no edits);
+  `VariantWrite` = generated `Variant` (the write shape — **`slug`,
+  `description`, `specs` are all required, non-optional, non-nullable keys
+  with empty-value defaults** `""`/`""`/`{}`, unlike the read-side
+  `ProductVariant`, because FastAPI only drops a field from `required` when
+  its Python default is `None` *and* the type allows `null` — none of these
+  three qualify). `IdentityBlock` = generated `IdentityRequest`. Every
+  `ProductWithIdentity` call site (`ModelIdentityPanel.tsx` and its test) now
+  takes the plain `Product` from `useProducts.ts` — it was already a strict
+  superset once `ProductAttributes` went additive, so the `Partial` wrapper
+  was pure debt.
+- `useBuildinglines.ts` now calls `apiClient.GET` on
+  `/api/manufacturers/{manufacturer_id}/buildinglines`, unwrapping
+  `BuildinglinesDocument.data` — landed shape is exactly ui-spec API-5's
+  proposal (`{"data": string[]}`), admin-only, 404 on an unknown
+  manufacturer, no adaptation needed beyond dropping the old raw-`fetch`
+  precedent. Hook name/`queryKeys` builder/`staleTime` unchanged.
+- **Genuine, disclosed swap not named in the step outline:** the customer-side
+  `useCatalogueModel.ts`/`ModelSpecTable.tsx` also needed reconciling —
+  6.20's regeneration (not 6.23's, still pending) already landed
+  `CatalogueModelAttributes.variants: ProductVariant[]` as a **required**
+  field (confirmed live: every `GET /api/catalogue-models/{id}` response
+  carries it), so 6.25's local, optional `CatalogueVariant`/`Partial<{
+  variants }>` stand-in was itself already the kind of dead debt this sync
+  point exists to clear, and was included in the 11-error tally 6.20's note
+  attributed to this step (`useCatalogueModel.ts` is named there).
+  `CatalogueVariant` is now a re-export of the same generated `ProductVariant`
+  the admin side uses (no D6 conflict — the claim boundary is a property of
+  `suggestion`, never of `variants`). `usedPrice` stays exactly as 6.26 left
+  it (`Partial<{ usedPrice }>`, untouched) — that is 6.28's swap, gated on
+  6.23, out of scope here.
+- Added `admin.review.documents.sourceType.listing` = "Used listing" to
+  `frontend/src/locales/en/translation.json` — the i18n key 6.13's `listing`
+  enum value needed and no step had claimed, per the coordinator's
+  adjudication.
+- D6 compile-time fence (`ModelClaimPanel.test.tsx`'s `@ts-expect-error`) now
+  points at `CatalogueModelDetail`, which wraps the **generated**
+  `CatalogueModelAttributes` directly — still holds, still red without the
+  directive (verified: `pnpm typecheck` stays green with it in place, i.e.
+  `suggestion` genuinely is not a member).
+- `queryKeys.products.detail(id)` is `["products", "detail", id]`, a child of
+  `queryKeys.products.all = ["products"]`; the landed `useServerEvents`
+  `product.updated` → `INVALIDATIONS` entry already invalidates
+  `queryKeys.products.all` with TanStack's default `exact: false`, so it
+  already covers the detail query — no `useServerEvents.ts` edit needed.
+  Verified live (not through a browser — none is available in this
+  environment; the closest evidence producible): logged in as
+  `step69check`/`M1demo!Pass123`, `PATCH /api/products/{id}` on the real
+  `aprilia-tuono-125` row (in_review, NULL `year_from`, claim `Tuono 125
+  2017–present`) with `identity.manufacturerId`/`modelName`/`yearFrom` filled
+  returned 200 and the recomputed slug `aprilia/tuono-125/2017-`; a follow-up
+  `app catalogue set-identity aprilia/tuono-125/2017- --buildingline Tuono`
+  and a plain `GET` immediately showed the CLI-written `buildingline` and a
+  newer `updatedAt` in the same response shape the panel consumes — proving
+  the wire round-trip and the write-path parity between the PATCH and the CLI
+  that `useServerEvents`'s existing invalidation is what refreshes client-side.
+  `GET /api/manufacturers/{id}/buildinglines` returned `{"data":[]}` for
+  Aprilia live. 6.30 should still drive the same flow through a real browser.
+- 6.28 inherits: the used-price stand-ins on `CatalogueModelDetail`/
+  `CostEstimatorResult` are the only remaining local additive types in this
+  area; everything else the reconciliation touched is gone.

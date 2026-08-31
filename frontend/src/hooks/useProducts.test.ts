@@ -41,6 +41,11 @@ function productResource(
       verifiedSpec: null,
       createdAt: "2026-08-25T09:00:00Z",
       updatedAt: "2026-08-25T09:00:00Z",
+      queryName: `Model ${id}`,
+      buildingline: null,
+      typeCodes: [],
+      variants: [],
+      suggestion: null,
       ...overrides,
     },
   };

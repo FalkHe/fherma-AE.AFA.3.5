@@ -32,22 +32,16 @@ export type CatalogueImage = components["schemas"]["CatalogueImage"];
 export type ModelSource = components["schemas"]["CatalogueSource"];
 
 /**
- * One trim as the customer-facing payload will carry it once backend step
- * 6.23 lands `variants` on `CatalogueModelAttributes` (data-model §2.5,
- * ui-spec §8 API-2). A local type, deliberately decoupled from the admin-only
- * `ProductVariant`/`VariantWrite` in `useProductReview.ts` (that file also
- * carries the D6 claim boundary; this one never does) — 6.28 deletes this
- * member and swaps to the generated one.
+ * One trim as the customer-facing payload carries it (data-model §2.5,
+ * ui-spec §8 API-2) — the generated `ProductVariant` schema, landed by
+ * backend step 6.20 on `CatalogueModelAttributes.variants`. Re-exported under
+ * this name (rather than importing `components["schemas"]["ProductVariant"]`
+ * at every call site) since step 6.27; deliberately the same generated type
+ * as the admin-only `ProductVariant` in `useProductReview.ts` — the D6 claim
+ * boundary is a property of `suggestion`, not of `variants`, so sharing this
+ * one is fine.
  */
-export type CatalogueVariant = {
-  slug: string;
-  name: string;
-  description?: string | null;
-  // Loosely typed on purpose — `specFields.ts` (a presentation module) is not
-  // imported into this hook layer; `formatVariantDeltaLine` there narrows to
-  // the frozen `SpecFieldKey`s itself and skips anything else.
-  specs?: Partial<Record<string, unknown>>;
-};
+export type CatalogueVariant = components["schemas"]["ProductVariant"];
 
 /**
  * Everything the detail page renders (ui-spec §4.6 "data needs"): the resource
@@ -57,20 +51,20 @@ export type CatalogueVariant = {
  * an approved model without a verified revision answers 13 nulls, and the table
  * omits what it does not know rather than guessing it.
  *
- * `variants` is `Partial` (step 6.25): today's payload does not carry it at
- * all, and the trims chip row / spec-table group both degrade to "renders
- * nothing" per display-spec §11 when the member is absent.
+ * `variants` is real since backend step 6.20 (`CatalogueModelAttributes`
+ * carries it, required, never absent — an unreviewed model simply has an
+ * empty list).
  *
- * `usedPrice` is `Partial` for the same reason (step 6.26, ui-spec §8 API-3):
- * the generated `CatalogueModelAttributes` does not carry it until backend
- * step 6.23 lands `usedPrice` on the detail resource — 6.28 deletes this
- * member and swaps to the generated one. `null` is the defined "no researched
- * price yet" state; an absent member is the pre-6.23 payload shape.
+ * `usedPrice` is still `Partial` (step 6.26, ui-spec §8 API-3): the generated
+ * `CatalogueModelAttributes` does not carry it until backend step 6.23 lands
+ * `usedPrice` on the detail resource — 6.28 deletes this member and swaps to
+ * the generated one. `null` is the defined "no researched price yet" state;
+ * an absent member is the pre-6.23 payload shape.
  */
 export type CatalogueModelDetail = {
   motorbikeId: string;
 } & components["schemas"]["CatalogueModelAttributes"] &
-  Partial<{ variants: CatalogueVariant[]; usedPrice: UsedPrice | null }>;
+  Partial<{ usedPrice: UsedPrice | null }>;
 
 /**
  * A failed catalogue read.

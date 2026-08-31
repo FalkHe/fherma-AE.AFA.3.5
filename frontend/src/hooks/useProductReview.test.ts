@@ -63,6 +63,11 @@ function productResource(
       verifiedSpec: null,
       createdAt: "2026-08-25T09:03:00Z",
       updatedAt: "2026-08-25T09:14:00Z",
+      queryName: "Suzuki GSR 600",
+      buildingline: null,
+      typeCodes: [],
+      variants: [],
+      suggestion: null,
       ...overrides,
     },
   };

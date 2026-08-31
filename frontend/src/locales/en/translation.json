@@ -172,7 +172,8 @@
           "product": "Product page",
           "technical": "Technical documentation",
           "magazine": "Magazine",
-          "upload": "Upload"
+          "upload": "Upload",
+          "listing": "Used listing"
         },
         "loadError": "Could not load the documents"
       },

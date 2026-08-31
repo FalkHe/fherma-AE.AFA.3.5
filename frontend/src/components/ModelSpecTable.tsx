@@ -114,7 +114,7 @@ export function ModelSpecTable({
   // never phrased as a filter promise — the group heading is "Trims", not
   // "Also available with…" (D4's known gap).
   const variantRows = (variants ?? [])
-    .filter((variant) => variant.specs !== undefined && Object.keys(variant.specs).length > 0)
+    .filter((variant) => variant.specs !== null && Object.keys(variant.specs).length > 0)
     .map((variant) => ({
       slug: variant.slug,
       name: variant.name,

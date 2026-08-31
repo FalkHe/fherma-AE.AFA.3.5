@@ -39,9 +39,14 @@ export function matchManufacturerClaim(
 export function collapseClaimedYears(
   suggestion: ProductSuggestion,
 ): { yearFrom: number; yearTo: number | null } | null {
+  // `SuggestionYearRange.from`/`.to` are both `number | null` on the wire
+  // (a range with no known start is not itself impossible), so a range
+  // missing `from` cannot anchor the collapse and is dropped.
   const froms =
     suggestion.yearRanges.length > 0
-      ? suggestion.yearRanges.map((range) => range.from)
+      ? suggestion.yearRanges
+          .map((range) => range.from)
+          .filter((from): from is number => from !== null && from !== undefined)
       : suggestion.yearFrom !== null
         ? [suggestion.yearFrom]
         : [];
@@ -58,7 +63,9 @@ export function collapseClaimedYears(
 
   const tos =
     suggestion.yearRanges.length > 0
-      ? suggestion.yearRanges.map((range) => range.to ?? range.from)
+      ? suggestion.yearRanges
+          .map((range) => range.to ?? range.from)
+          .filter((to): to is number => to !== null && to !== undefined)
       : suggestion.yearTo !== null
         ? [suggestion.yearTo]
         : [];
@@ -83,8 +90,14 @@ function formatYearSpan(t: TFunction, from: number, to: number | null): string {
  */
 export function formatClaimedYears(t: TFunction, suggestion: ProductSuggestion): string | null {
   if (suggestion.yearRanges.length > 1) {
+    // A range with no `from` at all carries nothing to render — dropped
+    // rather than shown as a blank span.
     return suggestion.yearRanges
-      .map((range) => formatYearSpan(t, range.from, range.to))
+      .filter(
+        (range): range is { from: number; to: number | null } =>
+          range.from !== null && range.from !== undefined,
+      )
+      .map((range) => formatYearSpan(t, range.from, range.to ?? null))
       .join(" · ");
   }
 

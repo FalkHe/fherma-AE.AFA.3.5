@@ -48,7 +48,12 @@ const FULL_SPECS: CatalogueModelDetail["specs"] = {
 };
 
 const TWO_VARIANTS: CatalogueVariant[] = [
-  { slug: "comfort", name: "Comfort", description: "Adds anti-lock braking as standard." },
+  {
+    slug: "comfort",
+    name: "Comfort",
+    description: "Adds anti-lock braking as standard.",
+    specs: null,
+  },
   {
     slug: "sport",
     name: "Sport",

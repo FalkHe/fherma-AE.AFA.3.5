@@ -43,9 +43,9 @@ import {
   SaveIdentityError,
   useSaveIdentity,
   type DraftSpec,
-  type ProductWithIdentity,
   type VariantWrite,
 } from "../hooks/useProductReview";
+import type { Product } from "../hooks/useProducts";
 
 import {
   collapseClaimedYears,
@@ -381,9 +381,9 @@ function specValueToInput(field: VariantSpecField, value: unknown): string {
 
 /** A stored trim's `specs` → the form's delta rows, in the eight fields' canonical order. */
 function specRowsFromSpecs(
-  specs: Partial<DraftSpec> | undefined,
+  specs: Record<string, unknown> | null,
 ): { field: VariantSpecField; value: string }[] {
-  if (specs === undefined) {
+  if (specs === null) {
     return [];
   }
 
@@ -392,7 +392,7 @@ function specRowsFromSpecs(
   ).map((field) => ({ field, value: specValueToInput(field, specs[field]) }));
 }
 
-function toFormValues(product: ProductWithIdentity): IdentityFormInput {
+function toFormValues(product: Product): IdentityFormInput {
   return {
     // Resolved once the manufacturer options load (see the effect below): the
     // API does not (yet) answer with a manufacturer id, only its rendered name.
@@ -410,16 +410,22 @@ function toFormValues(product: ProductWithIdentity): IdentityFormInput {
   };
 }
 
-/** The submitted form buffer's one trim → the write shape `useSaveIdentity` sends (no `slug`, D1). */
+/**
+ * The submitted form buffer's one trim → the write shape `useSaveIdentity`
+ * sends. The generated `Variant` schema requires `slug`/`description`/`specs`
+ * as present (non-optional) keys with empty-value defaults even though the
+ * server always recomputes `slug` from `name` and ignores whatever is sent
+ * (D1) — so an empty trim sends `slug: ""`, `description: ""`, `specs: {}`
+ * rather than omitting them.
+ */
 function toVariantWrite(variant: IdentityFormValues["variants"][number]): VariantWrite {
-  const specs = Object.fromEntries(
-    variant.specRows.map((row) => [row.field, row.value]),
-  ) as Partial<DraftSpec>;
+  const specs = Object.fromEntries(variant.specRows.map((row) => [row.field, row.value]));
 
   return {
+    slug: "",
     name: variant.name,
-    description: variant.description === "" ? undefined : variant.description,
-    specs: Object.keys(specs).length > 0 ? specs : undefined,
+    description: variant.description,
+    specs,
   };
 }
 
@@ -804,7 +810,7 @@ function ContextRows({ slug, queryName }: { slug: string; queryName: string }) {
 }
 
 /** The read-only rendering for an approved model (§1.7) — values, never a form. */
-function ReadOnlyIdentity({ product }: { product: ProductWithIdentity }) {
+function ReadOnlyIdentity({ product }: { product: Product }) {
   const { t } = useTranslation();
   const yearRange = formatYearRange(t, product.yearFrom, product.yearTo);
   const rows: [string, string][] = [
@@ -866,7 +872,7 @@ function ReadOnlyIdentity({ product }: { product: ProductWithIdentity }) {
                   {variant.description != null && variant.description !== "" && (
                     <Typography variant="body2">{variant.description}</Typography>
                   )}
-                  {variant.specs !== undefined && Object.keys(variant.specs).length > 0 && (
+                  {variant.specs !== null && Object.keys(variant.specs).length > 0 && (
                     <Typography variant="body2" color="text.secondary">
                       {formatVariantDeltaLine(t, variant.specs)}
                     </Typography>
@@ -886,7 +892,7 @@ export function ModelIdentityPanel({
   operation,
   onDirtyChange,
 }: {
-  product: ProductWithIdentity;
+  product: Product;
   /** The row's latest operation, so a succeeded-with-warnings run can be flagged (§2.4). */
   operation?: Operation;
   /**

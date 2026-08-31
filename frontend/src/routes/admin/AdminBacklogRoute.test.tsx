@@ -66,6 +66,11 @@ function product(
       draftSpec: null,
       verifiedSpec: null,
       updatedAt: attributes.createdAt,
+      queryName: attributes.name,
+      buildingline: null,
+      typeCodes: [],
+      variants: [],
+      suggestion: null,
       ...attributes,
     },
   };

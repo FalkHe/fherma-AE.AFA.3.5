@@ -8,8 +8,8 @@ import {
   type IdentityBlock,
   type ProductSuggestion,
   type ProductVariant,
-  type ProductWithIdentity,
 } from "../hooks/useProductReview";
+import type { Product } from "../hooks/useProducts";
 import { jsonResponse, stubFetch } from "../test/network";
 import { renderWithProviders } from "../test/render";
 
@@ -44,7 +44,7 @@ vi.mock("../hooks/useProductReview", async (importOriginal) => {
 const MANUFACTURER_SUZUKI = "01MANUFACTURERSUZUKI0001";
 const MANUFACTURER_HONDA = "01MANUFACTURERHONDA00001";
 
-const PRODUCT: ProductWithIdentity = {
+const PRODUCT: Product = {
   id: "01PRODUCTINREVIEW000000001",
   name: "Suzuki GSR 600",
   slug: "suzuki-gsr-600",
@@ -92,7 +92,7 @@ function installOptionsApi(): void {
     }
 
     if (url.pathname === `/api/manufacturers/${MANUFACTURER_SUZUKI}/buildinglines`) {
-      return jsonResponse(["GSR", "GSX"]);
+      return jsonResponse({ data: ["GSR", "GSX"] });
     }
 
     throw new Error(`Unexpected ${request.method} ${request.url}`);
@@ -100,7 +100,7 @@ function installOptionsApi(): void {
 }
 
 function renderPanel(
-  product: ProductWithIdentity = PRODUCT,
+  product: Product = PRODUCT,
   operation?: Pick<Operation, "status" | "message">,
 ) {
   return renderWithProviders(
@@ -429,7 +429,7 @@ describe("ModelIdentityPanel — trims editor (ui-spec §3.1)", () => {
     const values = savedIdentity();
 
     expect(values.variants).toEqual([
-      { name: "Triple Black", description: undefined, specs: undefined },
+      { slug: "", name: "Triple Black", description: "", specs: {} },
     ]);
     // `onSuccess` reset the buffer to what was sent — no longer dirty.
     expect(screen.getByRole("button", { name: "Save identity" })).toBeDisabled();
@@ -441,6 +441,8 @@ describe("ModelIdentityPanel — trims editor (ui-spec §3.1)", () => {
       const twentyVariants: ProductVariant[] = Array.from({ length: 20 }, (_unused, index) => ({
         slug: `trim-${index}`,
         name: `Trim ${index}`,
+        description: null,
+        specs: null,
       }));
 
       renderPanel({ ...PRODUCT, variants: twentyVariants });
