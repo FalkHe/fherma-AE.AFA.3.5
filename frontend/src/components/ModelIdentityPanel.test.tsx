@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -213,7 +213,13 @@ describe("ModelIdentityPanel — save flow", () => {
     renderPanel();
 
     await screen.findByLabelText("Manufacturer");
-    await userEvent.type(screen.getByLabelText("Model name"), "x".repeat(129));
+    // `fireEvent.change` rather than 129 individual `userEvent.type` keystrokes:
+    // this test is about the length rule, not per-character input behaviour
+    // (already covered elsewhere), and each keystroke re-renders the panel for
+    // the live preview (§6.2) — 129 of those is needlessly slow.
+    fireEvent.change(screen.getByLabelText("Model name"), {
+      target: { value: "x".repeat(129) },
+    });
     await userEvent.click(screen.getByRole("button", { name: "Save identity" }));
 
     expect(await screen.findByText("At most 128 characters.")).toBeInTheDocument();

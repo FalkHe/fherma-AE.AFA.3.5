@@ -16,9 +16,10 @@ import TableCell from "@mui/material/TableCell";
 import TableRow from "@mui/material/TableRow";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
+import type { TFunction } from "i18next";
 import { useEffect, useRef, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
-import { useTranslation, type TFunction } from "react-i18next";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
 import { useBuildinglines } from "../hooks/useBuildinglines";
@@ -131,18 +132,52 @@ type IdentityFormValues = z.output<typeof identityFormSchema>;
 type ValidatedField = "buildingline" | "modelName" | "yearFrom" | "yearTo" | "typeCodes";
 
 /**
+ * Every §1.3 message a field can show, translated through a literal key at
+ * every call site — the project's typed i18n key union (`pnpm typecheck`)
+ * rejects a `t()` call whose key is a plain `string`, so a zod message or a
+ * `ValidatedField` name is translated through an exhaustive `switch` instead
+ * of an indexed lookup, never widened or cast.
+ */
+function translateIdentityErrorKey(t: TFunction, key: string): string {
+  switch (key) {
+    case "admin.identity.errors.modelNameTooLong":
+      return t("admin.identity.errors.modelNameTooLong");
+    case "admin.identity.errors.buildinglineTooLong":
+      return t("admin.identity.errors.buildinglineTooLong");
+    case "admin.identity.errors.yearInvalid":
+      return t("admin.identity.errors.yearInvalid");
+    case "admin.identity.errors.yearOrder":
+      return t("admin.identity.errors.yearOrder");
+    case "admin.identity.errors.typeCodeInvalid":
+      return t("admin.identity.errors.typeCodeInvalid");
+    case "admin.identity.errors.typeCodesMax":
+      return t("admin.identity.errors.typeCodesMax");
+    default:
+      // Unreachable in practice — every message this form sets is one of the
+      // six keys above — but a `t()` call still needs a literal key.
+      return t("common.errors.serverError");
+  }
+}
+
+/**
  * A server-mapped 422 (`form.setError(field, { type: "server" })`, ui-spec
  * §1.5) carries no message of its own — the field's §1.3 message is shown
  * regardless of which specific rule the server enforced, same as a
  * client-side failure on that field.
  */
-const DEFAULT_FIELD_ERROR_MESSAGE: Record<ValidatedField, string> = {
-  buildingline: "admin.identity.errors.buildinglineTooLong",
-  modelName: "admin.identity.errors.modelNameTooLong",
-  yearFrom: "admin.identity.errors.yearInvalid",
-  yearTo: "admin.identity.errors.yearInvalid",
-  typeCodes: "admin.identity.errors.typeCodeInvalid",
-};
+function defaultFieldErrorMessage(t: TFunction, name: ValidatedField): string {
+  switch (name) {
+    case "buildingline":
+      return t("admin.identity.errors.buildinglineTooLong");
+    case "modelName":
+      return t("admin.identity.errors.modelNameTooLong");
+    case "yearFrom":
+    case "yearTo":
+      return t("admin.identity.errors.yearInvalid");
+    case "typeCodes":
+      return t("admin.identity.errors.typeCodeInvalid");
+  }
+}
 
 /** The identity PATCH block's attribute names → this form's field names. */
 const SERVER_FIELD_TO_FORM: Record<string, keyof IdentityFormInput> = {
@@ -333,11 +368,16 @@ export function ModelIdentityPanel({
 
   const { errors, isDirty } = form.formState;
   const isPending = save.isPending;
-  // One `useWatch` for the whole buffer — called unconditionally, above the
-  // approved-row early return below, and reused for both the manufacturer id
-  // (drives the buildingline options) and the live preview.
-  const values = useWatch({ control: form.control });
-  const manufacturerId = values.manufacturer?.id ?? null;
+  // Watches exactly the fields the live preview and the buildingline lookup
+  // need — called unconditionally, above the approved-row early return below.
+  // Narrower than the whole form buffer on purpose: typing a type code or a
+  // buildingline must not re-render this whole panel on every keystroke, only
+  // the fields the preview actually composes need to.
+  const [watchedManufacturer, watchedModelName, watchedYearFrom, watchedYearTo] = useWatch({
+    control: form.control,
+    name: ["manufacturer", "modelName", "yearFrom", "yearTo"],
+  });
+  const manufacturerId = watchedManufacturer?.id ?? null;
   const buildinglines = useBuildinglines(manufacturerId);
 
   // The dirty flag belongs to the page (the approve dialog needs it); the
@@ -404,11 +444,11 @@ export function ModelIdentityPanel({
 
   const preview = previewLevels(
     t,
-    values.manufacturer?.name ?? null,
-    values.modelName ?? "",
+    watchedManufacturer?.name ?? null,
+    watchedModelName ?? "",
     product.queryName ?? product.name,
-    values.yearFrom === "" || values.yearFrom === undefined ? null : Number(values.yearFrom),
-    values.yearTo === "" || values.yearTo === undefined ? null : Number(values.yearTo),
+    watchedYearFrom === "" || watchedYearFrom === undefined ? null : Number(watchedYearFrom),
+    watchedYearTo === "" || watchedYearTo === undefined ? null : Number(watchedYearTo),
   );
 
   function fieldError(name: ValidatedField): boolean {
@@ -423,8 +463,8 @@ export function ModelIdentityPanel({
     const message = errors[name]?.message;
 
     return typeof message === "string" && message !== ""
-      ? t(message)
-      : t(DEFAULT_FIELD_ERROR_MESSAGE[name]);
+      ? translateIdentityErrorKey(t, message)
+      : defaultFieldErrorMessage(t, name);
   }
 
   function handleTypeCodesChange(newValue: string[]) {
@@ -737,7 +777,7 @@ export function ModelIdentityPanel({
                     error={typeCodeError !== null || fieldError("typeCodes")}
                     helperText={
                       typeCodeError !== null
-                        ? t(typeCodeError)
+                        ? translateIdentityErrorKey(t, typeCodeError)
                         : (fieldErrorMessage("typeCodes") ?? t("admin.identity.typeCodesHint"))
                     }
                   />

@@ -1,7 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -9,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { CatalogueModelDetail } from "../hooks/useCatalogueModel";
 import type { Manufacturer } from "../hooks/useCatalogueModels";
 import type { ProductSuggestion } from "../hooks/useProductReview";
+import { i18n } from "../i18n";
 import { renderWithProviders } from "../test/render";
 
 import {
@@ -162,9 +159,9 @@ describe("claim matching/collapse helpers (§2.3)", () => {
   });
 
   it("formats a single claimed range and every entry of a multi-range claim", () => {
-    expect(formatClaimedYears((key: string) => key, SUGGESTION)).toBeTruthy();
+    expect(formatClaimedYears(i18n.t, SUGGESTION)).toBeTruthy();
     expect(
-      formatClaimedYears((key: string) => key, {
+      formatClaimedYears(i18n.t, {
         ...SUGGESTION,
         yearRanges: [
           { from: 2019, to: 2023 },
@@ -204,18 +201,21 @@ describe("D6 boundary — the claim is never customer-facing (ui-spec §2.1)", (
   });
 
   it("is imported by ModelIdentityPanel only, within frontend/src/components", () => {
-    const componentsDir = path.dirname(fileURLToPath(import.meta.url));
-    const files = fs
-      .readdirSync(componentsDir)
-      .filter((file) => file.endsWith(".tsx") && !file.endsWith(".test.tsx"));
-
-    const importers = files.filter((file) => {
-      if (file === "ModelClaimPanel.tsx") {
-        return false;
-      }
-      const contents = fs.readFileSync(path.join(componentsDir, file), "utf-8");
-      return /from ["']\.\/ModelClaimPanel["']/.test(contents);
+    // No Node builtins (zero new dependencies, and this project's `types`
+    // config does not carry `node`): every sibling `.tsx` source is read as
+    // raw text through Vite's own `import.meta.glob`, already typed via
+    // `vite/client`.
+    const files = import.meta.glob<string>("./*.tsx", {
+      query: "?raw",
+      import: "default",
+      eager: true,
     });
+
+    const importers = Object.entries(files)
+      .filter(([modulePath]) => modulePath !== "./ModelClaimPanel.tsx")
+      .filter(([modulePath]) => !modulePath.endsWith(".test.tsx"))
+      .filter(([, contents]) => /from ["']\.\/ModelClaimPanel["']/.test(contents))
+      .map(([modulePath]) => modulePath.replace(/^\.\//, ""));
 
     expect(importers).toEqual(["ModelIdentityPanel.tsx"]);
   });
