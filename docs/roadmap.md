@@ -282,6 +282,152 @@ and per-screen state handling are audited, not rebuilt.
 seeded, hardened, documented app; the demo walkthrough replays green; the
 grading map covers every criterion and claimed bonus.
 
+## Phase 6 — Catalogue depth: researched identity & real prices
+
+**Goal: the catalogue's own numbers are researched, not guessed or claimed —
+identity (`docs/model-naming.md`) and market price both.**
+
+Opened 2026-08-31 by the bulk-suggestion import (`app suggestions import`,
+`backend/resources/bike-list.txt`): 200 proposed models now sit in the backlog
+carrying **claims** — year ranges, manufacturer type codes, source links — in
+`motorbikes.suggestion`. Nothing promotes those claims into catalogue data, and
+nothing researches a price. This phase closes both gaps and folds in the
+structured naming model the owner decided on 2026-08-31.
+
+Sliced 2026-08-31 into two parallel tracks, 23 steps of effort ≤ 4, two
+cross-track sync points and four milestones. The binding contract is
+`docs/roadmap/phase-6/shared-knowledge.md`; UI specs live in
+`docs/roadmap/phase-6/ui-spec.md`; open items in
+`docs/roadmap/phase-6/open-questions.md`. The schema and rendering rationale
+are `docs/roadmap/model-naming-data-model.md` and
+`docs/roadmap/model-naming-display-spec.md` — their `N1`–`N9` slices are
+**superseded** by the step numbers below (the merge those docs asked for has
+happened; nothing runs twice).
+
+Steps run in three blocks, in this order: **model changes → fencing →
+ingestion.**
+
+*Model changes* (backend, milestone M1) — schema and machinery, wired nowhere,
+so the app stays byte-compatible with `phase-5-done`:
+- **6.9 Refactor: `motorbikes.name` → `query_name`** — it is the phrase an
+   admin typed, not a name; ships alone, zero behaviour change.
+- **6.10 Identity columns & validators** — `buildingline`, `type_codes` (a
+   *list* — one generation is known by several codes), `variants` (trims as
+   spec deltas, never rows), with their caps and normalisation.
+- **6.11 `naming_service`** — the parts→string escalation (buildingline →
+   model → model + year range), rendered on the server, once.
+- **6.12 Slug policy, `assign_identity` & the approval guard** — path-shaped
+   `{manufacturer}/{model}/{year-range}`; an incomplete identity cannot be
+   approved.
+- **6.13 Used-price storage & staleness** — `motorbike_used_prices` (range,
+   median, sample count, as-of date, per-source provenance) plus the
+   `listing` source type. `msrp_eur`/`price_band` stay new-bike fields.
+
+*Fencing* (backend, milestone M2) — carried from the 2026-08-31 injection
+review, independent of everything else:
+- **6.14 Fence the provenance metadata the model reads** — `source_title` and
+   `heading_path` travel in the `retrieve_bike_knowledge` payload unfenced
+   today, and both are attacker-controlled (the fetched page's own title and
+   its own ATX headings). Fence and cap them payload-side; persisted JSONB
+   stays byte-identical. Absorbs the former item 6.8, whose premise was
+   refuted at slicing time (`heading_path` is already capped at 512 in the
+   chunker and the column — no migration needed).
+
+*Ingestion* (backend ∥ frontend, milestones M3 and M4):
+- **6.15 Extraction writes the identity and the trims** — the year columns the
+   backlog and catalogue already render stop being permanently NULL.
+- **6.16 Manufacturer-name normalisation** — the suggestion list is a
+   known-marque list; `Kawasaki Motors` becomes `Kawasaki`.
+- **6.17 Suggested links & type codes as research input** — the fetch stage
+   starts from `suggestion.links`, the codes become search terms, and a
+   contradicted claim is a warning on the run, never a silent overwrite.
+- **6.18 Identity backfill CLI & the approval CHECK constraint** —
+   deterministic, never re-ingestion.
+- **6.19 Resolution & rendering wired in** — type-code resolver leg, composite
+   name sort, tools and both JSON:API resources render in context.
+- **6.20 API identity block, variants & generated types** *(opens S1)*.
+- **6.21 `listing` documents quarantined & the robots.txt gate** —
+   re-ingestion must not wipe price provenance, and dated asking prices must
+   never enter the knowledge base.
+- **6.22 `app prices research` / `delete`** — used-price research over
+   search-provider URLs through the landed fetch/extract pipeline.
+- **6.23 The estimator uses the researched price** *(opens S2)* — used median
+   first, with source and date named, and "indicative" when stale.
+
+Frontend track (`frontend-dev`; 6.24–6.26 need zero backend code):
+- **6.24 Review identity & claim-vs-finding, UI-only** — an admin approves an
+   identity rather than trusting a list; a claim is never rendered as
+   catalogue data anywhere a customer can see it.
+- **6.25 Trims editor & customer trims block, UI-only** ·
+   **6.26 Used-price blocks, UI-only** ·
+   **6.27 Wire the admin surfaces live** *(S1)* ·
+   **6.28 Wire the customer surfaces live** *(S2)*.
+
+- **6.29 Docs** *(docs-writer)* · **6.30 M3 acceptance** *(qa)* ·
+   **6.31 Final acceptance & fencing security proof** *(qa)* — tags
+   `phase-6-done`.
+
+Commit per finished step; tag at the four milestones pinned in
+`shared-knowledge.md` (M1 model foundation → M2 fencing closed → M3
+researched identity live → M4 researched prices) — each one a working
+application. M1 and M2 are deliberately invisible: they change the schema and
+the model-facing payloads without changing a single wire shape.
+
+**A note on the price sources.** The roadmap originally named kleinanzeigen.de
+as the primary source with mobile.de/autoscout24 as cross-checks, gated on a
+robots/ToS review. That review was done at slicing time and **ruled out
+purpose-built scrapers**: both sites' `robots.txt` disallow precisely the
+price-filter, sort and search-parameter paths a sampler would need. What ships
+instead reuses the landed search → fetch → extract pipeline over URLs the
+search provider itself returned, honours `robots.txt` via the stdlib, and is
+documented for what it is — a dated snapshot of *published* used prices with
+visible sources, not a statistical sample of a classifieds database. Details
+and the evidence: `shared-knowledge.md` D8.
+
+**Hardening note.** 6.14 came out of a review of the Phase-5 injection work,
+not the catalogue theme — it is here because Phase 6 is the general
+optimisation phase. Fencing stays a mitigation, not a proof: the README's
+"Known limitations" entry stands after it lands.
+
+*Done when:* an imported suggestion, ingested from the admin backlog, ends up
+with researched manufacturer, model name, year range and type codes that an
+admin approved against the claim — and a used-price figure with a visible
+source and date instead of a guess.
+
+---
+
+## Future upgrades
+
+Not scheduled, not sliced — recorded so they are not rediscovered as surprises.
+
+- **Variant-aware filtering.** With trims stored as `variants` JSONB deltas
+  (owner decision 2026-08-31), `catalogue_search` / `SpecFilters` match the base
+  row's `motorbike_specs` only. A hard filter for "≥ 15 l tank" excludes a model
+  whose Adventure trim carries 20 l, and a `seat_height_mm ≤ 800` filter excludes
+  a model that offers a low-seat trim — the base row is not the whole truth about
+  the machine. The eventual fix needs three decisions together: matching
+  `variants[].specs` in SQL (`jsonb_path_ops` GIN, or maintained min/max columns
+  per filterable spec), a tool result that says *which* trim satisfied the
+  filter, and an explicit "any trim matches" vs "the base matches" semantic.
+  Sketched in `docs/roadmap/model-naming-data-model.md` §9.
+- **Buildingline as a table.** It is a nullable text column on `motorbikes`
+  today (owner decision: nothing points at a family, so a table buys integrity
+  nobody consumes). Promote it — distinct values become rows, the column becomes
+  an FK — if a facet UI, per-family content or an alias target ever ships.
+- **Per-trim type codes.** Harley's model codes (`FLFB` vs `FLFBS`) really
+  designate trims, and the flat `motorbikes.type_codes` list flattens that: a
+  code resolves to the generation, not to the trim it names. The clean answer
+  arrives with trim-aware filtering above — that is when a trim becomes
+  addressable at all.
+- **Alias table / alias metadata.** Deferred by the same decision. Manufacturer
+  codes now resolve through `type_codes`; *spellings* ("R1300GS", marque
+  abbreviations) still rely on the advisor normalising them, plus a resolver
+  that absorbs case and punctuation. Build the `motorbikes.aliases` JSONB
+  column when a transcript shows a real miss. Trigger list in the same doc §2.3.
+- **Per-trim provenance and `model_years`.** No chunk, image or recommendation
+  can be scoped to a trim, and per-year colours/packages/prices have no home.
+  Neither is something the advisor needs today.
+
 ---
 
 ## Requirement coverage (grading)

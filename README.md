@@ -147,6 +147,7 @@ worked examples; `seed` is spelled out below.
 | `rag` | Run the whole advanced-RAG pipeline and print every stage — translated queries, filters, shortlist, fused chunks (`ask "<utterance>"`). |
 | `retrieval` | Query the hybrid retriever directly, no chat or agent loop (`search "<query>"`). |
 | `seed` | Populate the catalogue with the curated demo model list (`demo [--auto-approve]`) — see "Seeding the demo catalogue" below. |
+| `suggestions` | Bulk-add proposed models to the backlog, without ingesting them (`import [FILE] [--dry-run]`) — see "Suggesting models in bulk" below. |
 | `tools` | Run one advisor tool in isolation, printing exactly what the chat UI would render (`run <tool-name> --args '<json>'`). |
 | `users` | Account administration, including the first-admin bootstrap (`set-role`, `reset-password`). |
 | *(root)* | `app version` prints the application version. |
@@ -183,6 +184,40 @@ click uses (`in_review → approved`) — it is a bulk convenience for
 bootstrapping a demo catalogue, **not** a replacement for the admin review
 workflow itself. `docs/demo-walkthrough.md` still walks through reviewing and
 approving one model live, by hand, to demonstrate that flow.
+
+## Suggesting models in bulk
+
+`app seed demo` ingests immediately, which costs an OpenRouter/Tavily run per
+model. To fill the backlog with *proposals* instead — models someone thinks the
+catalogue should carry, ingested later, one at a time, by an admin who decides
+when — import a model list:
+
+```bash
+docker compose exec app-web app suggestions import --dry-run  # parse and report only
+docker compose exec app-web app suggestions import            # write the backlog entries
+```
+
+With no path it reads `backend/resources/bike-list.txt` (200 models, ten
+marques); any file in the same format works. Each line carries a name and,
+optionally, year ranges, manufacturer type codes and footnote links:
+
+```
+BMW R 1200 GS (2004–2018) [K25/K50] ([Wikipedia][1])
+...
+[1]: https://de.wikipedia.org/wiki/BMW_R_1200_GS_K25 "BMW R 1200 GS K25"
+```
+
+Everything but the name is stored in `motorbikes.suggestion` as an unverified
+**claim**, never in the typed columns and never shown to a customer: research is
+what turns a claim into catalogue data. No LLM, no network, no ingestion and no
+cost — each model lands in `backlog`, and the admin backlog screen's *Start
+ingestion* button is what runs the pipeline. Re-running is safe: an entry whose
+slug already exists is never re-created or re-ingested; it only picks up the
+suggestion document if it has none yet.
+
+Promoting a claim into `model_name` / `year_from` / `year_to` is Phase-6 work
+(`docs/roadmap.md`) — today ingestion researches the manufacturer but leaves the
+year columns NULL.
 
 ## Optional observability (Langfuse)
 
