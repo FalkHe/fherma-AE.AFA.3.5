@@ -1661,3 +1661,46 @@ it the same way.
   chunk a listing page into the RAG knowledge base — the exact outcome D12's
   second carve-out exists to prevent. This needs an owner decision before
   6.22/M4's demo, not a unilateral fix here.
+
+### Contract amendment (2026-08-31) — D12 has FIVE carve-outs, not four
+
+6.21 found and reported a fifth `listing` leak rather than silently fixing it
+(correct: D12 enumerates a closed list, so a fifth is a contract change). The
+coordinator has **verified it independently** and **amends D12 accordingly**.
+
+**The leak.** `backend/app/services/chunking.py::rebuild_for_motorbike` (line
+~176) calls `document_service.list_for_motorbike(session, motorbike_id)` with
+**no exclusion**, then chunks every document returned. It is reachable from
+`backend/app/cli/chunks.py` at two call sites (`app chunks rebuild`, both the
+single-model and the all-models paths). So an admin re-chunking a bike *after*
+price research would write `listing` pages straight into the RAG knowledge
+base — dated asking prices retrieved as timeless prose.
+
+**Why this is an amendment and not a new decision.** It changes nothing about
+D12's *intent* — "dated asking prices must never enter the RAG knowledge base"
+is D12's own wording. It corrects an enumeration error: `step-6.21.md` asserted
+of carve-out 2 that "this is the chunking entry point; no second path exists",
+and that assertion is simply **false**. Left unclosed, **M4's demo criterion
+("no `listing` document enters the RAG knowledge base") would be provably
+false** while appearing to pass, because 6.22 is the step that first creates
+`listing` rows and nothing in the current corpus exposes the path.
+
+**Carve-out 5, assigned to 6.22:** `chunking.rebuild_for_motorbike` must pass
+`exclude_source_types=(SourceType.LISTING,)` to `list_for_motorbike`, using the
+additive keyword 6.21 landed, with a test proving a `listing` document is not
+chunked by that path and that a non-`listing` document still is. Two lines and
+one test; it belongs with 6.22 because 6.22 is what makes the leak live.
+
+The five carve-out sites are therefore, by file and function:
+
+1. `ingestion/service.py::_Run._discard_previous_run`
+2. `embedding_service.py::rebuild_motorbike`
+3. `spec_extraction_service.py::assemble_documents`
+4. `api/endpoints/catalogue_models.py::get_catalogue_model`
+5. `chunking.py::rebuild_for_motorbike`  ← **added 2026-08-31**
+
+Admin surfaces (`api/endpoints/documents.py`, `api/endpoints/products.py`)
+remain deliberately **un**-excluded — that is where an admin audits what price
+research fetched. QA 6.31 should treat "all five sites excluded" as an
+acceptance criterion, and should specifically exercise `app chunks rebuild`
+against a bike that has a `listing` document.
