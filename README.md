@@ -6,17 +6,85 @@ verified specifications and retrieved prose about how those bikes are
 actually regarded — rather than an LLM's outdated training data or
 marketing-biased public sources. This is the AE.AFA.3.5 Turing College
 Sprint 3 project: a domain-specialised RAG chatbot built with LangChain,
-advanced RAG techniques, tool calling, and a vector database (see `125.md`
-for the full brief and `docs/` for design decisions).
+advanced RAG techniques, tool calling, and a vector database.
 
-**Current status:** Phases 0–4 are implemented. Accounts (register/login/
-roles) and catalogue ingestion (admin adds a model, live-tracked ingestion
-fetches sources, extracts specs and images, admin reviews and approves) work
-end-to-end — see `docs/ingestion.md`. The advisor chat (retrieval, tool
-calls, recommendations — Phase 3) and the customer catalogue (browse,
-filter, model detail with specs/article/sources — Phase 4) are live; see
-`docs/demo-walkthrough.md` for a replayable tour and `docs/roadmap.md` for
-what remains.
+## Current State
+
+Functional prototype with Catalogue Ingestion and Customer AI Advisor to demonstrage Core Requirements of this Sprint.
+CapStone might be polished frontend and Guided Ingestion Agent(s) in Admin UI. 
+
+## Quick start (for reviewers)
+
+Everything runs in Docker. Make sure ports `5173` and `8000` are free on localhost. 
+Use `make` or review `Makefile` for exact `docker`  commands.
+
+### Startup
+
+```bash
+git clone git@github.com:TuringCollegeSubmissions/fherma-AE.AFA.3.5.git
+cd fherma-AE.AFA.3.5
+cp .env.dist .env   
+```       
+Add your `OPENROUTER_API_KEY` to .env.
+
+```bash  
+make up                    # starts API, worker, frontend, Postgres, Redis; migrates the DB
+make snapshot-load         # restores a curated catalogue: rows, sources, images, embeddings
+```
+
+Visit http://localhost:5173 for customer frontend
+
+Retister with Userame and Password.
+
+# gain admin role
+```bash
+docker compose exec app-web app users set-role <username> admin
+```
+Visit http://localhost:5173/admin or use main nav to switch to Admin UI
+
+## long version
+
+1. **Clone the repository** and `cd` into it.
+
+2. **Create `.env` from the template**: `cp .env.dist .env`. Then set
+   `OPENROUTER_API_KEY` — **the advisor chat cannot answer without it**, because
+   every conversation turn calls an LLM through OpenRouter. `TAVILY_API_KEY` is
+   optional and only affects *new* ingestion (web search); leave it empty to
+   review the app against the restored catalogue. No other key needs changing.
+
+3. **Start the stack**: `make up`. The `app-web` container runs
+   `alembic upgrade head` on boot, so the schema is ready without a separate
+   command. Give it a few seconds; `make ps` shows the services and
+   `docker compose logs -f app-web` shows why if one does not come up.
+
+4. **Restore the catalogue**: `make snapshot-load`. This loads the committed
+   demo catalogue in about fifteen seconds, with no API calls and no ingestion
+   run: 208 entries — 53 of them reviewed and approved, so visible to customers
+   and available to the advisor, the rest sitting in the admin backlog — with
+   their source documents, their images **and their embeddings**. Without this
+   step the app runs but the catalogue is empty, so there is nothing to browse
+   and nothing for the advisor to recommend.
+
+5. **Register and promote yourself to admin.** Open
+   <http://localhost:5173>, register an account, then grant it the admin role
+   (no HTTP endpoint does this, by design):
+
+   ```bash
+   docker compose exec app-web app users set-role <your-username> admin
+   ```
+
+   Sign out and back in so the new role is on your session.
+
+6. **Use the app**:
+   - Customer UI (browse the catalogue, start a consultation):
+     <http://localhost:5173>
+   - Admin UI (add a model, watch ingestion live, review and approve):
+     <http://localhost:5173/admin>
+   - Interactive API docs: <http://localhost:8000/docs>
+
+`make down` stops everything. `docs/demo-walkthrough.md` is a replayable,
+chapter-by-chapter tour of every graded requirement — start there for a
+review; the sections below cover each step in full detail.
 
 ## Stack
 
@@ -132,7 +200,7 @@ Every sub-app below is invoked as `docker compose exec app-web app <name> <comma
 (swap for `docker compose exec app-worker ...` or, outside Docker, `uv run app ...`
 from `backend/` — see "Running the backend locally with uv"). `docs/ingestion.md`
 covers `ingest`, `chunks`, `embeddings`, `llm` and `jobs` in full detail with
-worked examples; `seed` is spelled out below.
+worked examples; `seed`, `snapshot` and `suggestions` are spelled out below.
 
 | Sub-app | Purpose |
 |---|---|
@@ -147,16 +215,64 @@ worked examples; `seed` is spelled out below.
 | `rag` | Run the whole advanced-RAG pipeline and print every stage — translated queries, filters, shortlist, fused chunks (`ask "<utterance>"`). |
 | `retrieval` | Query the hybrid retriever directly, no chat or agent loop (`search "<query>"`). |
 | `seed` | Populate the catalogue with the curated demo model list (`demo [--auto-approve]`) — see "Seeding the demo catalogue" below. |
+| `snapshot` | Save the curated catalogue into the repository and restore it verbatim (`save`, `load`) — see "Restoring the demo catalogue from the snapshot" below. |
 | `suggestions` | Bulk-add proposed models to the backlog, without ingesting them (`import [FILE] [--dry-run]`) — see "Suggesting models in bulk" below. |
 | `tools` | Run one advisor tool in isolation, printing exactly what the chat UI would render (`run <tool-name> --args '<json>'`). |
 | `users` | Account administration, including the first-admin bootstrap (`set-role`, `reset-password`). |
 | *(root)* | `app version` prints the application version. |
 
+## Restoring the demo catalogue from the snapshot
+
+The fastest way to get a working catalogue — and the only one that needs no API
+keys, no network and no waiting:
+
+```bash
+make snapshot-load                     # empty catalogue: restore
+make snapshot-load ARGS=--replace      # non-empty: delete the catalogue first, then restore
+```
+
+The curated catalogue is committed to the repository under
+`backend/resources/catalogue-snapshot/` (~60 MB), and `app snapshot load`
+restores it verbatim: the rows, the retained raw source payload behind every
+document, every product image with its three generated variants, **and the
+embeddings**. Nothing is re-ingested and nothing is re-embedded, so a fresh
+clone reaches a fully working advisor — retrieval, tool calls, sources,
+pictures — in about fifteen seconds and at zero API cost.
+
+The schema must be migrated first, which the `app-web` entrypoint already does
+on `make up`. `load` refuses to run against a non-empty catalogue unless
+`--replace` is given; either way it never touches `users`, `sessions`, `chats`,
+`chat_messages`, `chat_preferences` or `operations` — accounts still come from
+"Creating the first admin", and conversations plus the ingestion audit log are
+per-instance state that would be misleading to restore from someone else's run.
+
+To update the committed snapshot after curating more models:
+
+```bash
+make snapshot-save ARGS=--force        # overwrite the existing archive, then commit it
+```
+
+`save` is read-only against the database and writes as the host user, so the
+result is committable directly. It refuses to overwrite an existing archive
+without `--force`, and clears the old one first when forced, so a model deleted
+from the catalogue does not survive as an orphaned file in the commit. Output
+is deterministic: re-saving an unchanged catalogue produces no `git` diff.
+
+This is **demo tooling, not a backup product** — it is not point-in-time
+consistent against a live instance, and it deliberately is not a `pg_dump`, so
+that an archive stays reviewable in `git` and survives an additive migration (a
+column added later falls back to its database default; a column removed later
+is a hard error rather than a silent data loss). `app snapshot --help` and the
+module docstring in `backend/app/services/snapshot.py` document the archive
+layout and the type encoding.
+
 ## Seeding the demo catalogue
 
-A fresh clone starts with an empty catalogue — adding models one at a time
-through the admin UI works, but populating a demo-sized catalogue is faster
-from the CLI:
+A fresh clone starts with an empty catalogue. To *demonstrate* the app, restore
+the committed snapshot instead (previous section) — it is free and instant.
+`app seed demo` is the other direction: it really ingests, which is what you
+want when you are curating new models rather than reproducing an existing
+catalogue.
 
 ```bash
 docker compose exec app-web app seed demo               # ingest, leave in review

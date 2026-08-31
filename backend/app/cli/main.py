@@ -15,6 +15,7 @@ from app.cli import (
     rag,
     retrieval,
     seed,
+    snapshot,
     suggestions,
     tools,
     users,
@@ -38,6 +39,7 @@ app.add_typer(operations.app, name="operations")
 app.add_typer(rag.app, name="rag")
 app.add_typer(retrieval.app, name="retrieval")
 app.add_typer(seed.app, name="seed")
+app.add_typer(snapshot.app, name="snapshot")
 app.add_typer(suggestions.app, name="suggestions")
 app.add_typer(tools.app, name="tools")
 app.add_typer(users.app, name="users")

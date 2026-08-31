@@ -41,8 +41,13 @@ Two demo assets exist. Pick whichever fits:
   one; wherever it needs "a filter that narrows the grid", pick any
   attribute your current catalogue actually varies on (category is usually
   the most reliable).
-- To seed a catalogue quickly instead of building one by hand (§6 does the
-  by-hand version): `docker compose exec app-web app seed demo
+- The quickest way to get a catalogue to demonstrate against is to restore
+  the committed one: `make snapshot-load` (see README's "Restoring the demo
+  catalogue from the snapshot"). It needs no API keys and no network, and it
+  brings the embeddings with it, so retrieval and every tool call work
+  immediately.
+- To *ingest* a catalogue quickly instead of building one by hand (§6 does
+  the by-hand version): `docker compose exec app-web app seed demo
   --auto-approve` (see README's "Seeding the demo catalogue"). This is a
   *bulk convenience* — it does not replace live-reviewing one model, which
   §6 still walks through explicitly.
@@ -293,6 +298,16 @@ clicking it. This is a **bulk convenience for bootstrapping a demo
 catalogue quickly** — it does not replace the live review in §6.3, and a
 grader should still expect to find one model that was reviewed and approved
 by hand if the whole submission chapter was followed.
+
+### 6.4b Restoring instead of ingesting (for context, not a replacement)
+
+`make snapshot-load` restores the committed catalogue — rows, documents,
+images and embeddings — without ingesting anything. It is how a grader gets a
+populated instance in seconds and at zero API cost, and how §1–5 can be
+replayed without waiting on a pipeline run. It is explicitly **not** part of
+the grading story for ingestion or review: nothing about a restore
+demonstrates that the pipeline works, which is why §6.2–6.3 build one model
+live, by hand, from an empty database.
 
 ### 6.5 A consultation with real tool calls, sources and recommendations
 
