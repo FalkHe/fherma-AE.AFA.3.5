@@ -33,6 +33,75 @@ import { ProductError, type Product } from "./useProducts";
 /** A specification revision as the API returns it (`draftSpec`/`verifiedSpec`). */
 export type DraftSpec = components["schemas"]["SpecAttributes"];
 
+/**
+ * One trim (`variants` JSONB entry, data-model §2.5) — a spec delta plus a
+ * free-text description. `slug` is server-derived (`slugify(name)`) and never
+ * sent by the client.
+ */
+export type ProductVariant = {
+  slug: string;
+  name: string;
+  description?: string | null;
+  specs?: Partial<DraftSpec>;
+};
+
+/** One claimed year span inside `suggestion.year_ranges` (camelCased on the wire). */
+export type SuggestionYearRange = { from: number; to: number | null };
+
+/**
+ * `motorbikes.suggestion` — an **unverified claim** imported from a suggestion
+ * list (shared-knowledge D6). It is research input and a comparison value for
+ * the reviewer, never catalogue data: the only component that accepts this
+ * shape is `ModelClaimPanel`, and the wire boundary is that no customer
+ * resource ever carries this member (ui-spec §2.1).
+ */
+export type ProductSuggestion = {
+  source: string;
+  raw: string;
+  manufacturer: string | null;
+  model: string | null;
+  yearFrom: number | null;
+  yearTo: number | null;
+  inProduction: boolean;
+  yearRanges: SuggestionYearRange[];
+  typeCodes: string[];
+  links: string[];
+};
+
+/**
+ * The identity columns backend step 6.20 adds to the admin `products`
+ * resource (ui-spec §8 API-1), typed additively ahead of the generated schema
+ * so this step (6.24) can build and test against stubs. `Partial` — not a
+ * required extension of `Product` — because today's pre-6.20 payload carries
+ * none of them: `ModelIdentityPanel` degrades per display-spec §11 (the
+ * `queryName` fallback) instead of assuming they exist, and a plain `Product`
+ * from `useProduct` is therefore already assignable to `ProductWithIdentity`
+ * with no cast.
+ *
+ * Byte-matches API-1's camelCase names so 6.27's swap to the generated type is
+ * mechanical, not a rewrite. Delete this block once that swap lands.
+ */
+export type ProductIdentityFields = {
+  queryName: string;
+  buildingline: string | null;
+  typeCodes: string[];
+  variants: ProductVariant[];
+  suggestion: ProductSuggestion | null;
+};
+
+export type ProductWithIdentity = Product & Partial<ProductIdentityFields>;
+
+/** The writable `identity` block of `PATCH /api/products/{id}` (ui-spec §8 API-1). */
+export type IdentityBlock = {
+  manufacturerId: string | null;
+  buildingline: string | null;
+  modelName: string | null;
+  yearFrom: number | null;
+  yearTo: number | null;
+  typeCodes: string[];
+  variants: ProductVariant[];
+};
+
 /** Provenance class of a source document (`source_type` in the catalogue). */
 export type SourceType = components["schemas"]["SourceType"];
 
@@ -92,6 +161,30 @@ export class SaveDraftSpecError extends Error {
     super(`Draft spec save failed with status ${status}`);
     this.name = "SaveDraftSpecError";
     this.status = status;
+    this.validationFields = validationFields;
+  }
+}
+
+/**
+ * A failed identity save — mirrors `SaveDraftSpecError`'s idiom, plus `code`
+ * (mirroring `ProductError`) so the panel can branch on 409 `duplicate-model`
+ * (the slug recompute collided) versus a mappable 422 versus anything else
+ * (ui-spec §1.5).
+ */
+export class SaveIdentityError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly validationFields: readonly string[];
+
+  constructor(
+    status: number,
+    code: string | null = null,
+    validationFields: readonly string[] = [],
+  ) {
+    super(`Identity save failed with status ${status}`);
+    this.name = "SaveIdentityError";
+    this.status = status;
+    this.code = code;
     this.validationFields = validationFields;
   }
 }
@@ -237,6 +330,33 @@ async function patchDraftSpec(id: string, draftSpec: DraftSpec): Promise<DraftSp
   return data.data.attributes.draftSpec ?? draftSpec;
 }
 
+/**
+ * `PATCH /api/products/{id}` carrying the `identity` block.
+ *
+ * The generated `ProductPatchAttributes` (`api/schema.d.ts`) does not carry
+ * `identity` until backend step 6.20 lands and `make generate-api` is rerun —
+ * see step 6.24's landed decisions in `shared-knowledge.md`. This is the one
+ * commented cast the step allows, removed by 6.27; a second cast anywhere else
+ * in this file is a stop-and-report.
+ */
+async function patchIdentity(id: string, identity: IdentityBlock): Promise<void> {
+  const { error, response } = await apiClient.PATCH("/api/products/{product_id}", {
+    params: { path: { product_id: id } },
+    body: {
+      data: {
+        type: "products",
+        attributes: {
+          identity,
+        } as components["schemas"]["ProductPatchAttributes"] & { identity: IdentityBlock },
+      },
+    },
+  });
+
+  if (!response.ok) {
+    throw new SaveIdentityError(response.status, errorCode(error), validationFields(error));
+  }
+}
+
 /** `PATCH /api/product-images/{id}` — the one image transition this UI performs. */
 async function patchImageStatus(
   imageId: string,
@@ -323,6 +443,39 @@ export function useSaveDraftSpec(
         ...cached?.draftSpec,
         ...values,
       });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.products.detail(id) });
+    },
+  });
+}
+
+/**
+ * Saves the identity block (`PATCH /api/products/{id}` `identity`, ui-spec
+ * §8 API-1).
+ *
+ * The trims editor is step 6.25's, not this one's: the form this hook serves
+ * (`ModelIdentityPanel`) never edits `variants`, so the write carries the
+ * **last-fetched** `variants` list unchanged — same full-object-replace
+ * pattern as `useSaveDraftSpec`'s merge, so a save from this step's UI cannot
+ * silently wipe trims a later step (or the extraction run) already wrote.
+ *
+ * Invalidation is `["products", "detail", id]` only (ui-spec §0): the response
+ * carries the recomputed `slug`, and the refetched row is what the read-only
+ * slug field and the header name show next.
+ */
+export function useSaveIdentity(
+  id: string,
+): UseMutationResult<void, Error, { values: Omit<IdentityBlock, "variants"> }> {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, { values: Omit<IdentityBlock, "variants"> }>({
+    mutationFn: ({ values }) => {
+      const cached = queryClient.getQueryData<ProductWithIdentity>(
+        queryKeys.products.detail(id),
+      );
+
+      return patchIdentity(id, { ...values, variants: cached?.variants ?? [] });
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.products.detail(id) });

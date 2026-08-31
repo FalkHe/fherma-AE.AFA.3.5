@@ -73,6 +73,17 @@ export const queryKeys = {
     /** `GET /api/manufacturers` — the filter select's options. */
     list: () => ["manufacturers", "list"] as const,
   },
+  buildinglines: {
+    /**
+     * `GET /api/manufacturers/{id}/buildinglines` — the identity panel's
+     * `Autocomplete freeSolo` options for one manufacturer. Pinned as a flat
+     * two-element key (phase-6 ui-spec §0), not nested under `list`, since
+     * `useBuildinglines` refetches per manufacturer rather than filtering one
+     * cached list.
+     */
+    byManufacturer: (manufacturerId: string) =>
+      ["buildinglines", manufacturerId] as const,
+  },
   chats: {
     /** Invalidation prefix: the consultation list and every chat detail. */
     all: ["chats"] as const,

@@ -29,6 +29,7 @@ export function ConfirmDialog({
   confirmColor = "primary",
   isPending = false,
   hasError = false,
+  errorMessage,
   onConfirm,
   onClose,
 }: {
@@ -45,6 +46,13 @@ export function ConfirmDialog({
   isPending?: boolean;
   /** The mutation failed; the dialog stays open and says so. */
   hasError?: boolean;
+  /**
+   * A specific failure message, replacing the generic "action failed" text
+   * when `hasError` is true — e.g. the approve dialog's `incomplete-identity`
+   * explanation (ui-spec §1.6). Absent renders exactly today's generic text,
+   * so every other call site is unchanged.
+   */
+  errorMessage?: string;
   onConfirm: () => void;
   /** Cancel, backdrop click or Escape — ignored while the mutation is pending. */
   onClose: () => void;
@@ -68,7 +76,7 @@ export function ConfirmDialog({
       <DialogContent>
         {hasError && (
           <Alert severity="error" sx={{ mb: 2 }}>
-            {t("admin.review.actions.actionError")}
+            {errorMessage ?? t("admin.review.actions.actionError")}
           </Alert>
         )}
         <DialogContentText>{body}</DialogContentText>

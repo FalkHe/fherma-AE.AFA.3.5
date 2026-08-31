@@ -171,6 +171,15 @@ function installApi(): void {
       return jsonResponse({ data: [IMAGE_RESOURCE], meta: { totalCount: 1 } });
     }
 
+    if (url.pathname === "/api/manufacturers") {
+      return jsonResponse({
+        data: [
+          { id: "01MANUFACTURERSUZUKI0001", type: "manufacturers", attributes: { name: "Suzuki" } },
+        ],
+        meta: { totalCount: 1 },
+      });
+    }
+
     if (url.pathname === "/api/operations") {
       const rows =
         latestOperation === null
@@ -445,5 +454,40 @@ describe("AdminModelReviewRoute approval", () => {
       expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
     });
     expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+  });
+
+  it("shows the identity-specific message when approval is blocked (422 incomplete-identity)", async () => {
+    renderWithProviders(<AdminModelReviewRoute />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Approve & publish" }));
+
+    stubFetch(() =>
+      jsonResponse(
+        { errors: [{ status: "422", code: "incomplete-identity", detail: "no" }] },
+        { status: 422 },
+      ),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+
+    expect(
+      await screen.findByText(
+        "This model cannot be published yet: manufacturer, model name and start " +
+          "year must be filled in the Identity tab first.",
+      ),
+    ).toBeInTheDocument();
+    // The generic failure text is not shown alongside the specific one.
+    expect(screen.queryByText("The action failed. Please try again.")).not.toBeInTheDocument();
+  });
+
+  it("warns about unsaved identity edits (OR'd with the specs panel's flag)", async () => {
+    renderWithProviders(<AdminModelReviewRoute />);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Identity" }));
+    await userEvent.type(await screen.findByLabelText("Model name"), "GSR 600");
+
+    await userEvent.click(screen.getByRole("button", { name: "Approve & publish" }));
+
+    expect(screen.getByText(UNSAVED_WARNING)).toBeInTheDocument();
   });
 });

@@ -44,6 +44,12 @@
       "crashTitle": "Something went wrong",
       "crashBody": "An unexpected error broke this page. Reloading usually fixes it.",
       "crashReload": "Reload page"
+    },
+    "modelName": {
+      "yearRange": "{{from}}–{{to}}",
+      "yearFrom": "from {{from}}",
+      "yearUntil": "until {{to}}",
+      "yearSingle": "{{year}}"
     }
   },
   "auth": {
@@ -141,7 +147,8 @@
       "tabs": {
         "documents": "Documents",
         "specs": "Specs",
-        "image": "Image"
+        "image": "Image",
+        "identity": "Identity"
       },
       "documents": {
         "listLabel": "Source documents",
@@ -218,6 +225,54 @@
         "confirmReject": "Reject",
         "unsavedWarning": "You have unsaved spec edits — approval publishes the last saved draft, not your current changes.",
         "actionError": "The action failed. Please try again."
+      },
+      "approveBlockedIdentity": "This model cannot be published yet: manufacturer, model name and start year must be filled in the Identity tab first."
+    },
+    "identity": {
+      "manufacturer": "Manufacturer",
+      "buildingline": "Buildingline",
+      "buildinglineHint": "Model family used for grouping — pick an existing spelling when one exists.",
+      "buildinglineNeedsManufacturer": "Select a manufacturer first.",
+      "modelName": "Model name",
+      "modelNameHint": "The marketing name without manufacturer, trim or year — e.g. R 1300 GS.",
+      "yearFrom": "Year from",
+      "yearTo": "Year to",
+      "yearToHint": "Leave empty if the model is still in production.",
+      "typeCodes": "Type codes",
+      "typeCodeA11y": "Type code {{code}}",
+      "typeCodesMore": "and {{count}} more: {{codes}}",
+      "typeCodesHint": "Used to find and look up this model. Never shown to customers.",
+      "slug": "Slug",
+      "slugHint": "Derived from manufacturer, model and year range — recomputed when you save.",
+      "queryName": "Originally entered as",
+      "save": "Save identity",
+      "discard": "Discard",
+      "saved": "Identity saved.",
+      "optionsLoadError": "Manufacturer or buildingline suggestions could not be loaded.",
+      "researchWarnings": "Research finished with warnings",
+      "errors": {
+        "modelNameTooLong": "At most 128 characters.",
+        "buildinglineTooLong": "At most 64 characters.",
+        "yearInvalid": "Enter a four-digit year.",
+        "yearOrder": "\"Year to\" must not be before \"Year from\".",
+        "typeCodeInvalid": "Codes are 2–32 characters: letters, digits, hyphen, slash or space.",
+        "typeCodesMax": "At most 8 codes.",
+        "duplicateIdentity": "Another catalogue entry already has this manufacturer, model name and start year."
+      },
+      "claim": {
+        "heading": "Unverified claim",
+        "hint": "Imported from a suggestion list — research must confirm it before it becomes catalogue data.",
+        "listedAs": "Listed as",
+        "source": "Source",
+        "links": "Suggested links",
+        "value": "Claim: {{value}}",
+        "use": "Use claim",
+        "useA11y": "Use the claimed {{field}}",
+        "noManufacturerMatch": "No matching manufacturer in the catalogue."
+      },
+      "preview": {
+        "heading": "Preview",
+        "level": "Level {{n}}"
       }
     }
   },

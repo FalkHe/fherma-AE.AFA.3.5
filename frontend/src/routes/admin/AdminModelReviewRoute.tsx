@@ -22,6 +22,7 @@ import {
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { EmptyState } from "../../components/EmptyState";
 import { ModelDocumentsPanel } from "../../components/ModelDocumentsPanel";
+import { ModelIdentityPanel } from "../../components/ModelIdentityPanel";
 import { ModelImagePanel } from "../../components/ModelImagePanel";
 import { ModelSpecsPanel } from "../../components/ModelSpecsPanel";
 import { MotorbikeStatusChip } from "../../components/MotorbikeStatusChip";
@@ -46,8 +47,12 @@ import { ProductError, useTransitionProduct } from "../../hooks/useProducts";
  * where the row now offers a retry.
  */
 
-/** Tab identifiers; also the whitelist for the `tab` search param. */
-const TABS = ["documents", "specs", "image"] as const;
+/**
+ * Tab identifiers; also the whitelist for the `tab` search param. `identity`
+ * is first in order (display-spec §6.2) but the default stays `documents` —
+ * `?tab=identity` addresses it, no existing link changes behaviour.
+ */
+const TABS = ["identity", "documents", "specs", "image"] as const;
 
 type ReviewTab = (typeof TABS)[number];
 
@@ -62,13 +67,19 @@ export function AdminModelReviewRoute() {
   const transition = useTransitionProduct();
 
   const [dialog, setDialog] = useState<"approve" | "reject" | null>(null);
-  // Owned here, reported by the specs panel: the approve dialog has to warn
-  // that approval publishes the last *saved* draft, not the form buffer.
+  // Owned here, reported by the specs and identity panels: the approve dialog
+  // has to warn that approval publishes the last *saved* draft/identity, not
+  // either form's buffer. `hasUnsavedChanges` is the OR of both (§6.2 pin).
   const [hasUnsavedSpecs, setHasUnsavedSpecs] = useState(false);
+  const [hasUnsavedIdentity, setHasUnsavedIdentity] = useState(false);
+  const hasUnsavedChanges = hasUnsavedSpecs || hasUnsavedIdentity;
 
-  // Stable identity: the panel reports through this from an effect.
-  const handleDirtyChange = useCallback((isDirty: boolean) => {
+  // Stable identity: each panel reports through its own callback from an effect.
+  const handleSpecsDirtyChange = useCallback((isDirty: boolean) => {
     setHasUnsavedSpecs(isDirty);
+  }, []);
+  const handleIdentityDirtyChange = useCallback((isDirty: boolean) => {
+    setHasUnsavedIdentity(isDirty);
   }, []);
 
   const tabParam = searchParams.get("tab");
@@ -166,8 +177,15 @@ export function AdminModelReviewRoute() {
   }
 
   const tabPanels: Record<ReviewTab, ReactNode> = {
+    identity: (
+      <ModelIdentityPanel
+        product={row}
+        operation={operation}
+        onDirtyChange={handleIdentityDirtyChange}
+      />
+    ),
     documents: <ModelDocumentsPanel product={row} />,
-    specs: <ModelSpecsPanel product={row} onDirtyChange={handleDirtyChange} />,
+    specs: <ModelSpecsPanel product={row} onDirtyChange={handleSpecsDirtyChange} />,
     image: <ModelImagePanel product={row} />,
   };
 
@@ -305,12 +323,17 @@ export function AdminModelReviewRoute() {
           title={t("admin.review.actions.approveConfirmTitle")}
           body={t("admin.review.actions.approveConfirmBody")}
           warning={
-            hasUnsavedSpecs ? t("admin.review.actions.unsavedWarning") : undefined
+            hasUnsavedChanges ? t("admin.review.actions.unsavedWarning") : undefined
           }
           confirmLabel={t("admin.review.actions.confirmApprove")}
           confirmColor="primary"
           isPending={isTransitionPending}
           hasError={transition.isError}
+          errorMessage={
+            transition.error instanceof ProductError && transition.error.code === "incomplete-identity"
+              ? t("admin.review.approveBlockedIdentity")
+              : undefined
+          }
           onConfirm={() => transitionTo("approved")}
           onClose={() => setDialog(null)}
         />

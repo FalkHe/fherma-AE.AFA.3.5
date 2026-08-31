@@ -614,3 +614,52 @@ contract and does not appear here is not finished.
   in Python (not a SQL `DISTINCT` projection), because the project's
   `FakeAsyncSession` test double does not interpret a single-column
   projection. Nothing is wired to these yet — 6.12 is the first caller.
+
+### Step 6.24
+
+- New files: `frontend/src/components/ModelIdentityPanel.tsx` (identity form +
+  preview + save flow), `frontend/src/components/ModelClaimPanel.tsx` (the
+  claim box + `ClaimFieldRow`, the D6 component boundary — its only importer
+  is `ModelIdentityPanel.tsx`), `frontend/src/components/claimLogic.ts` (pure
+  "use the claim" helpers, split out only because a file mixing components and
+  other exports breaks `react-refresh/only-export-components` — the D6
+  boundary itself is unaffected, these are plain functions), and
+  `frontend/src/hooks/useBuildinglines.ts` (plain `fetch`, VITE_API_URL
+  precedent, proposed `GET /api/manufacturers/{id}/buildinglines` → `string[]`).
+  Panel-local name-preview helper (`previewLevels`) lives **inside**
+  `ModelIdentityPanel.tsx`, not exported, per D5's adjudication.
+- `frontend/src/hooks/useProductReview.ts` gains the local additive types
+  6.25/6.27 build on: `ProductVariant`, `ProductSuggestion`,
+  `ProductIdentityFields` (byte-matches ui-spec §8 API-1 camelCase names) and
+  `ProductWithIdentity = Product & Partial<ProductIdentityFields>` — `Partial`
+  deliberately, so a plain pre-6.20 `Product` needs **no cast** to satisfy it
+  (the panel degrades per display-spec §11 when the fields are absent). The
+  **one** commented cast lives in `patchIdentity`'s request body (the
+  generated `ProductPatchAttributes` lacks `identity` until 6.20); `useSaveIdentity(id)`
+  is the mutation hook, `SaveIdentityError` carries `status`/`code`/
+  `validationFields`. `IdentityBlock` is the write shape; since 6.25 (trims)
+  is not built yet, `useSaveIdentity`'s mutationFn fills `variants` from the
+  **cached** product row unchanged — 6.25 must replace that read with its own
+  field-array values, not add a second write path.
+- Fixture shape 6.25/6.27 should reuse: a stub `ProductWithIdentity` needs
+  `queryName`, `buildingline`, `typeCodes`, `variants`, `suggestion` set
+  explicitly (see `ModelIdentityPanel.test.tsx`'s `PRODUCT`/`SUGGESTION`
+  constants) — omitting them is also valid (exercises the pre-6.20
+  degradation path) since every additive field is optional.
+- `AdminModelReviewRoute.tsx`: `TABS` is now `["identity", "documents",
+  "specs", "image"]` (default still `documents`); `hasUnsavedSpecs` +
+  `hasUnsavedIdentity` are OR'd into `hasUnsavedChanges`, fed to the same
+  `unsavedWarning` copy (no new i18n key). `ConfirmDialog` gained
+  `errorMessage?: string` (absent = today's generic text); the approve dialog
+  passes `t("admin.review.approveBlockedIdentity")` on `transition.error.code
+  === "incomplete-identity"`.
+- The manufacturer Autocomplete's initial selection is resolved by a
+  case-insensitive match of `product.manufacturer` (the existing rendered-name
+  string) against the loaded `/api/manufacturers` options — there is no
+  `manufacturerId` read field yet (API-1 does not add one; only the write
+  block takes `manufacturerId`). 6.27 should re-check whether the landed
+  schema adds a read-side id and simplify this away if so.
+- D6 boundary is enforced by two tests in `ModelClaimPanel.test.tsx`: a
+  `// @ts-expect-error` compile assertion that `suggestion` is not a member of
+  `CatalogueModelDetail`, and a filesystem scan asserting `ModelClaimPanel` is
+  imported by `ModelIdentityPanel.tsx` only within `frontend/src/components/`.
