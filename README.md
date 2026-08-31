@@ -13,6 +13,71 @@ advanced RAG techniques, tool calling, and a vector database.
 Functional prototype with Catalogue Ingestion and Customer AI Advisor to demonstrage Core Requirements of this Sprint.
 CapStone might be polished frontend and Guided Ingestion Agent(s) in Admin UI. 
 
+## Where to find the Core Requirements
+
+**1. RAG implementation**
+`backend/app/services/chunking.py`, `backend/app/llm/embeddings.py`,
+`backend/app/services/retrieval_service.py`,
+`backend/app/services/rag_pipeline_service.py`
+Ingested pages are chunked heading-aware with provenance, embedded through
+LangChain into a pgvector column, and retrieved by a single SQL statement
+that fuses a full-text leg and a vector leg with Reciprocal Rank Fusion.
+The pipeline service adds query translation on top and fuses across the
+rewritten sub-queries.
+
+**2. Tool calling (≥3 — eight registered)**
+`backend/app/llm/agents/tools/`, loop in `backend/app/llm/agents/advisor.py`
+`catalogue_search`, `spec_comparison`, `licence_fit_check`,
+`cost_estimator`, `retrieve_bike_knowledge`, `record_preference`,
+`flag_unknown_bike`, `present_recommendations`. The advisor loop binds them
+via LangChain `bind_tools` and persists every executed call, so the UI can
+render what the advisor actually did.
+
+**3. Domain specialisation**
+`backend/app/llm/prompts/` (`advisor_system.md`, `query_translation.md`),
+`backend/app/llm/fencing.py`, `docs/project-vision.md`
+Motorcycle buying advice: versioned domain prompts drive the interview and
+turn an utterance into search queries plus hard spec filters. Retrieved
+third-party text is sentinel-fenced before the model sees it, the domain's
+main security measure against indirect prompt injection.
+
+**4. LangChain over OpenRouter, errors, validation**
+`backend/app/llm/models.py`, `backend/app/api/jsonapi.py`,
+`backend/app/main.py`, `backend/app/api/schemas/`
+`get_chat_model` is the single factory and points `ChatOpenRouter` at
+OpenRouter (never `api.openai.com`). Errors leave as JSON:API envelopes with
+stable domain codes behind a catch-all 500 handler; validation is
+schema-level Pydantic — on the API surface *and* on every tool's `Args`.
+
+**5. React UI with sources, tool results, progress**
+`frontend/src/components/`: `MessageSources.tsx`, `ModelSources.tsx`,
+`ToolResultBlock.tsx` (+ per-tool renderers, `RecommendationCard.tsx`),
+`TypingIndicator.tsx`, `OperationProgress.tsx`, `LiveConnectionAlert.tsx`
+Every assistant message carries its citations and its tool-call results;
+chat turns and ingestion runs show live progress (SSE-fed) rather than
+freezing.
+
+### Optional (bonus) tasks implemented
+
+| Task | Level | Where | What it does |
+|---|---|---|---|
+| Source citations in responses | Easy | `backend/app/services/retrieval_service.py`, `frontend/src/components/MessageSources.tsx`, `ModelSources.tsx` | Each retrieved chunk's provenance (URL, title, heading path) is persisted as `sources[]` on the assistant message and rendered as links under the answer. |
+| Visualisation of the RAG process | Easy | `frontend/src/components/ToolResultBlock.tsx`, `backend/app/llm/agents/tools/retrieve_bike_knowledge.py` | The `retrieve_bike_knowledge` result shows the rewritten queries, derived spec filters and candidate model ids — the retrieval plan per turn, not just its output. |
+| Prompt-injection protection | Medium | `backend/app/llm/fencing.py`, `frontend/src/components/UntrustedMarkdown.tsx` | Sentinel fencing plus lookalike-stripping on every untrusted string reaching the model (chunk text, preferences, translation context); markdown rendered with raw HTML off. Live-verified against a planted payload. |
+| Authentication and personalisation | Medium | `backend/app/api/endpoints/auth.py`, `backend/app/services/user_service.py`, `session_service.py`, `backend/app/llm/agents/tools/record_preference.py` | Username/password auth with Argon2, server-side sessions, CSRF tokens and customer/admin roles; `record_preference` stores what the customer revealed and feeds it back into the prompt and retrieval. |
+| Visualisation of tool call results | Medium | `frontend/src/components/ToolResult*.tsx`, `RecommendationCard.tsx` | Four tools get styled renderers and `present_recommendations` renders as cards; dispatch falls back to a generic key/value view so no call disappears. |
+| Real-time knowledge-base updates | Medium | `backend/app/jobs/ingestion.py`, `backend/app/api/endpoints/events.py`, `frontend/src/components/OperationProgress.tsx` | An admin adds a model while the app runs; ingestion executes as a background job, streams progress over SSE, and approval republishes it to the customer catalogue with no restart. |
+| Hybrid search | **Hard** | `backend/app/services/retrieval_service.py`, `rag_pipeline_service.py` | Full-text (GIN `tsvector`) and vector (HNSW pgvector) legs in one SQL statement, fused by Reciprocal Rank Fusion; a second RRF pass fuses across translated sub-queries. |
+
+Partially implemented: conversation history (persisted and resumable at
+`/consultations`, but no export), logging and monitoring (structured logging
+plus optional Langfuse tracing via `make langfuse-up` — see
+`backend/app/llm/models.py`; no per-turn grouping, no metrics), multi-model
+support (`CHAT_MODEL` / `ADVISOR_MODEL` / `EMBEDDING_MODEL` are independent
+settings, but no in-UI picker), automated KB updates (fully automated once
+triggered, but the trigger is an admin action). `docs/checklist.md` lists the
+scope of each partial honestly, and what was not attempted.
+
 ## Quick start (for reviewers)
 
 Everything runs in Docker. Make sure ports `5173` and `8000` are free on localhost. 
@@ -36,13 +101,13 @@ Visit http://localhost:5173 for customer frontend
 
 Retister with Userame and Password.
 
-# gain admin role
+gain admin role
 ```bash
 docker compose exec app-web app users set-role <username> admin
 ```
 Visit http://localhost:5173/admin or use main nav to switch to Admin UI
 
-# to stop the stack
+to stop the stack
 ```bash
 make down
 ```
