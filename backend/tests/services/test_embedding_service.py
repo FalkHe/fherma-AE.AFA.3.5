@@ -86,13 +86,19 @@ def settings_override(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[...,
     get_settings.cache_clear()
 
 
-def _document(session: FakeAsyncSession, motorbike_id: str, markdown: str) -> SourceDocument:
+def _document(
+    session: FakeAsyncSession,
+    motorbike_id: str,
+    markdown: str,
+    *,
+    source_type: SourceType = SourceType.WIKIPEDIA,
+) -> SourceDocument:
     """Store one source document and stamp `created_at` (a server default)."""
     document = asyncio.run(
         document_service.create_document(
             session,
             motorbike_id,
-            source_type=SourceType.WIKIPEDIA,
+            source_type=source_type,
             source_title="Suzuki GSR600",
             raw_path=f"sources/{motorbike_id}/doc.html",
             content_markdown=markdown,
@@ -371,6 +377,31 @@ def test_rebuild_motorbike_reports_a_gateway_failure_once_and_keeps_chunking(
     assert client.attempts == embedding_service.TRANSIENT_ATTEMPTS
     # Both documents are chunked all the same.
     assert len({chunk.source_document_id for chunk in fake_session.rows(Chunk)}) == 2
+
+
+def test_rebuild_motorbike_never_chunks_or_embeds_a_listing_document(
+    fake_session: FakeAsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D12, second carve-out: dated asking prices never enter the RAG base."""
+    motorbike = asyncio.run(product_service.create_backlog(fake_session, "Suzuki GSR600"))
+    wikipedia_document = _document(fake_session, motorbike.id, ARTICLE)
+    _document(
+        fake_session,
+        motorbike.id,
+        "Asking 4200 EUR, low mileage.",
+        source_type=SourceType.LISTING,
+    )
+    client = StubEmbeddings()
+    monkeypatch.setattr(llm_embeddings, "get_embeddings", lambda model=None: client)
+
+    outcome = asyncio.run(embedding_service.rebuild_motorbike(fake_session, motorbike.id))
+
+    assert isinstance(outcome, embedding_service.EmbeddingResult)
+    # Only the Wikipedia document is counted, chunked and embedded.
+    assert outcome.documents == 1
+    chunks = fake_session.rows(Chunk)
+    assert chunks
+    assert {chunk.source_document_id for chunk in chunks} == {wikipedia_document.id}
 
 
 def test_count_documents_counts_the_whole_catalogue(fake_session: FakeAsyncSession) -> None:

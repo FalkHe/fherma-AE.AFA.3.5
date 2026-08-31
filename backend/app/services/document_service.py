@@ -4,6 +4,7 @@ This module owns its transactions and speaks no HTTP. Documents are immutable
 from the admin surface — they are written by ingestion and only ever read back.
 """
 
+from collections.abc import Sequence
 from datetime import datetime
 
 from sqlalchemy import select
@@ -50,17 +51,31 @@ async def create_document(
     return document
 
 
-async def list_for_motorbike(session: AsyncSession, motorbike_id: str) -> list[SourceDocument]:
+async def list_for_motorbike(
+    session: AsyncSession,
+    motorbike_id: str,
+    *,
+    exclude_source_types: Sequence[SourceType] = (),
+) -> list[SourceDocument]:
     """Return every document of `motorbike_id`, Wikipedia first, then oldest first.
 
     The review screen reads top to bottom, and the Wikipedia article is the one
     document that is always about the model itself rather than about a listing
     of it.
+
+    `exclude_source_types` is additive and defaults to `()`, so every caller
+    that omits it keeps today's behaviour byte-identical (D12) — the four
+    `listing`-quarantine call sites (6.21) are the only ones that pass
+    `(SourceType.LISTING,)`.
     """
+    statement = select(SourceDocument).where(SourceDocument.motorbike_id == motorbike_id)
+    for excluded in exclude_source_types:
+        # Chained `!=` rather than `not_in(...)`: the project's in-memory
+        # `FakeAsyncSession` test double interprets `==`/`!=`/`IN`/`IS`
+        # comparisons combined with `AND`, not a `NOT IN` operator.
+        statement = statement.where(SourceDocument.source_type != excluded)
     result = await session.execute(
-        select(SourceDocument)
-        .where(SourceDocument.motorbike_id == motorbike_id)
-        .order_by(
+        statement.order_by(
             # `false` sorts before `true`, so the Wikipedia rows lead.
             SourceDocument.source_type != SourceType.WIKIPEDIA,
             SourceDocument.created_at,

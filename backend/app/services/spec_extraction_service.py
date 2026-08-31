@@ -116,14 +116,21 @@ def assemble_documents(
     head-truncated to `DOCUMENT_MAX_CHARS`, and a document that does not fit
     into what is left of `max_input_chars` is truncated to the remainder; once
     the budget is spent, the rest is dropped.
+
+    `listing` documents never reach the prompt (D12, third carve-out): a used
+    ad feeding asking prices into `msrp_eur` — a new-bike field (D9) — is not
+    a specification source.
     """
     budget = (
         get_settings().extraction_max_input_chars if max_input_chars is None else max_input_chars
     )
+    candidates = [
+        document for document in documents if document.source_type is not SourceType.LISTING
+    ]
     # Stable: `False` sorts first, so the Wikipedia article keeps its place at
     # the front and everything else keeps the caller's order.
     ordered = sorted(
-        documents, key=lambda document: document.source_type is not SourceType.WIKIPEDIA
+        candidates, key=lambda document: document.source_type is not SourceType.WIKIPEDIA
     )
 
     assembled: list[extraction.ExtractionDocument] = []

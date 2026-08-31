@@ -769,6 +769,70 @@ def test_re_ingestion_replaces_the_documents_and_the_image_of_the_previous_run(
     assert storage.resolve(documents[0].raw_path).is_file()
 
 
+# --- `listing` documents are quarantined from re-ingestion (step 6.21, D12) ----
+
+
+def test_re_ingestion_never_discards_a_listing_document_row_or_file(
+    fake_session: FakeAsyncSession,
+    motorbike: Motorbike,
+    operation: Operation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `listing` document is researched price provenance, not stale ingestion
+    output (D12, first carve-out): a re-ingestion must neither delete its row
+    nor unlink its file, on top of discarding a stale `wikipedia` document
+    exactly as before this step.
+    """
+    stale_id = "1" * 26
+    stale_raw = storage.save_raw_document(motorbike.id, stale_id, b"<html>old</html>")
+    asyncio.run(
+        document_service.create_document(
+            fake_session,
+            motorbike.id,
+            document_id=stale_id,
+            source_type=SourceType.WIKIPEDIA,
+            source_title="Stale article",
+            raw_path=stale_raw,
+            content_markdown="old",
+            fetched_at=operation.created_at,
+        )
+    )
+    listing_id = "3" * 26
+    listing_raw = storage.save_raw_document(motorbike.id, listing_id, b"<html>listing</html>")
+    asyncio.run(
+        document_service.create_document(
+            fake_session,
+            motorbike.id,
+            document_id=listing_id,
+            source_type=SourceType.LISTING,
+            source_title="Used GSR600 for sale",
+            raw_path=listing_raw,
+            content_markdown="Asking 4200 EUR, low mileage.",
+            fetched_at=operation.created_at,
+        )
+    )
+
+    _stub_wikipedia(monkeypatch, _wikipedia_result())
+    _stub_search(monkeypatch, search.SearchResults())
+
+    asyncio.run(service.ingest(fake_session, motorbike, operation, client=CLIENT))
+
+    documents = fake_session.rows(SourceDocument)
+    document_ids = {document.id for document in documents}
+    # The stale `wikipedia` document is gone, exactly as `test_re_ingestion_
+    # replaces_the_documents_and_the_image_of_the_previous_run` proves above —
+    # this is the "otherwise untouched" half of the carve-out.
+    assert stale_id not in document_ids
+    assert not storage.resolve(stale_raw).exists()
+    # The `listing` document's row and file both survive the discard.
+    assert listing_id in document_ids
+    assert storage.resolve(listing_raw).exists()
+    listing_document = next(document for document in documents if document.id == listing_id)
+    assert listing_document.source_type is SourceType.LISTING
+    # Plus the one freshly-fetched Wikipedia document from this run.
+    assert len(documents) == 2
+
+
 # --- suggestion as research input (step 6.17) ----------------------------------
 
 

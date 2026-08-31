@@ -399,7 +399,15 @@ async def get_catalogue_model(
     manufacturers = await manufacturer_service.get_by_ids(
         session, [] if motorbike.manufacturer_id is None else [motorbike.manufacturer_id]
     )
-    documents = await document_service.list_for_motorbike(session, motorbike.id)
+    # `listing` documents are excluded (D12, fourth carve-out): a classifieds
+    # link is not provenance for a specification — it never reaches this
+    # customer-facing `sources[]` projection, even though `_article` below
+    # would ignore it anyway. Admin surfaces (documents.py, products.py) keep
+    # showing `listing` documents on purpose — that is where an admin audits
+    # what the price research fetched.
+    documents = await document_service.list_for_motorbike(
+        session, motorbike.id, exclude_source_types=(SourceType.LISTING,)
+    )
     # Approved pictures only, stated explicitly: `list_images` is unfiltered by
     # default, so the customer gallery must never rely on the default.
     images = await product_service.list_images(

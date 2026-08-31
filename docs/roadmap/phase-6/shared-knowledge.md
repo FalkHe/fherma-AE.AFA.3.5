@@ -1597,3 +1597,67 @@ it the same way.
 - 6.28 inherits: the used-price stand-ins on `CatalogueModelDetail`/
   `CostEstimatorResult` are the only remaining local additive types in this
   area; everything else the reconciliation touched is gone.
+
+### Step 6.21
+
+- `document_service.list_for_motorbike(session, motorbike_id, *,
+  exclude_source_types: Sequence[SourceType] = ())` — additive keyword,
+  chained `!=` conditions (not `.not_in(...)`: the in-memory
+  `FakeAsyncSession` test double only interprets `==`/`!=`/`IN`/`IS`
+  combined with `AND`), default `()` keeps every pre-6.21 caller
+  byte-identical. **The four D12 carve-out call sites**, all passing
+  `exclude_source_types=(SourceType.LISTING,)`:
+  `ingestion/service.py::_Run._discard_previous_run` (also added
+  `SourceDocument.source_type != SourceType.LISTING` to its `delete(...)`
+  statement — nothing else in `_Run` moved);
+  `embedding_service.rebuild_motorbike`; the customer-facing
+  `GET /api/catalogue-models/{id}` handler in
+  `api/endpoints/catalogue_models.py` (excludes before both `_article` and
+  `_sources` are built — `_article` was already Wikipedia-only so this only
+  changes `_sources`). The third — `spec_extraction_service.assemble_documents`
+  — is implemented **inside that function itself** (it filters
+  `SourceType.LISTING` out of whatever `Sequence[SourceDocument]` it is
+  handed, unconditionally), not at its one call site
+  (`extract_draft_spec`'s `list_for_motorbike`), because the pinned test
+  proves the guarantee against `assemble_documents` directly, not through the
+  DB query — a listing document that reaches this function by any path is
+  still stripped before the prompt is built.
+- **New** `backend/app/services/ingestion/robots.py::RobotsGate` — `__init__(self,
+  *, client: httpx2.AsyncClient, gate: fetch.PolitenessGate | None = None)`
+  (omitted `gate` defaults to `fetch.politeness`, mirroring `fetch.fetch_html`'s
+  own `gate or politeness`); one method `async def allows(self, url: str) ->
+  bool`. Per host (`fetch._host` reused verbatim), fetches
+  `{scheme}://{host}/robots.txt` **once** through the given client after
+  `gate.wait(host)`, caches a `urllib.robotparser.RobotFileParser` (or `None`
+  for a disallowed host) for the object's lifetime — a second URL on an
+  already-checked host never re-fetches. Outcome table (stdlib-only, zero new
+  dependencies): 2xx → `parser.parse(lines)` then answer
+  `parser.can_fetch(fetch.USER_AGENT, url)`; 401/403 → host disallowed; any
+  other 4xx → host allowed (`parser.parse([])` is called **explicitly** even
+  here — `RobotFileParser.can_fetch` refuses everything until `.parse(...)`
+  has run at least once, since it internally gates on `last_checked`, stdlib
+  bookkeeping meant for `.read()`; skipping the call entirely is a bug that
+  silently disallows the host, caught during this step's own test run); 5xx /
+  `httpx2.TimeoutException` / `httpx2.HTTPError` → host disallowed
+  (conservative). `allows()` only returns a boolean; one `logger.warning` is
+  emitted per newly-refused host from inside `robots.py` — **6.22 owns the
+  visible CLI warning** on top of that (D8 item 2), this module does not print
+  one itself.
+- **Not wired anywhere yet** — 6.22 is the first and only caller of
+  `RobotsGate`, on the price fetch path exclusively; nothing in landed
+  ingestion behaviour changed by adding the module.
+- **Disclosed, not silently fixed — a fifth leak path exists, out of this
+  step's four-carve-out scope:** `chunking.py::rebuild_for_motorbike` (called
+  by the CLI `app chunks rebuild [slug]`, `app/cli/chunks.py`) itself calls
+  `document_service.list_for_motorbike` with **no** exclusion and then
+  `rebuild_document` on every row returned — including a `listing` document.
+  The step file's claim that `embedding_service.rebuild_motorbike` "is the
+  chunking entry point; no second path exists" is factually wrong: `app
+  chunks rebuild` is a second, independently reachable entry point into the
+  same `chunking.rebuild_document`, and it was **not** one of D12's four named
+  carve-outs, so this step left it untouched per the deviation clause ("a
+  fifth is a contract amendment"). Once 6.22 starts writing `listing` rows, an
+  admin running `app chunks rebuild` (whole-catalogue or single-slug) would
+  chunk a listing page into the RAG knowledge base — the exact outcome D12's
+  second carve-out exists to prevent. This needs an owner decision before
+  6.22/M4's demo, not a unilateral fix here.

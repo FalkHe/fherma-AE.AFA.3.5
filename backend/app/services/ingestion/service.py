@@ -213,9 +213,16 @@ class _Run:
         Fresh-run semantics: a retry re-fetches every source, so keeping the
         previous documents would show the admin a mixture of two runs (and
         `motorbike_images` would grow a row per attempt).
+
+        `listing` documents are excluded from both the list and the delete
+        (D12, first carve-out): they are researched price provenance, not
+        ingestion output, and a re-ingestion must not wipe it or unlink its
+        file.
         """
         motorbike_id = self.motorbike.id
-        documents = await document_service.list_for_motorbike(self.session, motorbike_id)
+        documents = await document_service.list_for_motorbike(
+            self.session, motorbike_id, exclude_source_types=(SourceType.LISTING,)
+        )
         images = await product_service.list_images(self.session, motorbike_id=motorbike_id)
         if not documents and not images:
             return
@@ -232,7 +239,10 @@ class _Run:
                 )
 
         await self.session.execute(
-            delete(SourceDocument).where(SourceDocument.motorbike_id == motorbike_id)
+            delete(SourceDocument).where(
+                SourceDocument.motorbike_id == motorbike_id,
+                SourceDocument.source_type != SourceType.LISTING,
+            )
         )
         await self.session.execute(
             delete(MotorbikeImage).where(MotorbikeImage.motorbike_id == motorbike_id)

@@ -606,6 +606,56 @@ def test_detail_returns_specs_article_sources_and_images(
     ]
 
 
+def test_detail_sources_never_include_a_listing_document(
+    customer: TestClient,
+    fake_session: FakeAsyncSession,
+    verified_specs: Callable[[VerifiedSpecs | None], None],
+) -> None:
+    """D12, fourth carve-out: a classifieds link is not provenance for a spec."""
+    motorbike = _seed_motorbike(fake_session)
+    verified_specs(
+        VerifiedSpecs(
+            motorbike_id=motorbike.id,
+            name=motorbike.query_name,
+            values=_comparison_values(),
+            parts=_parts(motorbike.id, motorbike.query_name),
+        )
+    )
+    fake_session.add(
+        SourceDocument(
+            motorbike_id=motorbike.id,
+            source_type=SourceType.WIKIPEDIA,
+            source_url="https://en.wikipedia.org/wiki/Suzuki_GSR600",
+            source_title="Suzuki GSR600",
+            raw_path="raw/wiki.html",
+            content_markdown="# Suzuki GSR600\n\nA naked bike.",
+            fetched_at=datetime.now(UTC),
+        )
+    )
+    fake_session.add(
+        SourceDocument(
+            motorbike_id=motorbike.id,
+            source_type=SourceType.LISTING,
+            source_url="https://example.test/classifieds/gsr600",
+            source_title="Used GSR600 for sale",
+            raw_path="raw/listing.html",
+            content_markdown="Asking 4200 EUR, low mileage.",
+            fetched_at=datetime.now(UTC),
+        )
+    )
+
+    response = customer.get(f"/api/catalogue-models/{motorbike.id}")
+
+    assert response.status_code == 200, response.text
+    attributes = response.json()["data"]["attributes"]
+    assert attributes["sources"] == [
+        {
+            "sourceTitle": "Suzuki GSR600",
+            "sourceUrl": "https://en.wikipedia.org/wiki/Suzuki_GSR600",
+        }
+    ]
+
+
 def test_detail_variants_are_projected_from_the_row(
     customer: TestClient,
     fake_session: FakeAsyncSession,

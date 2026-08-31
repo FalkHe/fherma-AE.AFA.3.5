@@ -187,6 +187,19 @@ def test_a_document_without_text_is_left_out() -> None:
     assert [document.title for document in assembled] == ["Product"]
 
 
+def test_a_listing_document_never_reaches_the_extraction_prompt() -> None:
+    """D12, third carve-out: a used ad is not a specification source."""
+    documents = [
+        _document(SourceType.WIKIPEDIA, "Suzuki GSR600", "article"),
+        _document(SourceType.LISTING, "Used GSR600 for sale", "Asking 4200 EUR."),
+    ]
+
+    assembled = spec_extraction_service.assemble_documents(documents)
+
+    assert [document.title for document in assembled] == ["Suzuki GSR600"]
+    assert not any("4200" in document.markdown for document in assembled)
+
+
 def test_the_documents_carry_their_provenance_into_the_prompt() -> None:
     documents = [
         _document(SourceType.WIKIPEDIA, "Suzuki GSR600", "article", "https://en.wikipedia.org/x")

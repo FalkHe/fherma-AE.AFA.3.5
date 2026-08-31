@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.db.models.chunk import EMBEDDING_MODEL_LENGTH, Chunk
-from app.db.models.source_document import SourceDocument
+from app.db.models.source_document import SourceDocument, SourceType
 from app.llm import embeddings as llm_embeddings
 from app.llm.models import MissingApiKeyError
 from app.services import chunking, document_service
@@ -255,7 +255,12 @@ async def rebuild_motorbike(
     require_matching_dimensions()
     settings = get_settings()
     model_name = model or settings.embedding_model
-    documents = await document_service.list_for_motorbike(session, motorbike_id)
+    # `listing` documents are excluded (D12, second carve-out): dated asking
+    # prices must never become a chunk or an embedding, or the RAG knowledge
+    # base would retrieve them as timeless prose.
+    documents = await document_service.list_for_motorbike(
+        session, motorbike_id, exclude_source_types=(SourceType.LISTING,)
+    )
 
     client: Embeddings | None = None
     failure: EmbeddingFailure | None = None

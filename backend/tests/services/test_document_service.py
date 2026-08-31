@@ -133,3 +133,53 @@ def test_list_for_motorbike_without_documents_is_empty(fake_session: FakeAsyncSe
     motorbike = asyncio.run(product_service.create_backlog(fake_session, "Suzuki GSR 600"))
 
     assert asyncio.run(document_service.list_for_motorbike(fake_session, motorbike.id)) == []
+
+
+def test_list_for_motorbike_excludes_the_given_source_types(
+    fake_session: FakeAsyncSession,
+) -> None:
+    """`exclude_source_types` (step 6.21, D12) — the four quarantine call sites."""
+    motorbike = asyncio.run(product_service.create_backlog(fake_session, "Suzuki GSR 600"))
+    wikipedia = _create(
+        fake_session,
+        motorbike.id,
+        SourceType.WIKIPEDIA,
+        created_at=datetime(2026, 8, 26, 9, tzinfo=UTC),
+    )
+    _create(
+        fake_session,
+        motorbike.id,
+        SourceType.LISTING,
+        created_at=datetime(2026, 8, 26, 10, tzinfo=UTC),
+    )
+
+    documents = asyncio.run(
+        document_service.list_for_motorbike(
+            fake_session, motorbike.id, exclude_source_types=(SourceType.LISTING,)
+        )
+    )
+
+    assert documents == [wikipedia]
+
+
+def test_list_for_motorbike_default_is_byte_identical_to_before_6_21(
+    fake_session: FakeAsyncSession,
+) -> None:
+    """Omitting the keyword changes nothing — every pre-6.21 caller is untouched."""
+    motorbike = asyncio.run(product_service.create_backlog(fake_session, "Suzuki GSR 600"))
+    wikipedia = _create(
+        fake_session,
+        motorbike.id,
+        SourceType.WIKIPEDIA,
+        created_at=datetime(2026, 8, 26, 9, tzinfo=UTC),
+    )
+    listing = _create(
+        fake_session,
+        motorbike.id,
+        SourceType.LISTING,
+        created_at=datetime(2026, 8, 26, 10, tzinfo=UTC),
+    )
+
+    documents = asyncio.run(document_service.list_for_motorbike(fake_session, motorbike.id))
+
+    assert documents == [wikipedia, listing]
