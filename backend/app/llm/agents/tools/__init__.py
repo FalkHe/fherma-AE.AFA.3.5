@@ -381,8 +381,9 @@ async def resolve_references(
 
     Ids are looked up directly (and must be approved, like any other reference);
     names go through `catalogue_search_service.resolve_name` (exact slug, then
-    substring). The first reference that resolves to nothing stops the walk — the
-    tool answers `{"unknownBike": …}` and there is no point in loading the rest.
+    type code, then substring). The first reference that resolves to nothing
+    stops the walk — the tool answers `{"unknownBike": …}` and there is no
+    point in loading the rest.
 
     Args:
         ctx: The turn's context; only its session is used.

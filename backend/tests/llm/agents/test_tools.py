@@ -44,6 +44,7 @@ from app.llm.agents.tools import (
 from app.llm.query_translation import SpecFilters
 from app.services import catalogue_search_service, cost_data, product_service, rag_pipeline_service
 from app.services.catalogue_search_service import COMPARISON_SPEC_FIELDS, VerifiedSpecs
+from app.services.naming_service import NameParts
 from app.services.rag_pipeline_service import RagResult
 from app.services.retrieval_service import RetrievedChunk
 
@@ -64,12 +65,28 @@ class _Motorbike:
         self.status = status
 
 
+def _parts(motorbike_id: str, name: str) -> NameParts:
+    """`NameParts` with no structured identity: `render_name` falls back to
+    `query_name` verbatim — this test file is not about naming.
+    """
+    return NameParts(
+        motorbike_id=motorbike_id,
+        manufacturer=None,
+        buildingline=None,
+        model_name=None,
+        year_from=None,
+        year_to=None,
+        query_name=name,
+    )
+
+
 def _specs(motorbike_id: str, name: str, **values: Any) -> VerifiedSpecs:
     """One `get_verified_specs` entry: every comparable field, mostly unknown."""
     return VerifiedSpecs(
         motorbike_id=motorbike_id,
         name=name,
         values={field: values.get(field) for field in COMPARISON_SPEC_FIELDS},
+        parts=_parts(motorbike_id, name),
     )
 
 
@@ -276,6 +293,73 @@ def test_catalogue_search_caps_the_shortlist_and_still_reports_every_match(
     assert catalogue.requested_ids == [ids[: catalogue_search.MAX_RESULTS]]
 
 
+def _named_parts(motorbike_id: str, **overrides: Any) -> NameParts:
+    """A `NameParts` whose fields default to "no structured identity" so a test
+    only has to state the fields its collision is actually about.
+    """
+    defaults: dict[str, Any] = {
+        "motorbike_id": motorbike_id,
+        "manufacturer": None,
+        "buildingline": None,
+        "model_name": None,
+        "year_from": None,
+        "year_to": None,
+        "query_name": motorbike_id,
+    }
+    return NameParts(**(defaults | overrides))
+
+
+def test_catalogue_search_names_escalate_only_under_a_colliding_context(
+    ctx: tools.ToolContext, catalogue: Any
+) -> None:
+    """`MODEL` is the pinned floor (D5): two rows sharing manufacturer and model
+    in the *same result set* escalate to their year range; a third, non-colliding
+    row in that same set stays short — and every pinned key survives unchanged.
+    """
+    bike_c = "01J0BIKE0000000000000000CC"
+    catalogue.matches = [BIKE_A, BIKE_B, bike_c]
+    empty_values = dict.fromkeys(COMPARISON_SPEC_FIELDS)
+    catalogue.specs = [
+        VerifiedSpecs(
+            motorbike_id=BIKE_A,
+            name="ignored",
+            values=empty_values,
+            parts=_named_parts(
+                BIKE_A, manufacturer="BMW", model_name="R 1250 GS", year_from=2019, year_to=2023
+            ),
+        ),
+        VerifiedSpecs(
+            motorbike_id=BIKE_B,
+            name="ignored",
+            values=empty_values,
+            parts=_named_parts(BIKE_B, manufacturer="BMW", model_name="R 1250 GS", year_from=2023),
+        ),
+        VerifiedSpecs(
+            motorbike_id=bike_c,
+            name="ignored",
+            values=empty_values,
+            parts=_named_parts(bike_c, manufacturer="Honda", model_name="CB500F", year_from=2019),
+        ),
+    ]
+
+    payload = _execute(catalogue_search.NAME, ctx, {})
+
+    names = {hit["motorbikeId"]: hit["name"] for hit in payload["results"]}
+    assert names[BIKE_A] == "BMW R 1250 GS (2019–2023)"
+    assert names[BIKE_B] == "BMW R 1250 GS (from 2023)"
+    assert names[bike_c] == "Honda CB500F"
+    for hit in payload["results"]:
+        assert set(hit) == {
+            "motorbikeId",
+            "name",
+            "category",
+            "powerKw",
+            "wetWeightKg",
+            "seatHeightMm",
+            "priceBand",
+        }
+
+
 # --- spec_comparison ----------------------------------------------------------
 
 
@@ -313,6 +397,44 @@ def test_spec_comparison_covers_every_comparable_field_with_aligned_values(
     assert rows["a2Eligible"] == [True, None]
     assert rows["seatHeightMm"] == [None, None]
     assert all(len(values) == len(payload["bikes"]) for values in rows.values())
+
+
+def test_spec_comparison_names_render_at_the_year_range_floor(
+    ctx: tools.ToolContext, catalogue: Any
+) -> None:
+    """`spec_comparison`'s pinned per-caller floor is `YEAR_RANGE` (D5) — the
+    compared bikes always carry it, distinguishable or not, and the keys stay
+    exactly the pinned two (`motorbikeId`, `name`).
+    """
+    catalogue.by_name = {
+        "Honda CB500F 2019": _Motorbike(BIKE_A, "Honda CB500F 2019", MotorbikeStatus.APPROVED),
+        "Honda CB650R 2021": _Motorbike(BIKE_B, "Honda CB650R 2021", MotorbikeStatus.APPROVED),
+    }
+    catalogue.specs = [
+        VerifiedSpecs(
+            motorbike_id=BIKE_A,
+            name="ignored",
+            values=dict.fromkeys(COMPARISON_SPEC_FIELDS),
+            parts=_named_parts(BIKE_A, manufacturer="Honda", model_name="CB500F", year_from=2019),
+        ),
+        VerifiedSpecs(
+            motorbike_id=BIKE_B,
+            name="ignored",
+            values=dict.fromkeys(COMPARISON_SPEC_FIELDS),
+            parts=_named_parts(BIKE_B, manufacturer="Honda", model_name="CB650R", year_from=2021),
+        ),
+    ]
+
+    payload = _execute(
+        spec_comparison.NAME, ctx, {"names": ["Honda CB500F 2019", "Honda CB650R 2021"]}
+    )
+
+    assert payload["bikes"] == [
+        {"motorbikeId": BIKE_A, "name": "Honda CB500F (from 2019)"},
+        {"motorbikeId": BIKE_B, "name": "Honda CB650R (from 2021)"},
+    ]
+    for bike in payload["bikes"]:
+        assert set(bike) == {"motorbikeId", "name"}
 
 
 def test_spec_comparison_answers_unknown_bike_for_a_name_it_cannot_resolve(
@@ -441,6 +563,29 @@ def test_licence_fit_check_records_a_read_path_valid_entry(
     }
 
 
+def test_licence_fit_check_name_renders_at_the_year_range_floor(
+    ctx: tools.ToolContext, catalogue: Any
+) -> None:
+    """`licence_fit_check`'s pinned per-caller floor is `YEAR_RANGE` (D5), and
+    the result's other pinned keys survive unchanged.
+    """
+    catalogue.by_name["Honda CB500F"] = _Motorbike(BIKE_A, "Honda CB500F", MotorbikeStatus.APPROVED)
+    catalogue.by_id[BIKE_A] = catalogue.by_name["Honda CB500F"]
+    catalogue.specs = [
+        VerifiedSpecs(
+            motorbike_id=BIKE_A,
+            name="ignored",
+            values=dict.fromkeys(COMPARISON_SPEC_FIELDS),
+            parts=_named_parts(BIKE_A, manufacturer="Honda", model_name="CB500F", year_from=2019),
+        )
+    ]
+
+    payload = _execute(licence_fit_check.NAME, ctx, {"motorbikeName": "Honda CB500F"})
+
+    assert set(payload) == {"motorbikeId", "name", "rules"}
+    assert payload["name"] == "Honda CB500F (from 2019)"
+
+
 def test_licence_fit_check_answers_unknown_bike_for_a_name_it_cannot_resolve(
     ctx: tools.ToolContext, catalogue: Any
 ) -> None:
@@ -516,6 +661,37 @@ def test_cost_estimator_is_deterministic_through_the_tool(
     assert _execute(cost_estimator.NAME, ctx, arguments) == _execute(
         cost_estimator.NAME, ctx, arguments
     )
+
+
+def test_cost_estimator_name_renders_at_the_year_range_floor(
+    ctx: tools.ToolContext, catalogue: Any
+) -> None:
+    """`cost_estimator`'s pinned per-caller floor is `YEAR_RANGE` (D5), and the
+    other pinned result keys survive unchanged.
+    """
+    catalogue.by_name["Honda CB500F"] = _Motorbike(BIKE_A, "Honda CB500F", MotorbikeStatus.APPROVED)
+    catalogue.by_id[BIKE_A] = catalogue.by_name["Honda CB500F"]
+    catalogue.specs = [
+        VerifiedSpecs(
+            motorbike_id=BIKE_A,
+            name="ignored",
+            values=dict.fromkeys(COMPARISON_SPEC_FIELDS),
+            parts=_named_parts(BIKE_A, manufacturer="Honda", model_name="CB500F", year_from=2019),
+        )
+    ]
+
+    payload = _execute(cost_estimator.NAME, ctx, {"motorbikeName": "Honda CB500F"})
+
+    assert set(payload) == {
+        "motorbikeId",
+        "name",
+        "currency",
+        "lineItems",
+        "total",
+        "assumptions",
+        "coefficientsVersion",
+    }
+    assert payload["name"] == "Honda CB500F (from 2019)"
 
 
 def test_cost_estimator_answers_unknown_bike_for_an_unapproved_id(

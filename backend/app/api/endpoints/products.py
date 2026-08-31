@@ -32,7 +32,8 @@ from app.db.models.manufacturer import Manufacturer
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_spec import MotorbikeSpec, SpecKind
 from app.db.session import get_db_session
-from app.services import manufacturer_service, product_service
+from app.services import manufacturer_service, naming_service, product_service
+from app.services.naming_service import NameLevel, NameParts
 
 router = APIRouter(
     prefix="/products",
@@ -95,12 +96,19 @@ def _resource(
     motorbike: Motorbike,
     specs: Mapping[SpecKind, MotorbikeSpec],
     manufacturers: Mapping[str, Manufacturer],
+    name_parts: NameParts,
 ) -> ProductResource:
-    """Project a catalogue row plus its specifications onto a resource object."""
+    """Project a catalogue row plus its specifications onto a resource object.
+
+    `name` is now the *rendered* name (D5/D10) — the admin surface renders at
+    `MODEL` with no context (`docs/roadmap/model-naming-data-model.md` §5): an
+    admin looks at one row at a time, so there is no page to disambiguate
+    against. `queryName` next to it is 6.20's addition, not this step's.
+    """
     return ProductResource(
         id=motorbike.id,
         attributes=ProductAttributes(
-            name=motorbike.query_name,
+            name=naming_service.render_name(name_parts, min_level=NameLevel.MODEL),
             slug=motorbike.slug,
             manufacturer=_manufacturer_name(motorbike, manufacturers),
             model_name=motorbike.model_name,
@@ -119,7 +127,12 @@ async def _document(session: AsyncSession, motorbike: Motorbike) -> ProductDocum
     """Build the single-resource document for one catalogue row."""
     specs = await product_service.get_specs(session, [motorbike.id])
     manufacturers = await _manufacturers_of(session, [motorbike])
-    return ProductDocument(data=_resource(motorbike, specs.get(motorbike.id, {}), manufacturers))
+    name_parts = await naming_service.load_name_parts(session, [motorbike.id])
+    return ProductDocument(
+        data=_resource(
+            motorbike, specs.get(motorbike.id, {}), manufacturers, name_parts[motorbike.id]
+        )
+    )
 
 
 async def _get_or_404(session: AsyncSession, product_id: str) -> Motorbike:
@@ -171,10 +184,15 @@ async def list_products(
     )
     specs = await product_service.get_specs(session, [motorbike.id for motorbike in motorbikes])
     manufacturers = await _manufacturers_of(session, motorbikes)
+    name_parts = await naming_service.load_name_parts(
+        session, [motorbike.id for motorbike in motorbikes]
+    )
 
     return ProductListDocument(
         data=[
-            _resource(motorbike, specs.get(motorbike.id, {}), manufacturers)
+            _resource(
+                motorbike, specs.get(motorbike.id, {}), manufacturers, name_parts[motorbike.id]
+            )
             for motorbike in motorbikes
         ],
         meta=jsonapi.Meta(total_count=total),

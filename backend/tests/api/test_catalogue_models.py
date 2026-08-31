@@ -33,6 +33,7 @@ from app.services.catalogue_search_service import (
     BrowseSort,
     VerifiedSpecs,
 )
+from app.services.naming_service import NameParts
 from tests.services.conftest import FakeAsyncSession
 
 PASSWORD = "secret123"
@@ -146,6 +147,21 @@ def verified_specs(monkeypatch: pytest.MonkeyPatch) -> Callable[[VerifiedSpecs |
     return configure
 
 
+def _parts(motorbike_id: str, name: str) -> NameParts:
+    """`NameParts` with no structured identity: `render_name` falls back to
+    `query_name` verbatim — these tests are not about naming.
+    """
+    return NameParts(
+        motorbike_id=motorbike_id,
+        manufacturer=None,
+        buildingline=None,
+        model_name=None,
+        year_from=None,
+        year_to=None,
+        query_name=name,
+    )
+
+
 def _summary_values(**overrides: Any) -> dict[str, Any]:
     values: dict[str, Any] = dict.fromkeys(SUMMARY_SPEC_FIELDS)
     values.update(overrides)
@@ -197,6 +213,7 @@ def test_list_returns_the_pinned_slim_attributes(
                 name="Honda CB500F",
                 manufacturer_id=honda.id,
                 values=_summary_values(category="naked", engine_cc=471, msrp_eur=6800),
+                parts=_parts("01ABCMODEL0000000000000001", "Honda CB500F"),
             )
         ],
         total=3,
@@ -240,6 +257,7 @@ def test_list_without_an_approved_image_has_no_image_url(
                 name="Suzuki GSR 600",
                 manufacturer_id=None,
                 values=_summary_values(),
+                parts=_parts("01ABCMODEL0000000000000002", "Suzuki GSR 600"),
             )
         ]
     )
@@ -498,6 +516,7 @@ def test_detail_returns_specs_article_sources_and_images(
             motorbike_id=motorbike.id,
             name=motorbike.query_name,
             values=_comparison_values(category="naked", engine_cc=471, a2_eligible=True),
+            parts=_parts(motorbike.id, motorbike.query_name),
         )
     )
     fake_session.add(

@@ -25,9 +25,22 @@ import pytest
 from app.services import catalogue_search_service, fit_check_service
 from app.services.catalogue_search_service import COMPARISON_SPEC_FIELDS, VerifiedSpecs
 from app.services.fit_check_service import FitRule, Licence, RiderExperience, Verdict
+from app.services.naming_service import NameParts
 
 BIKE = "01J0BIKE0000000000000000AA"
 NAME = "Honda CB500F"
+# `model_name is None` so `render_name` falls back to `query_name` verbatim
+# (the load-bearing fallback, data-model doc §5 step 1) — this fixture is not
+# about naming, so the parts carry no structured identity.
+_PARTS = NameParts(
+    motorbike_id=BIKE,
+    manufacturer=None,
+    buildingline=None,
+    model_name=None,
+    year_from=None,
+    year_to=None,
+    query_name=NAME,
+)
 
 
 class _Session:
@@ -59,6 +72,7 @@ def _specs(**values: Any) -> VerifiedSpecs:
         motorbike_id=BIKE,
         name=NAME,
         values={field: values.get(field) for field in COMPARISON_SPEC_FIELDS},
+        parts=_PARTS,
     )
 
 

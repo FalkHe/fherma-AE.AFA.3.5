@@ -17,7 +17,8 @@ from pydantic.alias_generators import to_camel
 
 from app.llm.agents.tools import ToolContext, ToolModel, ToolSpec
 from app.llm.query_translation import SpecFilters
-from app.services import catalogue_search_service
+from app.services import catalogue_search_service, naming_service
+from app.services.naming_service import NameLevel
 
 NAME = "catalogue_search"
 
@@ -89,11 +90,14 @@ async def run(ctx: ToolContext, args: CatalogueSearchArgs) -> CatalogueSearchRes
     specs = await catalogue_search_service.get_verified_specs(
         ctx.session, motorbike_ids[:MAX_RESULTS]
     )
+    # The returned rows are each other's context (D5): a name escalates to its
+    # year range only when two of *these* results would otherwise render alike.
+    names = naming_service.render_names([entry.parts for entry in specs], min_level=NameLevel.MODEL)
     return CatalogueSearchResult(
         results=[
             CatalogueSearchHit(
                 motorbike_id=entry.motorbike_id,
-                name=entry.name,
+                name=names[entry.motorbike_id],
                 category=entry.values["category"],
                 power_kw=entry.values["power_kw"],
                 wet_weight_kg=entry.values["wet_weight_kg"],

@@ -34,6 +34,7 @@ from app.services.catalogue_search_service import (
     UNCOMPARED_SPEC_FIELDS,
     VerifiedSpecs,
 )
+from app.services.naming_service import NameParts
 
 BIKE_A = "01J0QABIKE000000000000AAA"
 BIKE_B = "01J0QABIKE000000000000BBB"
@@ -147,12 +148,19 @@ class _ScriptedResult:
     def first(self) -> Any | None:
         return self._rows[0] if self._rows else None
 
+    def all(self) -> list[Any]:
+        return self._rows
+
 
 class _QaScriptedSession:
-    """A minimal scripted session for `resolve_name`'s two-statement path.
+    """A minimal scripted session for `resolve_name`'s three-statement path
+    (slug, then type code, then substring — step 6.19 added the middle leg).
 
     Independent of the dev's `ScriptedSession` (fresh implementation), used only
-    to prove the resolver's precedence and approved-only rule.
+    to prove the resolver's precedence and approved-only rule. Every non-slug
+    `execute()` replays the same scripted rows, since neither the type-code nor
+    the substring leg is what these tests are about — an empty list at either
+    still falls through the way the real SQL would for "no match".
     """
 
     def __init__(self, substring_rows: list[Any]) -> None:
@@ -213,7 +221,8 @@ def test_a_backlog_model_never_resolves_even_when_its_slug_matches(
     result = asyncio.run(catalogue_search_service.resolve_name(session, "Prototype X"))
 
     assert result is None
-    assert session.statement_count == 1  # it did try the fallback before giving up
+    # It did try the type-code leg and the substring fallback before giving up.
+    assert session.statement_count == 2
 
 
 def test_a_rejected_model_never_resolves_via_substring_either(
@@ -516,11 +525,27 @@ class _Motorbike:
         self.status = status
 
 
+def _parts(motorbike_id: str, name: str) -> NameParts:
+    """`NameParts` with no structured identity: `render_name` falls back to
+    `query_name` verbatim — this test file is not about naming.
+    """
+    return NameParts(
+        motorbike_id=motorbike_id,
+        manufacturer=None,
+        buildingline=None,
+        model_name=None,
+        year_from=None,
+        year_to=None,
+        query_name=name,
+    )
+
+
 def _specs(motorbike_id: str, name: str, **values: Any) -> VerifiedSpecs:
     return VerifiedSpecs(
         motorbike_id=motorbike_id,
         name=name,
         values={field: values.get(field) for field in COMPARISON_SPEC_FIELDS},
+        parts=_parts(motorbike_id, name),
     )
 
 

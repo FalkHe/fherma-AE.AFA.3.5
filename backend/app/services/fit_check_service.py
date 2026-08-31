@@ -34,7 +34,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services import catalogue_search_service
+from app.services import catalogue_search_service, naming_service
+from app.services.naming_service import NameLevel
 from app.services.product_service import A2_MAX_POWER_KW, A2_MAX_POWER_TO_WEIGHT
 
 # An A2 restriction may only be derived from a version making at most twice the
@@ -145,7 +146,11 @@ async def check(
         _seat_height_rule(entry.values, rider_height_cm, inside_leg_mm),
         _weight_rule(entry.values, experience),
     ]
-    return FitCheck(motorbike_id=entry.motorbike_id, name=entry.name, rules=rules)
+    # `YEAR_RANGE` is the pinned floor for a customer-visible single-bike answer
+    # (docs/roadmap/model-naming-data-model.md §5): no context set here, since
+    # this check is always about exactly one model.
+    name = naming_service.render_name(entry.parts, min_level=NameLevel.YEAR_RANGE)
+    return FitCheck(motorbike_id=entry.motorbike_id, name=name, rules=rules)
 
 
 def _licence_rules(licence: Licence, values: dict[str, Any]) -> list[FitRule]:

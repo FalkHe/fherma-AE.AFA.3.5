@@ -1341,3 +1341,55 @@ manufacturer prefix) is unaffected and applies to all 15.
   `approved` (16) — the counts this step actually touches — are unaffected;
   the constraint only guards `approved`. Neither `app ingest run` nor `app
   jobs enqueue` was invoked by this step.
+
+### Step 6.19
+
+- `resolve_name`'s final leg order: **exact slug → type code → substring**.
+  The type-code leg upper-cases/trims the input and matches approved rows by
+  JSONB `@>` on `Motorbike.type_codes` **or**, as a D6 retrieval hint only, on
+  `suggestion["type_codes"]` (compiles to `motorbikes.type_codes @> ?::JSONB
+  OR (motorbikes.suggestion[?] @> ?::JSONB)`, verified against real Postgres,
+  not just `str(compiled)`); exactly one match wins, several or none fall
+  through to the substring leg. The substring leg now matches `query_name` OR
+  `model_name` (`ILIKE`), ordered by
+  `least(char_length(query_name), coalesce(char_length(model_name), 32767))`,
+  `query_name`, `id`.
+- `BrowseSort.NAME` composite sort tuple: `(Manufacturer.name ASC NULLS LAST,
+  Motorbike.model_name ASC NULLS LAST, Motorbike.year_from ASC NULLS LAST,
+  Motorbike.id ASC)`; `NAME_DESC` mirrors only the first two columns
+  descending (no `year_from` segment), `id` still ascending. Both browse
+  statements (page **and** count) carry the same outer join to
+  `manufacturers` — the count is unaffected, a to-one FK cannot multiply a
+  row.
+- `parts: naming_service.NameParts` lives on `VerifiedSpecs` and `BrowseRow`
+  (`catalogue_search_service.py`), loaded in the same statement as the rest of
+  each row (`_specs_statement`/`_browse_statement` both outer-join
+  `manufacturers` and select `buildingline`/`model_name`/`year_from`/
+  `year_to` alongside it — one shared `_name_parts(row)` helper builds it from
+  either). Their `name` attribute stays `render_name(parts)` — the no-context
+  MODEL convenience — for a caller that has none; every context-aware caller
+  (the five tools, both `catalogue-models` routes) renders from `.parts`
+  itself via `naming_service.render_name`/`render_names` per the D5 table.
+  `product_service.py`'s admin `_resource` renders with `naming_service
+  .load_name_parts` (context `()`, `MODEL`) since `products.py` has no
+  `VerifiedSpecs`/`BrowseRow` of its own to carry parts.
+- **6.20 serialises what this step computes and 6.23 adds to
+  `cost_estimator`'s result — neither may drop the rendered `name` or any
+  6.14 sentinel.** `fit_check_service`/`cost_estimator_service` each gained
+  exactly one line (`name = naming_service.render_name(entry.parts,
+  min_level=NameLevel.YEAR_RANGE)`); their tools pass it through unchanged, so
+  6.23's `usedPrice` addition to `CostEstimatorResult` is purely additive on
+  top.
+- Disclosed, mechanical widening: `test_licence_cost_tools_qa.py`'s
+  `allowed_service_imports` AST allowlist (proving `fit_check_service.py`/
+  `cost_estimator_service.py` reach no ORM/SQL) now also allows
+  `naming_service` — the one pure-function import both services need for
+  `render_name`. Not a deviation from the architecture rule, just an
+  allowlist that predates this step's caller.
+- Live verification used `app catalogue set-identity suzuki/gsr600/2006-2011
+  --manufacturer Suzuki --model-name GSR600 --year-from 2006 --year-to 2011
+  --type-code WVB9` (D6-sanctioned: an admin choosing to use the claim) to
+  make the `WVB9` smoke resolvable — the approved seeded row had `type_codes
+  = []` and a NULL `suggestion` before this. The near-duplicate backlog row
+  `suzuki-gsr-600` (imported, carrying the `WVB9` claim itself) is untouched
+  and still pre-existing duplication, not this step's to resolve.

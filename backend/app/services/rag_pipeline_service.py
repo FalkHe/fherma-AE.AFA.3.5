@@ -235,9 +235,10 @@ async def _candidate_ids(session: AsyncSession, plan: TranslatedQuery) -> list[s
 async def _resolve_names(session: AsyncSession, names: Sequence[str]) -> list[str]:
     """Resolve model names the conversation mentioned to approved catalogue ids.
 
-    The resolution itself is `catalogue_search_service.resolve_name` (step 3.11's
-    shared resolver: exact slug, then a substring match, approved entries only) —
-    this helper only turns its answers into a deduplicated id list. A name that
+    The resolution itself is `catalogue_search_service.resolve_name` (the shared
+    resolver: exact slug, then type code, then a substring match, approved
+    entries only) — this helper only turns its answers into a deduplicated id
+    list. A name that
     resolves to nothing is skipped, never an error: the customer may well be
     naming a bike this catalogue has never heard of, and step 3.14's
     `flag_unknown_bike` is where that becomes visible.

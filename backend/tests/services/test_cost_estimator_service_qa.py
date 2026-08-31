@@ -21,9 +21,21 @@ import pytest
 from app.services import catalogue_search_service, cost_data, cost_estimator_service
 from app.services.catalogue_search_service import COMPARISON_SPEC_FIELDS, VerifiedSpecs
 from app.services.cost_estimator_service import CostEstimate
+from app.services.naming_service import NameParts
 
 BIKE = "01J0QACOST000000000000AA"
 NAME = "QA Reference Bike"
+# `model_name is None` so `render_name` falls back to `query_name` verbatim —
+# this fixture is not about naming.
+_PARTS = NameParts(
+    motorbike_id=BIKE,
+    manufacturer=None,
+    buildingline=None,
+    model_name=None,
+    year_from=None,
+    year_to=None,
+    query_name=NAME,
+)
 
 COMMUTER = {
     "category": "naked",
@@ -48,6 +60,7 @@ def _estimate(
                 motorbike_id=BIKE,
                 name=NAME,
                 values={field: specs.get(field) for field in COMPARISON_SPEC_FIELDS},
+                parts=_PARTS,
             )
         ]
 

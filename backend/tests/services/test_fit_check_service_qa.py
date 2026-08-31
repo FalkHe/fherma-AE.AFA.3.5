@@ -22,9 +22,21 @@ import pytest
 from app.services import catalogue_search_service, fit_check_service, product_service
 from app.services.catalogue_search_service import COMPARISON_SPEC_FIELDS, VerifiedSpecs
 from app.services.fit_check_service import Licence, Verdict
+from app.services.naming_service import NameParts
 
 BIKE = "01J0QAFIT0000000000000AA"
 NAME = "QA Reference Bike"
+# `model_name is None` so `render_name` falls back to `query_name` verbatim —
+# this fixture is not about naming.
+_PARTS = NameParts(
+    motorbike_id=BIKE,
+    manufacturer=None,
+    buildingline=None,
+    model_name=None,
+    year_from=None,
+    year_to=None,
+    query_name=NAME,
+)
 
 
 class _Session:
@@ -49,7 +61,10 @@ def catalogue(monkeypatch: pytest.MonkeyPatch) -> Any:
 def _rules(catalogue: Any, specs: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     catalogue.entries = [
         VerifiedSpecs(
-            motorbike_id=BIKE, name=NAME, values={f: specs.get(f) for f in COMPARISON_SPEC_FIELDS}
+            motorbike_id=BIKE,
+            name=NAME,
+            values={f: specs.get(f) for f in COMPARISON_SPEC_FIELDS},
+            parts=_PARTS,
         )
     ]
     check = asyncio.run(fit_check_service.check(_Session(), BIKE, **kwargs))

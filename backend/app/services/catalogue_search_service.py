@@ -25,12 +25,20 @@ Two more entry points serve the step-3.11 agent tools, and they keep the same
 three rules:
 
 * `resolve_name` — the shared name→bike resolution every tool needs (a customer
-  writes "CB500F", not a ULID): exact slug first, then a substring match,
-  approved entries only, `None` rather than an exception when nothing matches.
+  writes "CB500F", not a ULID): **exact slug → type code → substring**
+  (`docs/roadmap/model-naming-data-model.md` §4.3), approved entries only,
+  `None` rather than an exception when nothing matches. The type-code leg
+  matches a normalised code against `type_codes` (D5) and, as a retrieval hint
+  only, against `suggestion->'type_codes'` (D6); several matches is an
+  ambiguous code, so it falls through to the substring leg rather than
+  guessing.
 * `get_verified_specs` — display values for a set of ids: the frozen
   specification columns of the `verified` revision, every field present, `None`
   where the catalogue has no verified number. Nothing is ever inferred to fill a
-  gap; the comparison table shows the gap instead.
+  gap; the comparison table shows the gap instead. Each entry also carries
+  `parts: naming_service.NameParts`, loaded in the same statement, so a caller
+  can render the name in its own context (`docs/roadmap/phase-6/shared-knowledge.md`
+  D5); `name` itself stays a rendered convenience for a caller with no context.
 
 `browse_motorbikes` (step 4.3) serves the customer catalogue and keeps two of
 the three rules — verified specs, approved models, no post-filtering — but
@@ -46,19 +54,20 @@ The filter shape itself lives with the translation schema
 output and the SQL's input, so a renamed bound cannot go unnoticed.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import ColumnElement, Select, UnaryExpression, and_, func, select
+from sqlalchemy import ColumnElement, Select, UnaryExpression, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.models.manufacturer import Manufacturer
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_spec import MotorbikeSpec, SpecKind
 from app.llm.query_translation import SpecFilters
-from app.services import product_service
+from app.services import naming_service, product_service
 
 # Which frozen specification columns a comparison shows, in table order, and
 # which it deliberately leaves out. Together they are exactly `SPEC_FIELDS` —
@@ -123,12 +132,19 @@ class BrowseRow:
     are named), `None` where the model has no verified number — including the
     case where it has no verified revision at all, which browsing still shows.
     `Decimal` is unwrapped like everywhere else in this module.
+
+    `parts` is the row's `naming_service.NameParts`, loaded in the same
+    statement (no per-row query); `name` is `render_name(parts)` — a rendered
+    convenience for a caller with no context (D5). A caller that has the whole
+    page as its context (the customer browse list) renders from `parts`
+    directly instead of using this field.
     """
 
     motorbike_id: str
     name: str
     manufacturer_id: str | None
     values: dict[str, Any]
+    parts: naming_service.NameParts
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,11 +156,18 @@ class VerifiedSpecs:
     verified value is missing is present with `None`. Values are plain
     JSON-serializable Python (`Decimal` unwrapped to `float`), because they end
     up in a tool result and then in a JSONB column.
+
+    `parts` is the entry's `naming_service.NameParts`, loaded in the same
+    statement (no per-row query); `name` is `render_name(parts)` — a rendered
+    convenience for a caller with no context (D5). A caller that has several
+    entries as its context (a comparison, a shortlist) renders from `parts`
+    directly instead of using this field.
     """
 
     motorbike_id: str
     name: str
     values: dict[str, Any]
+    parts: naming_service.NameParts
 
 
 async def find_motorbike_ids(session: AsyncSession, filters: SpecFilters) -> list[str]:
@@ -169,20 +192,28 @@ async def find_motorbike_ids(session: AsyncSession, filters: SpecFilters) -> lis
 async def resolve_name(session: AsyncSession, name: str) -> Motorbike | None:
     """Resolve a written model name to an approved catalogue entry.
 
-    Two steps, most precise first:
+    Three steps, most precise first (`docs/roadmap/model-naming-data-model.md`
+    §4.3):
 
     1. the **exact slug** derived from the name (`" Suzuki  GSR 600 "` →
        `suzuki-gsr-600`), which already absorbs case, spacing and punctuation;
-    2. a **substring match** on the display name (`ILIKE '%…%'`), which catches
-       the partial names a conversation uses ("CB500F" → "Honda CB500F"). The
-       shortest matching name wins, then the name, then the id — the shortest is
-       the closest to what was asked for, and the tiebreakers make the answer
-       deterministic rather than dependent on the plan.
+    2. a **type code** — the trimmed, upper-cased input matched by JSONB
+       containment against `Motorbike.type_codes` (D5) or, as a retrieval hint
+       only (D6), against `suggestion->'type_codes'`. Exactly one approved row
+       matching wins; several is an ambiguous code and none is a miss — both
+       fall through rather than guessing;
+    3. a **substring match** on `query_name` *or* `model_name` (`ILIKE '%…%'`),
+       which catches the partial names a conversation uses ("CB500F" → "Honda
+       CB500F") and the model name an admin never typed as the `query_name`.
+       Ordered by the shorter of the two matching names, then `query_name`,
+       then the id — the shortest is the closest to what was asked for, and the
+       tiebreakers make the answer deterministic rather than dependent on the
+       plan.
 
     Substring rather than trigram similarity on purpose: `pg_trgm` is not
     installed in this schema and only step 3.1 may carry a migration this phase.
-    The two steps are the pinned resolution order either way, so adding the
-    extension later changes step 2 alone.
+    The three steps are the pinned resolution order either way, so adding the
+    extension later changes step 3 alone.
 
     Args:
         session: Session the lookups run on; nothing is written or committed.
@@ -203,6 +234,11 @@ async def resolve_name(session: AsyncSession, name: str) -> Motorbike | None:
         motorbike = await product_service.get_by_slug(session, slug)
         if motorbike is not None and motorbike.status is MotorbikeStatus.APPROVED:
             return motorbike
+
+    code_result = await session.execute(_type_code_match_statement(text.upper()))
+    code_matches = list(code_result.scalars().all())
+    if len(code_matches) == 1:
+        return code_matches[0]
 
     result = await session.execute(_name_match_statement(text))
     return result.scalars().first()
@@ -231,14 +267,16 @@ async def get_verified_specs(
 
     result = await session.execute(_specs_statement(motorbike_ids))
     found = {row["id"]: row for row in result.mappings().all()}
+    parts = {motorbike_id: _name_parts(row) for motorbike_id, row in found.items()}
     # Re-ordering in Python is alignment, not sorting: the caller's order is the
     # contract (comparison columns are aligned to it), and it cannot be
     # expressed as an `ORDER BY` over a set of ids.
     return [
         VerifiedSpecs(
             motorbike_id=motorbike_id,
-            name=found[motorbike_id]["query_name"],
+            name=naming_service.render_name(parts[motorbike_id]),
             values={field: _plain(found[motorbike_id][field]) for field in COMPARISON_SPEC_FIELDS},
+            parts=parts[motorbike_id],
         )
         for motorbike_id in motorbike_ids
         if motorbike_id in found
@@ -286,18 +324,19 @@ async def browse_motorbikes(
 
     total = await session.execute(_browse_count_statement(conditions))
     page = await session.execute(_browse_statement(conditions, sort, limit=limit, offset=offset))
-    return (
-        [
+    rows = []
+    for row in page.mappings().all():
+        parts = _name_parts(row)
+        rows.append(
             BrowseRow(
                 motorbike_id=row["id"],
-                name=row["query_name"],
+                name=naming_service.render_name(parts),
                 manufacturer_id=row["manufacturer_id"],
                 values={field: _plain(row[field]) for field in SUMMARY_SPEC_FIELDS},
+                parts=parts,
             )
-            for row in page.mappings().all()
-        ],
-        total.scalar_one(),
-    )
+        )
+    return rows, total.scalar_one()
 
 
 def _build_statement(filters: SpecFilters) -> Select[tuple[str]]:
@@ -384,10 +423,26 @@ def _browse_join() -> ColumnElement[bool]:
 def _browse_statement(
     conditions: Sequence[ColumnElement[bool]], sort: BrowseSort, *, limit: int, offset: int
 ) -> Select[Any]:
-    """Compose the one page statement `browse_motorbikes` issues."""
+    """Compose the one page statement `browse_motorbikes` issues.
+
+    The `manufacturers` join is **outer**, like the specification join: a row
+    without a `manufacturer_id` (or, defensively, a dangling one) still browses
+    — it just sorts and renders as if it had no brand.
+    """
     columns = [getattr(MotorbikeSpec, field) for field in SUMMARY_SPEC_FIELDS]
     return (
-        select(Motorbike.id, Motorbike.query_name, Motorbike.manufacturer_id, *columns)
+        select(
+            Motorbike.id,
+            Motorbike.query_name,
+            Motorbike.manufacturer_id,
+            Motorbike.buildingline,
+            Motorbike.model_name,
+            Motorbike.year_from,
+            Motorbike.year_to,
+            Manufacturer.name.label("manufacturer_name"),
+            *columns,
+        )
+        .outerjoin(Manufacturer, Manufacturer.id == Motorbike.manufacturer_id)
         .outerjoin(MotorbikeSpec, _browse_join())
         .where(*conditions)
         .order_by(*_browse_order_by(sort))
@@ -397,14 +452,18 @@ def _browse_statement(
 
 
 def _browse_count_statement(conditions: Sequence[ColumnElement[bool]]) -> Select[tuple[int]]:
-    """Compose the matching count statement — same join, same conditions.
+    """Compose the matching count statement — same joins, same conditions.
 
     A plain `count()` is exact here: `motorbike_specs` holds at most one row per
-    (motorbike, kind), so the join can never multiply a model into two rows.
+    (motorbike, kind) and `manufacturer_id` is a to-one reference, so neither
+    join can ever multiply a model into two rows. The `manufacturers` join is
+    added here too even though nothing in the count needs it, so both browse
+    statements share the exact same `FROM` shape.
     """
     return (
         select(func.count())
         .select_from(Motorbike)
+        .outerjoin(Manufacturer, Manufacturer.id == Motorbike.manufacturer_id)
         .outerjoin(MotorbikeSpec, _browse_join())
         .where(*conditions)
     )
@@ -413,15 +472,26 @@ def _browse_count_statement(conditions: Sequence[ColumnElement[bool]]) -> Select
 def _browse_order_by(sort: BrowseSort) -> tuple[UnaryExpression[Any], ...]:
     """Return the pinned `ORDER BY` of a browse page.
 
-    Price sorts put NULLs last in **both** directions — a model without a
-    verified price is not the cheapest and not the most expensive, it is
-    unknown, and it never leads a page. `name, id` is the tiebreak everywhere
-    and the id is always ascending, so paging is stable.
+    `name`/`-name` can no longer sort on a display column — there is not one —
+    so it is the composite an alphabetical catalogue actually wants: brand,
+    then model, then (ascending only) the year range, id always the final,
+    ascending tiebreak so paging stays stable. Price sorts put NULLs last in
+    **both** directions — a model without a verified price is not the cheapest
+    and not the most expensive, it is unknown, and it never leads a page.
     """
     if sort is BrowseSort.NAME:
-        return (Motorbike.query_name.asc(), Motorbike.id.asc())
+        return (
+            Manufacturer.name.asc().nulls_last(),
+            Motorbike.model_name.asc().nulls_last(),
+            Motorbike.year_from.asc().nulls_last(),
+            Motorbike.id.asc(),
+        )
     if sort is BrowseSort.NAME_DESC:
-        return (Motorbike.query_name.desc(), Motorbike.id.asc())
+        return (
+            Manufacturer.name.desc().nulls_last(),
+            Motorbike.model_name.desc().nulls_last(),
+            Motorbike.id.asc(),
+        )
     if sort is BrowseSort.MSRP_EUR:
         return (
             MotorbikeSpec.msrp_eur.asc().nulls_last(),
@@ -435,17 +505,50 @@ def _browse_order_by(sort: BrowseSort) -> tuple[UnaryExpression[Any], ...]:
     )
 
 
+def _type_code_match_statement(code: str) -> Select[tuple[Motorbike]]:
+    """Compose the type-code leg of `resolve_name` (step 2 of the three).
+
+    JSONB containment (`@>`) against the typed `type_codes` column (D5) or, as
+    a retrieval hint only (D6) — reading a claim to find a row, never
+    surfacing it — against the unverified `suggestion->'type_codes'`. Approved
+    rows only; the caller decides what 0, 1 or several matches mean.
+    """
+    return select(Motorbike).where(
+        Motorbike.status == MotorbikeStatus.APPROVED,
+        or_(
+            Motorbike.type_codes.contains([code]),
+            Motorbike.suggestion["type_codes"].contains([code]),
+        ),
+    )
+
+
 def _name_match_statement(text: str) -> Select[tuple[Motorbike]]:
-    """Compose the substring fallback of `resolve_name` (step 2 of the two)."""
+    """Compose the substring fallback of `resolve_name` (step 3 of the three).
+
+    Matches `query_name` *or* `model_name` — a customer writes the model, an
+    admin typed the whole phrase — ordered by the shorter of the two matching
+    names (`NULL` `model_name` losing to any actual match via the `32767`
+    fallback), then `query_name`, then `id`: the shortest is the closest to
+    what was asked for, and the tiebreakers make the answer deterministic.
+    """
+    pattern = f"%{_escaped(text)}%"
     return (
         select(Motorbike)
         .where(
             Motorbike.status == MotorbikeStatus.APPROVED,
-            Motorbike.query_name.ilike(f"%{_escaped(text)}%", escape="\\"),
+            or_(
+                Motorbike.query_name.ilike(pattern, escape="\\"),
+                Motorbike.model_name.ilike(pattern, escape="\\"),
+            ),
         )
-        # Shortest name first: "CB500F" should answer with the CB500F, not with a
-        # longer entry that happens to contain it.
-        .order_by(func.length(Motorbike.query_name), Motorbike.query_name, Motorbike.id)
+        .order_by(
+            func.least(
+                func.char_length(Motorbike.query_name),
+                func.coalesce(func.char_length(Motorbike.model_name), 32767),
+            ),
+            Motorbike.query_name,
+            Motorbike.id,
+        )
         .limit(1)
     )
 
@@ -465,11 +568,23 @@ def _specs_statement(motorbike_ids: Sequence[str]) -> Select[Any]:
 
     The `verified` condition sits in the `ON` clause, not in the `WHERE`: on the
     outer side of the join it would drop the very rows this projection is meant
-    to keep (an approved entry whose specification was never verified).
+    to keep (an approved entry whose specification was never verified). The
+    `manufacturers` join is outer for the same defensive reason as the browse
+    statement's — `manufacturer_id` may be `NULL`.
     """
     columns = [getattr(MotorbikeSpec, field) for field in COMPARISON_SPEC_FIELDS]
     return (
-        select(Motorbike.id, Motorbike.query_name, *columns)
+        select(
+            Motorbike.id,
+            Motorbike.query_name,
+            Motorbike.buildingline,
+            Motorbike.model_name,
+            Motorbike.year_from,
+            Motorbike.year_to,
+            Manufacturer.name.label("manufacturer_name"),
+            *columns,
+        )
+        .outerjoin(Manufacturer, Manufacturer.id == Motorbike.manufacturer_id)
         .outerjoin(
             MotorbikeSpec,
             and_(
@@ -481,6 +596,24 @@ def _specs_statement(motorbike_ids: Sequence[str]) -> Select[Any]:
             Motorbike.id.in_(list(motorbike_ids)),
             Motorbike.status == MotorbikeStatus.APPROVED,
         )
+    )
+
+
+def _name_parts(row: Mapping[str, Any]) -> naming_service.NameParts:
+    """Build `NameParts` from one row of `_specs_statement` or `_browse_statement`.
+
+    Both statements project the identical set of naming columns (plus the
+    manufacturer's display name, joined in as `manufacturer_name`), so one
+    helper builds the parts for either caller — no per-row query either way.
+    """
+    return naming_service.NameParts(
+        motorbike_id=row["id"],
+        manufacturer=row["manufacturer_name"],
+        buildingline=row["buildingline"],
+        model_name=row["model_name"],
+        year_from=row["year_from"],
+        year_to=row["year_to"],
+        query_name=row["query_name"],
     )
 
 

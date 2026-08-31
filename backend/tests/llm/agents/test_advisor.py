@@ -37,10 +37,12 @@ from app.llm.agents.tools import present_recommendations, retrieve_bike_knowledg
 from app.services import (
     catalogue_search_service,
     chat_service,
+    naming_service,
     product_service,
     rag_pipeline_service,
 )
 from app.services.catalogue_search_service import COMPARISON_SPEC_FIELDS, VerifiedSpecs
+from app.services.naming_service import NameParts
 from app.services.rag_pipeline_service import RagResult
 from app.services.retrieval_service import RetrievedChunk
 from tests.services.conftest import FakeAsyncSession
@@ -107,12 +109,27 @@ class _Image:
 
 
 class _Motorbike:
-    """The three attributes the tool layer reads off a catalogue entry."""
+    """The three attributes the tool layer reads off a catalogue entry, plus the
+    optional naming fields a test can set to exercise escalation (step 6.19)."""
 
-    def __init__(self, motorbike_id: str, name: str, status: MotorbikeStatus) -> None:
+    def __init__(
+        self,
+        motorbike_id: str,
+        name: str,
+        status: MotorbikeStatus,
+        *,
+        manufacturer: str | None = None,
+        model_name: str | None = None,
+        year_from: int | None = None,
+        year_to: int | None = None,
+    ) -> None:
         self.id = motorbike_id
         self.query_name = name
         self.status = status
+        self.manufacturer = manufacturer
+        self.model_name = model_name
+        self.year_from = year_from
+        self.year_to = year_to
 
 
 def _tool_call(name: str, arguments: dict[str, Any], call_id: str = "call_1") -> AIMessage:
@@ -208,13 +225,38 @@ def catalogue(monkeypatch: pytest.MonkeyPatch) -> Any:
             queries=[utterance], applied_filters={}, candidate_motorbike_ids=[], chunks=[]
         )
 
+    async def load_name_parts(session: Any, motorbike_ids: Any) -> dict[str, NameParts]:
+        found = {}
+        for motorbike_id in motorbike_ids:
+            motorbike = recorder.by_id.get(motorbike_id)
+            if motorbike is not None:
+                found[motorbike_id] = _parts(motorbike)
+        return found
+
     monkeypatch.setattr(catalogue_search_service, "find_motorbike_ids", find_motorbike_ids)
     monkeypatch.setattr(catalogue_search_service, "get_verified_specs", get_verified_specs)
     monkeypatch.setattr(catalogue_search_service, "resolve_name", resolve_name)
     monkeypatch.setattr(product_service, "get_motorbike", get_motorbike)
     monkeypatch.setattr(product_service, "list_images", list_images)
     monkeypatch.setattr(rag_pipeline_service, "retrieve", retrieve)
+    monkeypatch.setattr(naming_service, "load_name_parts", load_name_parts)
     return recorder
+
+
+def _parts(motorbike: _Motorbike) -> NameParts:
+    """`NameParts` for a stubbed `_Motorbike`. Most tests in this file leave the
+    naming fields unset, so `render_name` falls back to `query_name` verbatim;
+    the escalation test below sets them explicitly.
+    """
+    return NameParts(
+        motorbike_id=motorbike.id,
+        manufacturer=motorbike.manufacturer,
+        buildingline=None,
+        model_name=motorbike.model_name,
+        year_from=motorbike.year_from,
+        year_to=motorbike.year_to,
+        query_name=motorbike.query_name,
+    )
 
 
 def _approved(catalogue: Any, name: str, motorbike_id: str, **values: Any) -> None:
@@ -228,6 +270,7 @@ def _approved(catalogue: Any, name: str, motorbike_id: str, **values: Any) -> No
             motorbike_id=motorbike_id,
             name=name,
             values={field: values.get(field) for field in COMPARISON_SPEC_FIELDS},
+            parts=_parts(entry),
         ),
     ]
 
@@ -909,6 +952,86 @@ def test_recommendations_skip_what_the_catalogue_does_not_know_or_has_not_approv
     assert entry["result"]["skipped"] == ["Fantasy 999", BIKE_B]
     # The model is told, so it can correct itself in the same turn.
     assert "Fantasy 999" in entry["result"]["message"]
+
+
+def test_recommendation_names_render_at_the_year_range_floor(
+    fake_session: FakeAsyncSession, model: ScriptedModel, catalogue: Any
+) -> None:
+    """`present_recommendations`' pinned per-caller floor is `YEAR_RANGE` (D5).
+
+    Two presented bikes share a manufacturer and model name, so both must carry
+    their year range to stay distinguishable; a third, non-colliding bike in the
+    same batch still gets one (the floor, not an escalation, is what puts it
+    there) — and every pinned result key survives unchanged.
+    """
+    catalogue.by_name["BMW R 1250 GS 2019"] = _Motorbike(
+        BIKE_A,
+        "x",
+        MotorbikeStatus.APPROVED,
+        manufacturer="BMW",
+        model_name="R 1250 GS",
+        year_from=2019,
+        year_to=2023,
+    )
+    catalogue.by_id[BIKE_A] = catalogue.by_name["BMW R 1250 GS 2019"]
+    catalogue.specs.append(
+        VerifiedSpecs(
+            motorbike_id=BIKE_A,
+            name="ignored",
+            values=dict.fromkeys(COMPARISON_SPEC_FIELDS),
+            parts=_parts(catalogue.by_id[BIKE_A]),
+        )
+    )
+    other_id = "01J0BIKE0000000000000000CC"
+    catalogue.by_name["BMW R 1250 GS 2023"] = _Motorbike(
+        other_id,
+        "y",
+        MotorbikeStatus.APPROVED,
+        manufacturer="BMW",
+        model_name="R 1250 GS",
+        year_from=2023,
+        year_to=None,
+    )
+    catalogue.by_id[other_id] = catalogue.by_name["BMW R 1250 GS 2023"]
+    catalogue.specs.append(
+        VerifiedSpecs(
+            motorbike_id=other_id,
+            name="ignored",
+            values=dict.fromkeys(COMPARISON_SPEC_FIELDS),
+            parts=_parts(catalogue.by_id[other_id]),
+        )
+    )
+    model.answers.extend(
+        [
+            _tool_call(
+                "present_recommendations",
+                {
+                    "recommendations": [
+                        {"motorbikeName": "BMW R 1250 GS 2019", "rationale": "Fits."},
+                        {"motorbikeName": "BMW R 1250 GS 2023", "rationale": "Also fits."},
+                    ]
+                },
+            ),
+            AIMessage("Two options."),
+        ]
+    )
+    chat = _chat(fake_session)
+
+    result = _run(fake_session, chat)
+
+    names = {snapshot["motorbikeId"]: snapshot["name"] for snapshot in result.recommendations}
+    assert names[BIKE_A] == "BMW R 1250 GS (2019–2023)"
+    assert names[other_id] == "BMW R 1250 GS (from 2023)"
+    # Every pinned key of the recommendation snapshot survives, unrenamed.
+    for snapshot in result.recommendations:
+        assert set(snapshot) == {
+            "motorbikeId",
+            "name",
+            "imageUrl",
+            "rationale",
+            "matchedPreferences",
+            "keySpecs",
+        }
 
 
 def test_a_bike_recommended_twice_in_one_turn_is_one_card(

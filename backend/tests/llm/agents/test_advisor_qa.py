@@ -40,10 +40,12 @@ from app.llm.agents import advisor
 from app.services import (
     catalogue_search_service,
     chat_service,
+    naming_service,
     product_service,
     rag_pipeline_service,
 )
 from app.services.catalogue_search_service import COMPARISON_SPEC_FIELDS, VerifiedSpecs
+from app.services.naming_service import NameParts
 from app.services.rag_pipeline_service import RagResult
 from tests.services.conftest import FakeAsyncSession
 
@@ -145,12 +147,37 @@ def services(monkeypatch: pytest.MonkeyPatch) -> Any:
             queries=[utterance], applied_filters={}, candidate_motorbike_ids=[], chunks=[]
         )
 
+    async def load_name_parts(session: Any, motorbike_ids: Any) -> dict[str, NameParts]:
+        found = {}
+        for motorbike_id in motorbike_ids:
+            motorbike = recorder.by_id.get(motorbike_id)
+            if motorbike is not None:
+                found[motorbike_id] = _parts(motorbike)
+        return found
+
     monkeypatch.setattr(catalogue_search_service, "resolve_name", resolve_name)
     monkeypatch.setattr(product_service, "get_motorbike", get_motorbike)
     monkeypatch.setattr(product_service, "list_images", list_images)
     monkeypatch.setattr(catalogue_search_service, "get_verified_specs", get_verified_specs)
     monkeypatch.setattr(rag_pipeline_service, "retrieve", retrieve)
+    monkeypatch.setattr(naming_service, "load_name_parts", load_name_parts)
     return recorder
+
+
+def _parts(motorbike: _Motorbike) -> NameParts:
+    """`NameParts` for a stubbed `_Motorbike`: no structured identity, so
+    `render_name` falls back to `query_name` verbatim — this test file is not
+    about naming.
+    """
+    return NameParts(
+        motorbike_id=motorbike.id,
+        manufacturer=None,
+        buildingline=None,
+        model_name=None,
+        year_from=None,
+        year_to=None,
+        query_name=motorbike.query_name,
+    )
 
 
 def _approved(services: Any, name: str, motorbike_id: str, **values: Any) -> None:
@@ -162,6 +189,7 @@ def _approved(services: Any, name: str, motorbike_id: str, **values: Any) -> Non
             motorbike_id=motorbike_id,
             name=name,
             values={field_name: values.get(field_name) for field_name in COMPARISON_SPEC_FIELDS},
+            parts=_parts(entry),
         )
     )
 

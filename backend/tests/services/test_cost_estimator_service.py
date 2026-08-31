@@ -30,9 +30,21 @@ from app.db.models.motorbike_spec import PRICE_BANDS, SPEC_CATEGORIES
 from app.services import catalogue_search_service, cost_data, cost_estimator_service
 from app.services.catalogue_search_service import COMPARISON_SPEC_FIELDS, VerifiedSpecs
 from app.services.cost_estimator_service import CostEstimate
+from app.services.naming_service import NameParts
 
 BIKE = "01J0BIKE0000000000000000AA"
 NAME = "Honda CB500F"
+# `model_name is None` so `render_name` falls back to `query_name` verbatim —
+# this fixture is not about naming.
+_PARTS = NameParts(
+    motorbike_id=BIKE,
+    manufacturer=None,
+    buildingline=None,
+    model_name=None,
+    year_from=None,
+    year_to=None,
+    query_name=NAME,
+)
 
 # The calibration case: a mid-band 471 cm³ naked with 35 kW, ridden 8 000 km/year.
 COMMUTER = {
@@ -73,6 +85,7 @@ def _estimate(catalogue: Any, specs: dict[str, Any] | None = None, **kwargs: Any
             motorbike_id=BIKE,
             name=NAME,
             values={field: (specs or {}).get(field) for field in COMPARISON_SPEC_FIELDS},
+            parts=_PARTS,
         )
     ]
     estimate = asyncio.run(cost_estimator_service.estimate(_Session(), BIKE, **kwargs))

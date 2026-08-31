@@ -26,8 +26,9 @@ from app.llm.agents.tools import (
     UnknownBikeResult,
     resolve_references,
 )
-from app.services import catalogue_search_service
+from app.services import catalogue_search_service, naming_service
 from app.services.catalogue_search_service import COMPARISON_SPEC_FIELDS
+from app.services.naming_service import NameLevel
 
 NAME = "spec_comparison"
 
@@ -127,8 +128,17 @@ async def run(
     specs = await catalogue_search_service.get_verified_specs(
         ctx.session, [motorbike.id for motorbike in resolved.bikes]
     )
+    # The compared bikes are each other's context, floored at the year range
+    # (D5's binding per-caller table): a comparison is exactly the situation two
+    # same-named generations must be told apart in.
+    names = naming_service.render_names(
+        [entry.parts for entry in specs], min_level=NameLevel.YEAR_RANGE
+    )
     return SpecComparisonResult(
-        bikes=[ComparedBike(motorbike_id=entry.motorbike_id, name=entry.name) for entry in specs],
+        bikes=[
+            ComparedBike(motorbike_id=entry.motorbike_id, name=names[entry.motorbike_id])
+            for entry in specs
+        ],
         rows=[
             ComparisonRow(
                 field=to_camel(field),

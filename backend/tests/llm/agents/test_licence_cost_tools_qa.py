@@ -44,6 +44,7 @@ from app.services import (
     product_service,
 )
 from app.services.catalogue_search_service import COMPARISON_SPEC_FIELDS, VerifiedSpecs
+from app.services.naming_service import NameParts
 
 BIKE_A = "01J0QATOOL000000000000AA"
 BIKE_B = "01J0QATOOL000000000000BB"
@@ -58,11 +59,27 @@ class _Motorbike:
         self.status = status
 
 
+def _parts(motorbike_id: str, name: str) -> NameParts:
+    """`NameParts` with no structured identity: `render_name` falls back to
+    `query_name` verbatim — this test file is not about naming.
+    """
+    return NameParts(
+        motorbike_id=motorbike_id,
+        manufacturer=None,
+        buildingline=None,
+        model_name=None,
+        year_from=None,
+        year_to=None,
+        query_name=name,
+    )
+
+
 def _specs(motorbike_id: str, name: str, **values: Any) -> VerifiedSpecs:
     return VerifiedSpecs(
         motorbike_id=motorbike_id,
         name=name,
         values={field: values.get(field) for field in COMPARISON_SPEC_FIELDS},
+        parts=_parts(motorbike_id, name),
     )
 
 
@@ -145,8 +162,17 @@ def test_neither_new_service_module_constructs_sql_or_reaches_an_orm_model() -> 
     """`agent tool → application service → database` is not a shortcut at the
     service layer either: both services may only reach `catalogue_search_service`
     (and, for fit checks, `product_service`'s A2 constants / `cost_data`'s table).
+    Step 6.19 adds `naming_service` to the allowed set: both services render
+    their result's `name` from `entry.parts` now (`render_name`, which itself
+    performs no query — see its own module docstring), so this is still "no SQL,
+    no ORM model", just one more pure-function import.
     """
-    allowed_service_imports = {"catalogue_search_service", "product_service", "cost_data"}
+    allowed_service_imports = {
+        "catalogue_search_service",
+        "product_service",
+        "cost_data",
+        "naming_service",
+    }
     for module in (fit_check_service, cost_estimator_service):
         tree = ast.parse(Path(module.__file__).read_text())
         for node in ast.walk(tree):

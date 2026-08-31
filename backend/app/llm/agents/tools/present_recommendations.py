@@ -34,7 +34,8 @@ from app.api.schemas.images import variant_urls
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus
 from app.llm.agents.tools import ToolContext, ToolModel, ToolSpec
-from app.services import catalogue_search_service, product_service
+from app.services import catalogue_search_service, naming_service, product_service
+from app.services.naming_service import NameLevel
 
 NAME = "present_recommendations"
 
@@ -150,10 +151,18 @@ async def run(ctx: ToolContext, args: PresentRecommendationsArgs) -> PresentReco
     )
     values = {entry.motorbike_id: entry.values for entry in specs}
 
+    # The presented batch is each other's context, floored at the year range
+    # (D5's binding per-caller table) — the cards on the table together are
+    # exactly the set that must be told apart if two share a name.
+    name_parts = await naming_service.load_name_parts(
+        ctx.session, [motorbike.id for motorbike, _ in resolved]
+    )
+    names = naming_service.render_names(list(name_parts.values()), min_level=NameLevel.YEAR_RANGE)
+
     snapshots = [
         {
             "motorbikeId": motorbike.id,
-            "name": motorbike.query_name,
+            "name": names[motorbike.id],
             "imageUrl": await _card_image_url(ctx, motorbike.id),
             "rationale": item.rationale,
             "matchedPreferences": item.matched_preferences,

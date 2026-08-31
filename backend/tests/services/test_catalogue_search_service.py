@@ -261,47 +261,101 @@ def _verified(session: ScriptedSession, motorbike_ids: list[str]) -> list[Any]:
 
 
 def test_an_exact_slug_match_wins_before_any_substring_search() -> None:
-    """Resolution order: the slug is the identity, the substring is a guess."""
+    """Resolution order: the slug is the identity, everything else is a guess."""
     approved = _Motorbike(BIKE_ID, "Honda CB500F", MotorbikeStatus.APPROVED)
     session = ScriptedSession(
         [approved], [_Motorbike(OTHER_BIKE_ID, "x", MotorbikeStatus.APPROVED)]
     )
 
     assert _resolve(session, "  Honda   CB500F ") is approved
-    # One statement: the fallback was never issued.
+    # One statement: neither the type-code nor the substring leg ever ran.
     assert len(session.statements) == 1
     assert _params_at(session, 0)["slug_1"] == "honda-cb500f"
 
 
-def test_a_name_the_slug_misses_falls_through_to_an_approved_substring_match() -> None:
-    """ "CB500F" is not a slug, so step two has to find the entry that contains it."""
-    approved = _Motorbike(BIKE_ID, "Honda CB500F", MotorbikeStatus.APPROVED)
+def test_a_single_type_code_hit_wins_before_the_substring_search() -> None:
+    """A code the slug leg missed, matched exactly once, is precise enough to trust."""
+    approved = _Motorbike(BIKE_ID, "Suzuki GSR600", MotorbikeStatus.APPROVED)
     session = ScriptedSession([], [approved])
 
-    assert _resolve(session, "CB500F") is approved
+    assert _resolve(session, "wvb9") is approved
+    # Two statements: the slug leg missed, the code leg answered — the
+    # substring leg never ran.
+    assert len(session.statements) == 2
     sql = _sql_at(session, 1)
     params = _params_at(session, 1)
+    assert "motorbikes.status = ?" in sql
+    assert params["status_1"] is MotorbikeStatus.APPROVED
+    # Upper-cased and trimmed before it is matched, against the typed column…
+    assert "motorbikes.type_codes @> ?::JSONB" in sql
+    assert params["type_codes_1"] == ["WVB9"]
+    # …or, as a retrieval hint only (D6), against the unverified claim.
+    assert "motorbikes.suggestion[?] @> ?::JSONB" in sql
+    assert params["suggestion_1"] == "type_codes"
+    assert params["param_1"] == ["WVB9"]
+
+
+def test_an_ambiguous_type_code_falls_through_rather_than_guessing() -> None:
+    """Several rows claiming the same code is a question, not an answer."""
+    approved = _Motorbike(BIKE_ID, "Honda CB500F", MotorbikeStatus.APPROVED)
+    two_codes = [
+        _Motorbike(BIKE_ID, "x", MotorbikeStatus.APPROVED),
+        _Motorbike(OTHER_BIKE_ID, "y", MotorbikeStatus.APPROVED),
+    ]
+    session = ScriptedSession([], two_codes, [approved])
+
+    assert _resolve(session, "PC46") is approved
+    # All three legs ran: the ambiguous code fell through to the substring.
+    assert len(session.statements) == 3
+
+
+def test_a_type_code_with_no_hit_falls_through_to_the_substring_leg() -> None:
+    """None matching is a miss, not a guess — same fall-through as ambiguous."""
+    approved = _Motorbike(BIKE_ID, "Honda CB500F", MotorbikeStatus.APPROVED)
+    session = ScriptedSession([], [], [approved])
+
+    assert _resolve(session, "CB500F") is approved
+    assert len(session.statements) == 3
+
+
+def test_a_name_the_earlier_legs_miss_falls_through_to_an_approved_substring_match() -> None:
+    """ "CB500F" is not a slug or a code, so step three has to find the entry."""
+    approved = _Motorbike(BIKE_ID, "Honda CB500F", MotorbikeStatus.APPROVED)
+    session = ScriptedSession([], [], [approved])
+
+    assert _resolve(session, "CB500F") is approved
+    sql = _sql_at(session, 2)
+    params = _params_at(session, 2)
     assert "motorbikes.query_name ILIKE ?" in sql
+    assert "motorbikes.model_name ILIKE ?" in sql
     assert params["query_name_1"] == "%CB500F%"
+    assert params["model_name_1"] == "%CB500F%"
     # Approved only, shortest name first, one answer.
     assert "motorbikes.status = ?" in sql
     assert params["status_1"] is MotorbikeStatus.APPROVED
-    assert "ORDER BY length(motorbikes.query_name), motorbikes.query_name, motorbikes.id" in sql
+    assert (
+        "ORDER BY least(char_length(motorbikes.query_name), "
+        "coalesce(char_length(motorbikes.model_name), ?)), "
+        "motorbikes.query_name, motorbikes.id" in sql
+    )
+    assert params["coalesce_1"] == 32767
     assert "LIMIT ?" in sql
 
 
 def test_a_slug_hit_that_is_not_approved_is_not_an_answer() -> None:
     """An unreviewed entry is not showable, so resolution continues and then fails."""
-    session = ScriptedSession([_Motorbike(BIKE_ID, "Honda CB500F", MotorbikeStatus.BACKLOG)], [])
+    session = ScriptedSession(
+        [_Motorbike(BIKE_ID, "Honda CB500F", MotorbikeStatus.BACKLOG)], [], []
+    )
 
     assert _resolve(session, "Honda CB500F") is None
-    # It did try the substring search before giving up.
-    assert len(session.statements) == 2
+    # It tried the type-code and the substring legs before giving up.
+    assert len(session.statements) == 3
 
 
 def test_an_unknown_name_resolves_to_none_instead_of_raising() -> None:
     """The pinned contract: tools turn `None` into `{"unknownBike": …}`."""
-    session = ScriptedSession([], [])
+    session = ScriptedSession([], [], [])
 
     assert _resolve(session, "Bikeley 999") is None
 
@@ -316,12 +370,13 @@ def test_a_blank_name_is_answered_without_a_single_statement() -> None:
 
 def test_like_wildcards_in_a_name_are_escaped_not_honoured() -> None:
     """A `%` a customer typed must not widen the match to the whole catalogue."""
-    session = ScriptedSession([], [])
+    session = ScriptedSession([], [], [])
 
     _resolve(session, "100% naked_bike")
 
-    assert _params_at(session, 1)["query_name_1"] == "%100\\% naked\\_bike%"
-    assert "ESCAPE '\\\\'" in _sql_at(session, 1)
+    assert _params_at(session, 2)["query_name_1"] == "%100\\% naked\\_bike%"
+    assert _params_at(session, 2)["model_name_1"] == "%100\\% naked\\_bike%"
+    assert "ESCAPE '\\\\'" in _sql_at(session, 2)
 
 
 def test_the_comparable_columns_are_exactly_the_frozen_set_minus_the_long_tail() -> None:
@@ -356,6 +411,8 @@ def test_the_comparison_projection_is_one_outer_join_over_approved_entries() -> 
     assert "LEFT OUTER JOIN motorbike_specs ON motorbike_specs.motorbike_id = motorbikes.id" in sql
     assert "AND motorbike_specs.kind = ?" in sql
     assert params["kind_1"] is SpecKind.VERIFIED
+    # The naming parts' manufacturer name is joined in too (step 6.19).
+    assert "LEFT OUTER JOIN manufacturers ON manufacturers.id = motorbikes.manufacturer_id" in sql
     assert "motorbikes.status = ?" in sql
     assert params["status_1"] is MotorbikeStatus.APPROVED
     assert "motorbikes.id IN (__[POSTCOMPILE_id_1])" in sql
@@ -366,6 +423,28 @@ def test_the_comparison_projection_is_one_outer_join_over_approved_entries() -> 
         assert f"motorbike_specs.{field}" not in sql
 
 
+def _specs_row(**values: Any) -> dict[str, Any]:
+    """One `_specs_statement` row as the database mapping would hand it over.
+
+    Carries the naming columns (buildingline/model_name/year_from/year_to plus
+    the joined-in `manufacturer_name`) alongside the comparable spec fields, so
+    a `VerifiedSpecs.parts` can always be built without a `KeyError`.
+    """
+    return (
+        {
+            "id": BIKE_ID,
+            "query_name": "Honda CB500F",
+            "buildingline": None,
+            "model_name": None,
+            "year_from": None,
+            "year_to": None,
+            "manufacturer_name": None,
+        }
+        | dict.fromkeys(catalogue_search_service.COMPARISON_SPEC_FIELDS)
+        | values
+    )
+
+
 def test_the_comparison_projection_keeps_the_requested_order_and_plain_values() -> None:
     """Alignment is the caller's order; `Decimal` is unwrapped for JSON.
 
@@ -373,11 +452,14 @@ def test_the_comparison_projection_keeps_the_requested_order_and_plain_values() 
     both are the service's problem, and a missing verified row stays `None`.
     """
     rows = [
-        {"id": OTHER_BIKE_ID, "query_name": "Suzuki GSR600"}
-        | dict.fromkeys(catalogue_search_service.COMPARISON_SPEC_FIELDS),
-        {"id": BIKE_ID, "query_name": "Honda CB500F"}
-        | dict.fromkeys(catalogue_search_service.COMPARISON_SPEC_FIELDS)
-        | {"power_kw": Decimal("35.0"), "seat_height_mm": 785, "category": "naked"},
+        _specs_row(id=OTHER_BIKE_ID, query_name="Suzuki GSR600"),
+        _specs_row(
+            id=BIKE_ID,
+            query_name="Honda CB500F",
+            power_kw=Decimal("35.0"),
+            seat_height_mm=785,
+            category="naked",
+        ),
     ]
     session = ScriptedSession(rows)
 
@@ -392,6 +474,44 @@ def test_the_comparison_projection_keeps_the_requested_order_and_plain_values() 
     assert set(entries[0].values) == set(catalogue_search_service.COMPARISON_SPEC_FIELDS)
     assert entries[0].values["msrp_eur"] is None
     assert all(value is None for value in entries[1].values.values())
+    # `parts` is loaded in the same statement — no extra round trip — and the
+    # convenience `name` is `render_name(parts)` for a caller with no context.
+    assert entries[0].parts.motorbike_id == BIKE_ID
+    assert entries[0].parts.query_name == "Honda CB500F"
+
+
+def test_a_rendered_name_escalates_only_against_its_own_context() -> None:
+    """`VerifiedSpecs.parts` carries enough for a caller to build its own context.
+
+    This is the no-context convenience `name` staying short even when the
+    caller (not this projection) would have to escalate for a page of two.
+    """
+    rows = [
+        _specs_row(
+            id=BIKE_ID,
+            query_name="BMW R 1250 GS 2019",
+            model_name="R 1250 GS",
+            manufacturer_name="BMW",
+            year_from=2019,
+            year_to=2023,
+        ),
+        _specs_row(
+            id=OTHER_BIKE_ID,
+            query_name="BMW R 1250 GS 2023",
+            model_name="R 1250 GS",
+            manufacturer_name="BMW",
+            year_from=2023,
+            year_to=None,
+        ),
+    ]
+    session = ScriptedSession(rows)
+
+    entries = _verified(session, [BIKE_ID, OTHER_BIKE_ID])
+
+    # No context passed to `get_verified_specs` itself, so the convenience
+    # `name` never escalates here — that is the caller's job (D5).
+    assert entries[0].name == "BMW R 1250 GS"
+    assert entries[1].name == "BMW R 1250 GS"
 
 
 def test_no_ids_means_no_round_trip() -> None:
@@ -412,10 +532,19 @@ MANUFACTURER_ID = "01J0MANU00000000000000000A"
 
 BrowseSort = catalogue_search_service.BrowseSort
 
-# The four pinned orderings, spelled exactly as they must compile.
+# The four pinned orderings, spelled exactly as they must compile. `name` is
+# the composite brand → model → year-range (step 6.19): a customer catalogue
+# has no display column to sort on any more.
 BROWSE_ORDERINGS = {
-    BrowseSort.NAME: "ORDER BY motorbikes.query_name ASC, motorbikes.id ASC",
-    BrowseSort.NAME_DESC: "ORDER BY motorbikes.query_name DESC, motorbikes.id ASC",
+    BrowseSort.NAME: (
+        "ORDER BY manufacturers.name ASC NULLS LAST, "
+        "motorbikes.model_name ASC NULLS LAST, "
+        "motorbikes.year_from ASC NULLS LAST, motorbikes.id ASC"
+    ),
+    BrowseSort.NAME_DESC: (
+        "ORDER BY manufacturers.name DESC NULLS LAST, "
+        "motorbikes.model_name DESC NULLS LAST, motorbikes.id ASC"
+    ),
     BrowseSort.MSRP_EUR: (
         "ORDER BY motorbike_specs.msrp_eur ASC NULLS LAST, "
         "motorbikes.query_name ASC, motorbikes.id ASC"
@@ -471,9 +600,23 @@ def _browse(
 
 
 def _browse_row(**values: Any) -> dict[str, Any]:
-    """One page row as the database mapping would hand it over."""
+    """One page row as the database mapping would hand it over.
+
+    Carries the naming columns (buildingline/model_name/year_from/year_to plus
+    the joined-in `manufacturer_name`) alongside the summary spec fields, so a
+    `BrowseRow.parts` can always be built without a `KeyError`.
+    """
     return (
-        {"id": BIKE_ID, "query_name": "Honda CB500F", "manufacturer_id": MANUFACTURER_ID}
+        {
+            "id": BIKE_ID,
+            "query_name": "Honda CB500F",
+            "manufacturer_id": MANUFACTURER_ID,
+            "buildingline": None,
+            "model_name": None,
+            "year_from": None,
+            "year_to": None,
+            "manufacturer_name": None,
+        }
         | dict.fromkeys(catalogue_search_service.SUMMARY_SPEC_FIELDS)
         | values
     )
@@ -526,6 +669,12 @@ def test_browsing_outer_joins_the_verified_specification() -> None:
         assert (
             "LEFT OUTER JOIN motorbike_specs ON motorbike_specs.motorbike_id = motorbikes.id "
             "AND motorbike_specs.kind = ?" in sql
+        )
+        # Both browse statements share the manufacturer join too (step 6.19) —
+        # the count is unaffected, since the FK is to-one and cannot multiply
+        # a row.
+        assert (
+            "LEFT OUTER JOIN manufacturers ON manufacturers.id = motorbikes.manufacturer_id" in sql
         )
         assert "motorbikes.status = ?" in sql
         params = _params_at(session, index)
@@ -603,7 +752,11 @@ def test_the_page_projects_identity_plus_the_summary_columns_only() -> None:
     _browse(session)
     sql = _sql_at(session, 1)
 
-    assert "SELECT motorbikes.id, motorbikes.query_name, motorbikes.manufacturer_id" in sql
+    assert (
+        "SELECT motorbikes.id, motorbikes.query_name, motorbikes.manufacturer_id, "
+        "motorbikes.buildingline, motorbikes.model_name, motorbikes.year_from, "
+        "motorbikes.year_to, manufacturers.name AS manufacturer_name" in sql
+    )
     for field in catalogue_search_service.SUMMARY_SPEC_FIELDS:
         assert f"motorbike_specs.{field}" in sql
     for field in set(catalogue_search_service.COMPARISON_SPEC_FIELDS) - set(
@@ -630,6 +783,9 @@ def test_a_browse_row_carries_every_summary_key_with_plain_values() -> None:
     assert isinstance(rows[0].values["power_kw"], float)
     assert rows[0].values["msrp_eur"] == 6800.0
     assert rows[0].values["seat_height_mm"] is None
+    # `parts` is loaded in the same statement — no extra round trip per row.
+    assert rows[0].parts.motorbike_id == BIKE_ID
+    assert rows[0].parts.query_name == "Honda CB500F"
 
 
 def test_a_model_without_a_verified_revision_is_still_a_browse_row() -> None:

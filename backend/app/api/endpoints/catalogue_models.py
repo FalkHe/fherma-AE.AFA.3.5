@@ -59,6 +59,7 @@ from app.services import (
     catalogue_search_service,
     document_service,
     manufacturer_service,
+    naming_service,
     product_service,
 )
 from app.services.catalogue_search_service import (
@@ -66,6 +67,7 @@ from app.services.catalogue_search_service import (
     BrowseRow,
     BrowseSort,
 )
+from app.services.naming_service import NameLevel
 
 router = APIRouter(
     prefix="/catalogue-models",
@@ -134,6 +136,7 @@ def _image_url(motorbike_id: str, images: Mapping[str, MotorbikeImage]) -> str |
 
 def _summary_resource(
     row: BrowseRow,
+    name: str,
     manufacturers: Mapping[str, Manufacturer],
     images: Mapping[str, MotorbikeImage],
 ) -> CatalogueModelSummaryResource:
@@ -141,12 +144,15 @@ def _summary_resource(
 
     The summary values are read by name rather than splatted, so a change to
     `SUMMARY_SPEC_FIELDS` fails here instead of quietly dropping a card line.
+    `name` is rendered by the caller against the whole page as context (D5's
+    binding table) — `row.name` alone would be the no-context convenience, which
+    is not what a browse page needs.
     """
     values = row.values
     return CatalogueModelSummaryResource(
         id=row.motorbike_id,
         attributes=CatalogueModelSummaryAttributes(
-            name=row.name,
+            name=name,
             manufacturer=_manufacturer_name(row.manufacturer_id, manufacturers),
             category=values["category"],
             engine_cc=values["engine_cc"],
@@ -355,9 +361,14 @@ async def list_catalogue_models(
     images = await product_service.newest_approved_images(
         session, [row.motorbike_id for row in rows]
     )
+    # The page is its own context (D5's binding table): a name escalates to its
+    # year range only when two rows *on this page* would otherwise render alike.
+    names = naming_service.render_names([row.parts for row in rows], min_level=NameLevel.MODEL)
 
     return CatalogueModelListDocument(
-        data=[_summary_resource(row, manufacturers, images) for row in rows],
+        data=[
+            _summary_resource(row, names[row.motorbike_id], manufacturers, images) for row in rows
+        ],
         meta=jsonapi.Meta(total_count=total),
     )
 
@@ -385,11 +396,24 @@ async def get_catalogue_model(
         session, motorbike_id=motorbike.id, statuses=[ImageStatus.APPROVED]
     )
 
+    # An approved model always has exactly one `VerifiedSpecs` entry (the outer
+    # join keeps a row even with no verified revision), so its `parts` is
+    # already loaded — no second query for the name in the normal case. `()`
+    # context, `YEAR_RANGE` floor: the pinned detail-page level (D5's binding
+    # table). The `load_name_parts` fallback mirrors `_specs`' own defensive
+    # `if specs else` — it should be unreachable for an approved id, but an
+    # empty `specs` must still render a name, not raise.
+    if specs:
+        name = naming_service.render_name(specs[0].parts, min_level=NameLevel.YEAR_RANGE)
+    else:
+        parts = await naming_service.load_name_parts(session, [motorbike.id])
+        name = naming_service.render_name(parts[motorbike.id], min_level=NameLevel.YEAR_RANGE)
+
     return CatalogueModelDocument(
         data=CatalogueModelResource(
             id=motorbike.id,
             attributes=CatalogueModelAttributes(
-                name=motorbike.query_name,
+                name=name,
                 manufacturer=_manufacturer_name(motorbike.manufacturer_id, manufacturers),
                 specs=_specs(specs[0].values if specs else None),
                 article=_article(documents),

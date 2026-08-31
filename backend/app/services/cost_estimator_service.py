@@ -31,8 +31,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services import catalogue_search_service, cost_data
+from app.services import catalogue_search_service, cost_data, naming_service
 from app.services.cost_data import COEFFICIENTS_VERSION, CURRENCY, DEFAULT_ANNUAL_KM
+from app.services.naming_service import NameLevel
 
 # The line-item labels, verbatim as the chat UI renders them (server-composed
 # English, the same i18n exemption as operation messages). "/year" versus
@@ -118,9 +119,13 @@ async def estimate(
     _add_usage(parts, entry.values, annual_km)
     _add_closing_notes(parts, annual_km)
 
+    # `YEAR_RANGE` is the pinned floor for a customer-visible single-bike answer
+    # (docs/roadmap/model-naming-data-model.md §5): no context set here, since
+    # an estimate is always about exactly one model.
+    name = naming_service.render_name(entry.parts, min_level=NameLevel.YEAR_RANGE)
     return CostEstimate(
         motorbike_id=entry.motorbike_id,
-        name=entry.name,
+        name=name,
         currency=CURRENCY,
         line_items=parts.lines,
         total=sum(line.amount for line in parts.lines),
