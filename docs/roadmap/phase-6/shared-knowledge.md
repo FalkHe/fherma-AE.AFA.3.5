@@ -705,3 +705,38 @@ contract and does not appear here is not finished.
   routed through an exhaustive `switch` (`translateIdentityErrorKey`,
   `defaultFieldErrorMessage` in `ModelIdentityPanel.tsx`) that calls `t()` with
   a literal at every branch, never `t(someStringVariable)` directly.
+
+### Step 6.12
+
+- Frozen signature (6.15/6.18/6.20 call this exactly): `async def
+  assign_identity(session, motorbike, *, manufacturer_id: str | None,
+  buildingline: str | None, model_name: str | None, year_from: int | None,
+  year_to: int | None, type_codes: Sequence[str], variants:
+  Sequence[Mapping[str, Any]]) -> Motorbike` in `product_service.py`. Full
+  replace of all seven fields; slug collision check + `DuplicateModelError`
+  run **before** any attribute is written; an incomplete identity
+  (`manufacturer_id`/`model_name`/`year_from` not all set) leaves
+  `motorbike.slug` untouched. `manufacturer_id` is resolved with a direct
+  `select(Manufacturer)`, not `manufacturer_service` — importing that module
+  at `product_service` top level is circular (`manufacturer_service` imports
+  `product_service.slugify`).
+- `identity_validation.normalize_type_codes`/`normalize_variants` run inside
+  `assign_identity` itself, which only `logger.warning`s a dropped entry —
+  **callers wanting the warnings on their own run (6.15) validate first and
+  pass the already-clean `kept` lists**, since nothing surfaces them to the
+  caller. `product_service.IncompleteIdentityError` (`.missing_fields:
+  list[str]`) is raised by `transition(..., APPROVED)` before
+  `LEGAL_TRANSITIONS`'s side effects, mapped to 422 code
+  `"incomplete-identity"` in `app/api/endpoints/products.py` beside
+  `invalid-transition`. `app catalogue set-identity <slug> --manufacturer
+  NAME --model-name NAME --year-from Y [--year-to Y] [--buildingline B]
+  [--type-code C ...] [--variants-json JSON]` is the first caller.
+- **Disclosed deviation, out of the step's file list:** `app/cli/seed.py`'s
+  `--auto-approve` path now catches `IncompleteIdentityError` around its
+  `transition(..., APPROVED)` call and reports that model `"failed"`
+  (report-and-continue) instead of crashing the whole run — today's real
+  ingestion (pre-6.15) never fills identity, so every auto-approve attempt
+  hits the new guard. Pre-existing tests that approved a no-identity row
+  directly were also updated to set `manufacturer_id`/`model_name`/`year_from`
+  first (`_give_identity` helpers in `tests/api/test_products_qa.py` and
+  `tests/services/test_product_service.py`).

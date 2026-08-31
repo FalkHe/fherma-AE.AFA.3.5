@@ -15,6 +15,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.db.models.manufacturer import Manufacturer
+from app.db.models.motorbike import Motorbike
 from app.db.models.user import UserRole
 from app.db.session import get_db_session
 from tests.services.conftest import FakeAsyncSession
@@ -77,6 +79,21 @@ def _patch(client: TestClient, product_id: str, attributes: dict):
         json={"data": {"type": "products", "attributes": attributes}},
         headers=_csrf(client),
     )
+
+
+def _give_identity(fake_session: FakeAsyncSession, product_id: str) -> None:
+    """Fill `manufacturer_id`/`model_name`/`year_from` directly (step 6.12's D4 guard).
+
+    Bypasses `assign_identity` on purpose: these tests exercise the status
+    workflow, not identity assignment, and there is no PATCH `identity` block
+    to drive this through yet (that is step 6.20's).
+    """
+    manufacturer = Manufacturer(name="Suzuki", slug="suzuki")
+    fake_session.add(manufacturer)
+    motorbike = fake_session.store(Motorbike)[product_id]
+    motorbike.manufacturer_id = manufacturer.id
+    motorbike.model_name = "GSR 600"
+    motorbike.year_from = 2011
 
 
 def _assert_clean_error_body(response) -> None:
@@ -161,13 +178,14 @@ def test_patch_rejects_snake_case_verified_spec_too(admin_client: TestClient) ->
 
 
 def test_draft_spec_patch_never_touches_an_already_promoted_verified_spec(
-    admin_client: TestClient,
+    admin_client: TestClient, fake_session: FakeAsyncSession
 ) -> None:
     created = _create(admin_client).json()["data"]
     product_id = created["id"]
 
     assert _patch(admin_client, product_id, {"draftSpec": {"engineCc": 599}}).status_code == 200
     assert _patch(admin_client, product_id, {"status": "in_review"}).status_code == 200
+    _give_identity(fake_session, product_id)
     approved = _patch(admin_client, product_id, {"status": "approved"}).json()["data"]
     assert approved["attributes"]["verifiedSpec"]["engineCc"] == 599
 
@@ -211,11 +229,14 @@ def test_patch_illegal_transition_in_review_to_backlog(admin_client: TestClient)
     assert stored["data"]["attributes"]["status"] == "in_review"
 
 
-def test_patch_illegal_transition_approved_has_no_legal_moves(admin_client: TestClient) -> None:
+def test_patch_illegal_transition_approved_has_no_legal_moves(
+    admin_client: TestClient, fake_session: FakeAsyncSession
+) -> None:
     created = _create(admin_client).json()["data"]
     product_id = created["id"]
-    for target in ("in_review", "approved"):
-        assert _patch(admin_client, product_id, {"status": target}).status_code == 200
+    assert _patch(admin_client, product_id, {"status": "in_review"}).status_code == 200
+    _give_identity(fake_session, product_id)
+    assert _patch(admin_client, product_id, {"status": "approved"}).status_code == 200
 
     response = _patch(admin_client, product_id, {"status": "rejected"})
 

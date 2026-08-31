@@ -105,6 +105,21 @@ async def _stub_start_ingestion_success(session: Any, motorbike: Any) -> Any:
     return await operation_service.succeed(session, operation)
 
 
+async def _stub_start_ingestion_success_with_identity(session: Any, motorbike: Any) -> Any:
+    """`_stub_start_ingestion_success`, plus a filled identity block.
+
+    Sets the three D4-guarded fields directly (bypassing `assign_identity` on
+    purpose — this is test setup standing in for a future post-6.15 extraction
+    run, not a production write path), so the `--auto-approve` happy path stays
+    testable even though today's real ingestion does not fill identity yet.
+    """
+    operation = await _stub_start_ingestion_success(session, motorbike)
+    motorbike.manufacturer_id = "01SEEDMANUFACTUREREXAMPL0"
+    motorbike.model_name = motorbike.query_name
+    motorbike.year_from = 2020
+    return operation
+
+
 def _stub_start_ingestion_failure(error: str) -> Any:
     """Build a stand-in for a worker run that fails with `error`."""
 
@@ -213,7 +228,9 @@ def test_one_failure_and_one_success_exits_zero(
 def test_auto_approve_calls_the_transition_service_on_success(
     fake_session: FakeAsyncSession, seed_list: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(product_service, "start_ingestion", _stub_start_ingestion_success)
+    monkeypatch.setattr(
+        product_service, "start_ingestion", _stub_start_ingestion_success_with_identity
+    )
 
     result = runner.invoke(cli, ["seed", "demo", "--auto-approve"])
 
@@ -225,6 +242,29 @@ def test_auto_approve_calls_the_transition_service_on_success(
         motorbike.query_name: motorbike.status for motorbike in fake_session.rows(Motorbike)
     }
     assert statuses == dict.fromkeys(seed_list, MotorbikeStatus.APPROVED)
+
+
+def test_auto_approve_reports_an_incomplete_identity_as_a_failure(
+    fake_session: FakeAsyncSession, seed_list: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D4 (step 6.12): a successful ingestion with no identity yet cannot be
+    auto-approved — `transition` raises `IncompleteIdentityError`, and the
+    command reports it the same way it reports an ingestion failure (report-
+    and-continue), rather than crashing the run.
+    """
+    monkeypatch.setattr(product_service, "start_ingestion", _stub_start_ingestion_success)
+
+    result = runner.invoke(cli, ["seed", "demo", "--auto-approve"])
+
+    assert result.exit_code == 1, result.output
+    for name in seed_list:
+        assert f"{name}: failed (" in result.stdout
+        assert "incomplete" in result.stdout
+    assert "0 seeded, 0 approved, 0 skipped, 2 failed." in result.stdout
+    statuses = {
+        motorbike.query_name: motorbike.status for motorbike in fake_session.rows(Motorbike)
+    }
+    assert statuses == dict.fromkeys(seed_list, MotorbikeStatus.IN_REVIEW)
 
 
 def test_auto_approve_is_not_applied_to_a_failed_model(

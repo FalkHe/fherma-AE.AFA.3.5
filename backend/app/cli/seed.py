@@ -17,7 +17,11 @@ created — via an explicit, awaited `session.refresh` (never an expired-
 attribute implicit reload) — until it reaches a terminal status or a
 per-model timeout elapses. With `--auto-approve` and a `succeeded` run, it
 then calls `product_service.transition(in_review -> approved)`, the exact
-service every other approval path uses — never a direct status write.
+service every other approval path uses — never a direct status write. Since
+step 6.12, that transition also enforces D4 (a complete identity is required
+to approve); until extraction (6.15) fills it in, an auto-approve attempt is
+reported as `failed`, same as an ingestion failure, rather than crashing the
+run.
 
 A model can flake (search quality, fetch timeouts, a slow LLM call): one
 failure is reported and the run continues to the next name (report-and-
@@ -147,7 +151,14 @@ async def _seed_one(session: AsyncSession, name: str, auto_approve: bool) -> _Se
     # `ingesting` status here would raise `InvalidTransitionError` instead of
     # approving.
     await session.refresh(motorbike)
-    await product_service.transition(session, motorbike, MotorbikeStatus.APPROVED)
+    try:
+        await product_service.transition(session, motorbike, MotorbikeStatus.APPROVED)
+    except product_service.IncompleteIdentityError as error:
+        # D4 (step 6.12): approval now requires manufacturer/model/year, which
+        # extraction only starts filling in step 6.15. Report-and-continue,
+        # same as an ingestion failure, rather than crashing the whole run.
+        typer.echo(f"{name}: failed ({error})")
+        return _SeedResult(name, "failed", str(error))
     typer.echo(f"{name}: approved")
     return _SeedResult(name, "approved")
 

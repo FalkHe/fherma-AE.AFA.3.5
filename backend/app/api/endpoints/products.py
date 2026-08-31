@@ -263,6 +263,12 @@ async def update_product(
                 code="invalid-transition",
                 detail=str(error),
             ) from error
+        except product_service.IncompleteIdentityError as error:
+            raise jsonapi.JsonApiError(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                code="incomplete-identity",
+                detail=str(error),
+            ) from error
 
     # `motorbikes.updated_at` has a server-side `onupdate`, so SQLAlchemy
     # expires the attribute when the row is flushed. Reading it back while

@@ -178,3 +178,117 @@ def test_render_name_of_an_unknown_id_exits_one(fake_session: FakeAsyncSession) 
     assert result.exit_code == 1
     assert "01UNKNOWNUNKNOWNUNKNOWN" in result.stderr
     assert result.stdout == ""
+
+
+# --- `app catalogue set-identity` (step 6.12) -------------------------------
+
+
+def test_set_identity_happy_path_recomputes_the_canonical_slug(
+    fake_session: FakeAsyncSession, motorbike: Motorbike
+) -> None:
+    result = runner.invoke(
+        cli,
+        [
+            "catalogue",
+            "set-identity",
+            SLUG,
+            "--manufacturer",
+            "BMW",
+            "--model-name",
+            "R 1250 GS",
+            "--year-from",
+            "2019",
+            "--year-to",
+            "2023",
+            "--buildingline",
+            "GS",
+            "--type-code",
+            "K50",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "bmw/r-1250-gs/2019-2023" in result.stdout
+    assert motorbike.slug == "bmw/r-1250-gs/2019-2023"
+    assert motorbike.model_name == "R 1250 GS"
+    assert motorbike.year_from == 2019
+    assert motorbike.year_to == 2023
+    assert motorbike.buildingline == "GS"
+    assert motorbike.type_codes == ["K50"]
+    manufacturer = fake_session.rows(Manufacturer)[0]
+    assert manufacturer.name == "BMW"
+    assert motorbike.manufacturer_id == manufacturer.id
+
+
+def test_set_identity_an_unknown_slug_exits_one_without_creating_anything(
+    fake_session: FakeAsyncSession,
+) -> None:
+    result = runner.invoke(
+        cli,
+        [
+            "catalogue",
+            "set-identity",
+            "ghost-bike",
+            "--manufacturer",
+            "BMW",
+            "--model-name",
+            "R 1250 GS",
+            "--year-from",
+            "2019",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "ghost-bike" in result.stderr
+    assert result.stdout == ""
+    assert fake_session.rows(Manufacturer) == []
+
+
+def test_set_identity_bad_variants_json_exits_one(
+    fake_session: FakeAsyncSession, motorbike: Motorbike
+) -> None:
+    result = runner.invoke(
+        cli,
+        [
+            "catalogue",
+            "set-identity",
+            SLUG,
+            "--manufacturer",
+            "BMW",
+            "--model-name",
+            "R 1250 GS",
+            "--year-from",
+            "2019",
+            "--variants-json",
+            "{not json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert motorbike.model_name is None
+    assert fake_session.rows(Manufacturer) == []
+
+
+def test_set_identity_duplicate_slug_exits_one(fake_session: FakeAsyncSession) -> None:
+    first = asyncio.run(product_service.create_backlog(fake_session, "BMW R 1250 GS"))
+    other = asyncio.run(product_service.create_backlog(fake_session, "R 1250 GS import"))
+    args = [
+        "--manufacturer",
+        "BMW",
+        "--model-name",
+        "R 1250 GS",
+        "--year-from",
+        "2019",
+        "--year-to",
+        "2023",
+    ]
+    first_result = runner.invoke(cli, ["catalogue", "set-identity", first.slug, *args])
+    assert first_result.exit_code == 0, first_result.output
+
+    result = runner.invoke(cli, ["catalogue", "set-identity", other.slug, *args])
+
+    assert result.exit_code == 1
+    assert "bmw/r-1250-gs/2019-2023" in result.stderr
+    assert other.model_name is None
+    assert other.slug != first.slug

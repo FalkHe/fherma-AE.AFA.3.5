@@ -22,6 +22,7 @@ documented there. That event is what flips a backlog chip in a browser without
 a reload, so a new write path that changes a row must announce it too.
 """
 
+import logging
 import re
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
@@ -30,11 +31,14 @@ from typing import Any
 from sqlalchemy import Select, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.models.manufacturer import Manufacturer
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus, MotorbikeImage
 from app.db.models.motorbike_spec import SPEC_FIELDS, MotorbikeSpec, SpecKind
 from app.db.models.operation import Operation
-from app.services import operation_service
+from app.services import identity_validation, operation_service
+
+logger = logging.getLogger(__name__)
 
 # `operations.type` of an ingestion run — the admin backlog reads its progress
 # cells from these rows.
@@ -93,6 +97,20 @@ class InvalidImageTransitionError(Exception):
         )
         self.current = current
         self.requested = requested
+
+
+class IncompleteIdentityError(Exception):
+    """Raised when `approved` is requested on a row with no complete identity (D4).
+
+    Carries the missing field names in its message, e.g. `"manufacturer_id,
+    year_from"`.
+    """
+
+    def __init__(self, missing_fields: Sequence[str]) -> None:
+        super().__init__(
+            "Cannot approve: identity is incomplete, missing " + ", ".join(missing_fields) + "."
+        )
+        self.missing_fields = list(missing_fields)
 
 
 def slugify(name: str) -> str:
@@ -303,9 +321,27 @@ async def transition(
 
     Raises:
         InvalidTransitionError: the change is not in `LEGAL_TRANSITIONS`.
+        IncompleteIdentityError: `new_status` is `approved` and `manufacturer_id`,
+            `model_name` or `year_from` is NULL (D4). Raised before the matrix's
+            side effects run, so an `in_review` row is the only one that can ever
+            see it — `LEGAL_TRANSITIONS` rejects every other starting status
+            first.
     """
     if new_status not in LEGAL_TRANSITIONS[motorbike.status]:
         raise InvalidTransitionError(motorbike.status, new_status)
+
+    if new_status is MotorbikeStatus.APPROVED:
+        missing = [
+            field
+            for field, value in (
+                ("manufacturer_id", motorbike.manufacturer_id),
+                ("model_name", motorbike.model_name),
+                ("year_from", motorbike.year_from),
+            )
+            if value is None
+        ]
+        if missing:
+            raise IncompleteIdentityError(missing)
 
     motorbike_id = motorbike.id
     motorbike.status = new_status
@@ -386,6 +422,80 @@ async def assign_manufacturer(
     row.
     """
     motorbike.manufacturer_id = manufacturer_id
+    await session.commit()
+    await _announce(session, motorbike.id)
+    return motorbike
+
+
+async def assign_identity(
+    session: AsyncSession,
+    motorbike: Motorbike,
+    *,
+    manufacturer_id: str | None,
+    buildingline: str | None,
+    model_name: str | None,
+    year_from: int | None,
+    year_to: int | None,
+    type_codes: Sequence[str],
+    variants: Sequence[Mapping[str, Any]],
+) -> Motorbike:
+    """Write the whole identity block of `motorbike` and recompute its slug (D2).
+
+    The **only** writer of `manufacturer_id`, `buildingline`, `model_name`,
+    `year_from`, `year_to`, `type_codes` and `variants`: every field is a
+    full-object replace, never a merge — a caller that wants to keep a stored
+    value passes it back in (extraction's merge-before-call rule lives in
+    `spec_extraction_service`, per D2b, not here). `buildingline` passes
+    through `normalise_buildingline` first; `type_codes` and `variants` are
+    re-validated through `identity_validation`, and each dropped entry becomes
+    one `logger.warning` — a caller that needs those warnings on its own run
+    (extraction, 6.15) validates first and passes the already-clean lists, so
+    nothing is dropped silently on its side.
+
+    Slug (D3): when `manufacturer_id`, `model_name` and `year_from` are all
+    set, the slug becomes the canonical
+    `{manufacturer.slug}/{slugify(model_name)}/{year_from}-{year_to or ''}`.
+    With an incomplete identity the row's current slug is left untouched (a
+    backlog row keeps `slugify(query_name)`). A collision with another row's
+    slug is checked, and `DuplicateModelError` raised, **before** anything is
+    written.
+
+    Raises:
+        ValueError: `manufacturer_id` is set but does not name a known
+            manufacturer.
+        DuplicateModelError: the recomputed slug collides with another row's.
+    """
+    normalised_buildingline = await normalise_buildingline(session, manufacturer_id, buildingline)
+
+    kept_type_codes, type_code_warnings = identity_validation.normalize_type_codes(type_codes)
+    kept_variants, variant_warnings = identity_validation.normalize_variants(variants)
+    for warning in (*type_code_warnings, *variant_warnings):
+        logger.warning("assign_identity(%s): %s", motorbike.id, warning)
+
+    new_slug = motorbike.slug
+    if manufacturer_id is not None and model_name is not None and year_from is not None:
+        result = await session.execute(
+            select(Manufacturer).where(Manufacturer.id == manufacturer_id)
+        )
+        manufacturer = result.scalar_one_or_none()
+        if manufacturer is None:
+            raise ValueError(f"Unknown manufacturer id {manufacturer_id!r}.")
+        new_slug = f"{manufacturer.slug}/{slugify(model_name)}/{year_from}-{year_to or ''}"
+
+    if new_slug != motorbike.slug:
+        colliding = await get_by_slug(session, new_slug)
+        if colliding is not None and colliding.id != motorbike.id:
+            raise DuplicateModelError(new_slug)
+
+    motorbike.manufacturer_id = manufacturer_id
+    motorbike.buildingline = normalised_buildingline
+    motorbike.model_name = model_name
+    motorbike.year_from = year_from
+    motorbike.year_to = year_to
+    motorbike.type_codes = kept_type_codes
+    motorbike.variants = kept_variants
+    motorbike.slug = new_slug
+
     await session.commit()
     await _announce(session, motorbike.id)
     return motorbike

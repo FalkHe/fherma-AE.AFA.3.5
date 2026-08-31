@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 from sqlalchemy.dialects import postgresql
 
+from app.db.models.manufacturer import Manufacturer
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus, MotorbikeImage
 from app.db.models.motorbike_spec import MotorbikeSpec, SpecKind
@@ -22,6 +23,7 @@ from app.services import product_service
 from app.services.product_service import (
     LEGAL_TRANSITIONS,
     DuplicateModelError,
+    IncompleteIdentityError,
     InvalidTransitionError,
 )
 from tests.services.conftest import FakeAsyncSession
@@ -43,12 +45,35 @@ def _backlog(session: FakeAsyncSession, name: str = "Suzuki GSR 600") -> Motorbi
     return asyncio.run(product_service.create_backlog(session, name))
 
 
+def _give_identity(motorbike: Motorbike) -> Motorbike:
+    """Fill the three D4-guarded fields directly, bypassing `assign_identity`.
+
+    These tests exercise `transition`'s status workflow, not identity
+    assignment (that is `test_assign_identity_*` below), so a plain attribute
+    write is enough to satisfy the `approved` guard.
+    """
+    motorbike.manufacturer_id = "01MANUFACTUREREXAMPLEPLC0"
+    motorbike.model_name = "GSR 600"
+    motorbike.year_from = 2011
+    return motorbike
+
+
 def _in_status(
-    session: FakeAsyncSession, status: MotorbikeStatus, name: str = "Suzuki GSR 600"
+    session: FakeAsyncSession,
+    status: MotorbikeStatus,
+    name: str = "Suzuki GSR 600",
+    *,
+    with_identity: bool = False,
 ) -> Motorbike:
-    """Return a stored motorbike parked in `status`, bypassing the matrix."""
+    """Return a stored motorbike parked in `status`, bypassing the matrix.
+
+    `with_identity` fills the D4-guarded fields too, for tests that approve
+    the row and need the guard to pass.
+    """
     motorbike = _backlog(session, name)
     motorbike.status = status
+    if with_identity:
+        _give_identity(motorbike)
     return motorbike
 
 
@@ -110,7 +135,9 @@ def test_create_backlog_duplicate_slug_raises(fake_session: FakeAsyncSession) ->
 def test_transition_allows_every_legal_pair(
     fake_session: FakeAsyncSession, current: MotorbikeStatus, requested: MotorbikeStatus
 ) -> None:
-    motorbike = _in_status(fake_session, current)
+    # `with_identity=True` unconditionally: harmless for every other pair, and
+    # required for `in_review -> approved` to clear the D4 guard.
+    motorbike = _in_status(fake_session, current, with_identity=True)
 
     updated = asyncio.run(product_service.transition(fake_session, motorbike, requested))
 
@@ -136,7 +163,7 @@ def test_transition_rejects_every_illegal_pair(
 def test_approval_promotes_draft_and_flips_pending_images_in_one_commit(
     fake_session: FakeAsyncSession,
 ) -> None:
-    motorbike = _in_status(fake_session, MotorbikeStatus.IN_REVIEW)
+    motorbike = _in_status(fake_session, MotorbikeStatus.IN_REVIEW, with_identity=True)
     asyncio.run(
         product_service.upsert_draft_spec(
             fake_session,
@@ -177,7 +204,7 @@ def test_approval_promotes_draft_and_flips_pending_images_in_one_commit(
 def test_approval_without_draft_spec_writes_no_verified_row(
     fake_session: FakeAsyncSession,
 ) -> None:
-    motorbike = _in_status(fake_session, MotorbikeStatus.IN_REVIEW)
+    motorbike = _in_status(fake_session, MotorbikeStatus.IN_REVIEW, with_identity=True)
     pending = _image(fake_session, motorbike.id, ImageStatus.PENDING)
 
     asyncio.run(product_service.transition(fake_session, motorbike, MotorbikeStatus.APPROVED))
@@ -187,7 +214,7 @@ def test_approval_without_draft_spec_writes_no_verified_row(
 
 
 def test_approval_replaces_a_previous_verified_row(fake_session: FakeAsyncSession) -> None:
-    motorbike = _in_status(fake_session, MotorbikeStatus.IN_REVIEW)
+    motorbike = _in_status(fake_session, MotorbikeStatus.IN_REVIEW, with_identity=True)
     asyncio.run(product_service.upsert_draft_spec(fake_session, motorbike.id, {"engine_cc": 599}))
     asyncio.run(product_service.transition(fake_session, motorbike, MotorbikeStatus.APPROVED))
     first = _spec_of(fake_session, motorbike.id, SpecKind.VERIFIED)
@@ -520,3 +547,242 @@ def test_normalise_buildingline_no_writes(fake_session: FakeAsyncSession) -> Non
     asyncio.run(product_service.normalise_buildingline(fake_session, _MANUFACTURER_ID, "GS"))
 
     assert fake_session.commit_count == 0
+
+
+# --- `assign_identity` (step 6.12) ---------------------------------------------
+
+
+def _manufacturer(session: FakeAsyncSession, name: str = "BMW", slug: str = "bmw") -> Manufacturer:
+    manufacturer = Manufacturer(name=name, slug=slug)
+    session.add(manufacturer)
+    return manufacturer
+
+
+def test_assign_identity_full_replace_and_canonical_slug(fake_session: FakeAsyncSession) -> None:
+    motorbike = _backlog(fake_session, "BMW R 1250 GS import")
+    manufacturer = _manufacturer(fake_session)
+
+    updated = asyncio.run(
+        product_service.assign_identity(
+            fake_session,
+            motorbike,
+            manufacturer_id=manufacturer.id,
+            buildingline="GS",
+            model_name="R 1250 GS",
+            year_from=2019,
+            year_to=2023,
+            type_codes=["k50"],
+            variants=[],
+        )
+    )
+
+    assert updated.manufacturer_id == manufacturer.id
+    assert updated.buildingline == "GS"
+    assert updated.model_name == "R 1250 GS"
+    assert updated.year_from == 2019
+    assert updated.year_to == 2023
+    assert updated.type_codes == ["K50"]
+    assert updated.variants == []
+    assert updated.slug == "bmw/r-1250-gs/2019-2023"
+
+
+def test_assign_identity_open_ended_year_range_slug(fake_session: FakeAsyncSession) -> None:
+    motorbike = _backlog(fake_session, "Yamaha MT-07 import")
+    manufacturer = _manufacturer(fake_session, "Yamaha", "yamaha")
+
+    updated = asyncio.run(
+        product_service.assign_identity(
+            fake_session,
+            motorbike,
+            manufacturer_id=manufacturer.id,
+            buildingline=None,
+            model_name="MT-07",
+            year_from=2025,
+            year_to=None,
+            type_codes=[],
+            variants=[],
+        )
+    )
+
+    assert updated.slug == "yamaha/mt-07/2025-"
+
+
+def test_assign_identity_incomplete_leaves_the_existing_slug_untouched(
+    fake_session: FakeAsyncSession,
+) -> None:
+    motorbike = _backlog(fake_session, "BMW R 1250 GS import")
+    provisional_slug = motorbike.slug
+    manufacturer = _manufacturer(fake_session)
+
+    updated = asyncio.run(
+        product_service.assign_identity(
+            fake_session,
+            motorbike,
+            manufacturer_id=manufacturer.id,
+            buildingline="GS",
+            model_name=None,  # missing model_name keeps the identity incomplete
+            year_from=None,
+            year_to=None,
+            type_codes=[],
+            variants=[],
+        )
+    )
+
+    assert updated.slug == provisional_slug
+    assert updated.manufacturer_id == manufacturer.id
+    assert updated.model_name is None
+
+
+def test_assign_identity_unknown_manufacturer_id_raises_value_error(
+    fake_session: FakeAsyncSession,
+) -> None:
+    motorbike = _backlog(fake_session, "BMW R 1250 GS import")
+
+    with pytest.raises(ValueError, match="ghost-manufacturer"):
+        asyncio.run(
+            product_service.assign_identity(
+                fake_session,
+                motorbike,
+                manufacturer_id="ghost-manufacturer",
+                buildingline=None,
+                model_name="R 1250 GS",
+                year_from=2019,
+                year_to=2023,
+                type_codes=[],
+                variants=[],
+            )
+        )
+
+
+def test_assign_identity_collision_raises_before_writing_anything(
+    fake_session: FakeAsyncSession,
+) -> None:
+    manufacturer = _manufacturer(fake_session)
+    asyncio.run(
+        product_service.assign_identity(
+            fake_session,
+            _backlog(fake_session, "BMW R 1250 GS import 1"),
+            manufacturer_id=manufacturer.id,
+            buildingline=None,
+            model_name="R 1250 GS",
+            year_from=2019,
+            year_to=2023,
+            type_codes=[],
+            variants=[],
+        )
+    )
+    motorbike = _backlog(fake_session, "BMW R 1250 GS import 2")
+    original_slug = motorbike.slug
+    commits_before = fake_session.commit_count
+
+    with pytest.raises(DuplicateModelError):
+        asyncio.run(
+            product_service.assign_identity(
+                fake_session,
+                motorbike,
+                manufacturer_id=manufacturer.id,
+                buildingline=None,
+                model_name="R 1250 GS",
+                year_from=2019,
+                year_to=2023,
+                type_codes=[],
+                variants=[],
+            )
+        )
+
+    assert motorbike.slug == original_slug
+    assert motorbike.model_name is None
+    assert fake_session.commit_count == commits_before
+
+
+def test_assign_identity_announces_product_updated(fake_session: FakeAsyncSession) -> None:
+    motorbike = _backlog(fake_session, "BMW R 1250 GS import")
+    manufacturer = _manufacturer(fake_session)
+    fake_session.notifications.clear()
+
+    asyncio.run(
+        product_service.assign_identity(
+            fake_session,
+            motorbike,
+            manufacturer_id=manufacturer.id,
+            buildingline=None,
+            model_name="R 1250 GS",
+            year_from=2019,
+            year_to=2023,
+            type_codes=[],
+            variants=[],
+        )
+    )
+
+    assert [channel for channel, _ in fake_session.notifications] == ["app_events"]
+
+
+def test_assign_identity_logs_dropped_type_codes(
+    fake_session: FakeAsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    motorbike = _backlog(fake_session, "BMW R 1250 GS import")
+    manufacturer = _manufacturer(fake_session)
+
+    with caplog.at_level("WARNING", logger="app.services.product_service"):
+        updated = asyncio.run(
+            product_service.assign_identity(
+                fake_session,
+                motorbike,
+                manufacturer_id=manufacturer.id,
+                buildingline=None,
+                model_name="R 1250 GS",
+                year_from=2019,
+                year_to=2023,
+                type_codes=["not a valid code!!"],
+                variants=[],
+            )
+        )
+
+    assert updated.type_codes == []
+    assert any("Dropped type code" in message for message in caplog.messages)
+
+
+# --- The `approved` guard (D4, step 6.12) --------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("missing_field",),
+    [("manufacturer_id",), ("model_name",), ("year_from",)],
+)
+def test_transition_to_approved_raises_per_missing_field(
+    fake_session: FakeAsyncSession, missing_field: str
+) -> None:
+    motorbike = _in_status(fake_session, MotorbikeStatus.IN_REVIEW, with_identity=True)
+    setattr(motorbike, missing_field, None)
+    commits_before = fake_session.commit_count
+
+    with pytest.raises(IncompleteIdentityError) as raised:
+        asyncio.run(product_service.transition(fake_session, motorbike, MotorbikeStatus.APPROVED))
+
+    assert raised.value.missing_fields == [missing_field]
+    assert missing_field in str(raised.value)
+    assert motorbike.status is MotorbikeStatus.IN_REVIEW
+    assert fake_session.commit_count == commits_before
+
+
+def test_transition_to_approved_raises_with_every_field_missing(
+    fake_session: FakeAsyncSession,
+) -> None:
+    motorbike = _in_status(fake_session, MotorbikeStatus.IN_REVIEW)
+
+    with pytest.raises(IncompleteIdentityError) as raised:
+        asyncio.run(product_service.transition(fake_session, motorbike, MotorbikeStatus.APPROVED))
+
+    assert raised.value.missing_fields == ["manufacturer_id", "model_name", "year_from"]
+
+
+def test_transition_to_approved_succeeds_when_identity_is_complete(
+    fake_session: FakeAsyncSession,
+) -> None:
+    motorbike = _in_status(fake_session, MotorbikeStatus.IN_REVIEW, with_identity=True)
+
+    updated = asyncio.run(
+        product_service.transition(fake_session, motorbike, MotorbikeStatus.APPROVED)
+    )
+
+    assert updated.status is MotorbikeStatus.APPROVED

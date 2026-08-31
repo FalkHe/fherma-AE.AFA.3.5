@@ -342,6 +342,28 @@ def test_patch_illegal_status_returns_422_invalid_transition(admin_client: TestC
     assert stored["data"]["attributes"]["status"] == "ingesting"
 
 
+def test_patch_approve_without_identity_returns_422_incomplete_identity(
+    admin_client: TestClient,
+) -> None:
+    """D4 (step 6.12): an `in_review` row with no manufacturer/model/year
+    cannot be approved — the API maps `IncompleteIdentityError` to 422
+    `incomplete-identity`, distinct from `invalid-transition`.
+    """
+    created = _create(admin_client).json()["data"]
+    assert _patch(admin_client, created["id"], {"status": "in_review"}).status_code == 200
+
+    response = _patch(admin_client, created["id"], {"status": "approved"})
+
+    assert response.status_code == 422
+    errors = response.json()["errors"]
+    assert errors[0]["status"] == "422"
+    assert errors[0]["code"] == "incomplete-identity"
+
+    # The row is untouched.
+    stored = admin_client.get(f"/api/products/{created['id']}").json()
+    assert stored["data"]["attributes"]["status"] == "in_review"
+
+
 def test_patch_legal_status_transitions_the_row(admin_client: TestClient) -> None:
     created = _create(admin_client).json()["data"]
 
