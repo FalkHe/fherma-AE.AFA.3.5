@@ -51,7 +51,15 @@ SUMMARY_ATTRIBUTES = {
     "msrpEur",
     "imageUrl",
 }
-DETAIL_ATTRIBUTES = {"name", "manufacturer", "specs", "article", "sources", "images"}
+DETAIL_ATTRIBUTES = {
+    "name",
+    "manufacturer",
+    "specs",
+    "article",
+    "sources",
+    "images",
+    "variants",
+}
 SPEC_KEYS = {
     "category",
     "engineCc",
@@ -598,6 +606,64 @@ def test_detail_returns_specs_article_sources_and_images(
     ]
 
 
+def test_detail_variants_are_projected_from_the_row(
+    customer: TestClient,
+    fake_session: FakeAsyncSession,
+    verified_specs: Callable[[VerifiedSpecs | None], None],
+) -> None:
+    """Detail only (D6, ui-spec API-2) — the list test below asserts the opposite."""
+    motorbike = _seed_motorbike(fake_session)
+    motorbike.variants = [
+        {
+            "slug": "adventure-sports",
+            "name": "Adventure Sports",
+            "description": "Larger tank, crash bars.",
+            "specs": {"tank_capacity_l": 24.8},
+        }
+    ]
+    verified_specs(
+        VerifiedSpecs(
+            motorbike_id=motorbike.id,
+            name=motorbike.query_name,
+            values=_comparison_values(),
+            parts=_parts(motorbike.id, motorbike.query_name),
+        )
+    )
+
+    response = customer.get(f"/api/catalogue-models/{motorbike.id}")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["attributes"]["variants"] == [
+        {
+            "slug": "adventure-sports",
+            "name": "Adventure Sports",
+            "description": "Larger tank, crash bars.",
+            "specs": {"tank_capacity_l": 24.8},
+        }
+    ]
+
+
+def test_detail_without_stored_variants_is_an_empty_list(
+    customer: TestClient,
+    fake_session: FakeAsyncSession,
+    verified_specs: Callable[[VerifiedSpecs | None], None],
+) -> None:
+    """`motorbike.variants` is `None` in this test double (never in real Postgres)."""
+    motorbike = _seed_motorbike(fake_session)
+    verified_specs(
+        VerifiedSpecs(
+            motorbike_id=motorbike.id,
+            name=motorbike.query_name,
+            values=_comparison_values(),
+            parts=_parts(motorbike.id, motorbike.query_name),
+        )
+    )
+
+    response = customer.get(f"/api/catalogue-models/{motorbike.id}")
+
+    assert response.json()["data"]["attributes"]["variants"] == []
+
+
 def test_detail_without_a_wikipedia_document_has_no_article(
     customer: TestClient,
     fake_session: FakeAsyncSession,
@@ -688,6 +754,61 @@ def test_writes_are_not_routed(customer: TestClient, method: str) -> None:
 
     assert collection.status_code == 405
     assert detail.status_code == 405
+
+
+# --- D6: the claim is never catalogue data -------------------------------------
+
+
+def test_suggestion_and_type_codes_never_appear_on_catalogue_models(
+    customer: TestClient,
+    fake_session: FakeAsyncSession,
+    browse: RecordedBrowse,
+    verified_specs: Callable[[VerifiedSpecs | None], None],
+) -> None:
+    """A row carrying a real claim still answers neither key, list or detail."""
+    motorbike = _seed_motorbike(fake_session)
+    motorbike.suggestion = {
+        "source": "bike-list.txt",
+        "raw": "Honda CB500F",
+        "manufacturer": "Honda",
+        "model": "CB500F",
+        "year_from": None,
+        "year_to": None,
+        "in_production": True,
+        "year_ranges": [],
+        "type_codes": ["PC64"],
+        "links": [],
+    }
+    motorbike.type_codes = ["PC64"]
+    browse.answers(
+        [
+            BrowseRow(
+                motorbike_id=motorbike.id,
+                name=motorbike.query_name,
+                manufacturer_id=None,
+                values=_summary_values(),
+                parts=_parts(motorbike.id, motorbike.query_name),
+            )
+        ]
+    )
+    verified_specs(
+        VerifiedSpecs(
+            motorbike_id=motorbike.id,
+            name=motorbike.query_name,
+            values=_comparison_values(),
+            parts=_parts(motorbike.id, motorbike.query_name),
+        )
+    )
+
+    list_attributes = customer.get("/api/catalogue-models").json()["data"][0]["attributes"]
+    detail_attributes = customer.get(f"/api/catalogue-models/{motorbike.id}").json()["data"][
+        "attributes"
+    ]
+
+    assert "suggestion" not in list_attributes
+    assert "typeCodes" not in list_attributes
+    assert "suggestion" not in detail_attributes
+    assert "typeCodes" not in detail_attributes
 
 
 # --- Drift guards -------------------------------------------------------------

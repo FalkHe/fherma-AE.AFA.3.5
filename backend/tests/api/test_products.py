@@ -23,10 +23,15 @@ from tests.services.conftest import FakeAsyncSession
 PRODUCT_ATTRIBUTES = {
     "name",
     "slug",
+    "queryName",
     "manufacturer",
+    "buildingline",
     "modelName",
     "yearFrom",
     "yearTo",
+    "typeCodes",
+    "variants",
+    "suggestion",
     "status",
     "draftSpec",
     "verifiedSpec",
@@ -114,6 +119,13 @@ def _assign_manufacturer(
     manufacturer = Manufacturer(name=name, slug=name.lower())
     fake_session.add(manufacturer)
     fake_session.store(Motorbike)[product_id].manufacturer_id = manufacturer.id
+    return manufacturer
+
+
+def _create_manufacturer(fake_session: FakeAsyncSession, name: str = "Suzuki") -> Manufacturer:
+    """Store a brand row without attaching it to any product (6.20 identity tests)."""
+    manufacturer = Manufacturer(name=name, slug=name.lower())
+    fake_session.add(manufacturer)
     return manufacturer
 
 
@@ -561,3 +573,243 @@ def test_patch_unknown_id_returns_404(admin_client: TestClient) -> None:
 
     assert response.status_code == 404
     assert response.json()["errors"][0]["code"] == "not-found"
+
+
+# --- PATCH identity (step 6.20, D2) -------------------------------------------
+
+
+def test_patch_identity_recomputes_the_slug_and_echoes_the_block(
+    admin_client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    created = _create(admin_client, name="Yamaha MT-07").json()["data"]
+    yamaha = _create_manufacturer(fake_session, "Yamaha")
+
+    response = _patch(
+        admin_client,
+        created["id"],
+        {
+            "identity": {
+                "manufacturerId": yamaha.id,
+                "buildingline": "MT",
+                "modelName": "MT-07",
+                "yearFrom": 2014,
+                "yearTo": None,
+                "typeCodes": ["RM04", "RM17", "RM33"],
+                "variants": [],
+            }
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    attributes = response.json()["data"]["attributes"]
+    assert attributes["slug"] == "yamaha/mt-07/2014-"
+    assert attributes["buildingline"] == "MT"
+    assert attributes["modelName"] == "MT-07"
+    assert attributes["yearFrom"] == 2014
+    assert attributes["yearTo"] is None
+    assert attributes["typeCodes"] == ["RM04", "RM17", "RM33"]
+    assert attributes["variants"] == []
+    assert attributes["name"] == "Yamaha MT-07"
+    assert attributes["queryName"] == "Yamaha MT-07"
+
+    # Persisted, not just echoed.
+    reread = admin_client.get(f"/api/products/{created['id']}").json()["data"]["attributes"]
+    assert reread["slug"] == "yamaha/mt-07/2014-"
+
+
+def test_patch_identity_with_a_variant_persists_the_delta_and_recomputes_its_slug(
+    admin_client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    created = _create(admin_client, name="Honda Africa Twin").json()["data"]
+    honda = _create_manufacturer(fake_session, "Honda")
+
+    response = _patch(
+        admin_client,
+        created["id"],
+        {
+            "identity": {
+                "manufacturerId": honda.id,
+                "modelName": "Africa Twin",
+                "yearFrom": 2020,
+                # The client never sends a trim `slug` (D1) — recomputed here.
+                "variants": [
+                    {
+                        "name": "Adventure Sports",
+                        "description": "Larger tank, crash bars.",
+                        "specs": {"tank_capacity_l": 24.8},
+                    }
+                ],
+            }
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["attributes"]["variants"] == [
+        {
+            "slug": "adventure-sports",
+            "name": "Adventure Sports",
+            "description": "Larger tank, crash bars.",
+            "specs": {"tank_capacity_l": 24.8},
+        }
+    ]
+
+
+def test_patch_identity_collision_returns_409_duplicate_model(
+    admin_client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    ktm = _create_manufacturer(fake_session, "KTM")
+    existing = _create(admin_client, name="KTM 390 Duke").json()["data"]
+    assert (
+        _patch(
+            admin_client,
+            existing["id"],
+            {"identity": {"manufacturerId": ktm.id, "modelName": "390 Duke", "yearFrom": 2017}},
+        ).status_code
+        == 200
+    )
+    other = _create(admin_client, name="KTM 390 Duke Gen3").json()["data"]
+
+    response = _patch(
+        admin_client,
+        other["id"],
+        {"identity": {"manufacturerId": ktm.id, "modelName": "390 Duke", "yearFrom": 2017}},
+    )
+
+    assert response.status_code == 409
+    errors = response.json()["errors"]
+    assert errors[0]["code"] == "duplicate-model"
+    assert "ktm/390-duke/2017-" in errors[0]["detail"]
+
+    # Neither row was written: the collision check runs before any attribute is.
+    stored = admin_client.get(f"/api/products/{other['id']}").json()["data"]["attributes"]
+    assert stored["modelName"] is None
+
+
+def test_patch_identity_bad_year_pair_returns_422_with_a_field_pointer(
+    admin_client: TestClient,
+) -> None:
+    created = _create(admin_client).json()["data"]
+
+    response = _patch(admin_client, created["id"], {"identity": {"yearFrom": 2020, "yearTo": 2010}})
+
+    assert response.status_code == 422
+    locs = [tuple(error["loc"]) for error in response.json()["detail"]]
+    assert ("body", "data", "attributes", "identity") in locs
+
+
+def test_patch_identity_year_below_the_minimum_returns_422_with_a_field_pointer(
+    admin_client: TestClient,
+) -> None:
+    created = _create(admin_client).json()["data"]
+
+    response = _patch(admin_client, created["id"], {"identity": {"yearFrom": 1800}})
+
+    assert response.status_code == 422
+    locs = [tuple(error["loc"]) for error in response.json()["detail"]]
+    assert ("body", "data", "attributes", "identity", "yearFrom") in locs
+
+
+def test_patch_identity_unknown_manufacturer_returns_422_with_a_field_pointer(
+    admin_client: TestClient,
+) -> None:
+    created = _create(admin_client).json()["data"]
+
+    response = _patch(
+        admin_client,
+        created["id"],
+        {"identity": {"manufacturerId": "0" * 26, "modelName": "X", "yearFrom": 2020}},
+    )
+
+    assert response.status_code == 422
+    locs = [tuple(error["loc"]) for error in response.json()["detail"]]
+    assert ("body", "data", "attributes", "identity", "manufacturerId") in locs
+
+    # Nothing was written: existence is checked before `assign_identity` runs.
+    stored = admin_client.get(f"/api/products/{created['id']}").json()["data"]["attributes"]
+    assert stored["modelName"] is None
+
+
+def test_patch_identity_bad_type_code_returns_422(admin_client: TestClient) -> None:
+    created = _create(admin_client).json()["data"]
+
+    response = _patch(admin_client, created["id"], {"identity": {"typeCodes": ["not a code!"]}})
+
+    assert response.status_code == 422
+
+
+def test_patch_identity_then_approve_in_the_same_call_succeeds(
+    admin_client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    """D2: identity is applied before status, so fill-and-approve is one call."""
+    created = _create(admin_client, name="Suzuki SV650").json()["data"]
+    suzuki = _create_manufacturer(fake_session, "Suzuki")
+    assert _patch(admin_client, created["id"], {"status": "in_review"}).status_code == 200
+
+    response = _patch(
+        admin_client,
+        created["id"],
+        {
+            "identity": {"manufacturerId": suzuki.id, "modelName": "SV650", "yearFrom": 1999},
+            "status": "approved",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["attributes"]["status"] == "approved"
+
+
+def test_patch_identity_without_csrf_header_returns_403(admin_client: TestClient) -> None:
+    created = _create(admin_client).json()["data"]
+
+    response = admin_client.patch(
+        f"/api/products/{created['id']}",
+        json={
+            "data": {
+                "type": "products",
+                "attributes": {"identity": {"modelName": "X", "yearFrom": 2020}},
+            }
+        },
+    )
+
+    assert response.status_code == 403
+
+
+# --- `suggestion` (D6) ---------------------------------------------------------
+
+_SUGGESTION = {
+    "source": "bike-list.txt",
+    "raw": "BMW R 1200 GS (2004–2018) [K25/K50]",
+    "manufacturer": "BMW",
+    "model": "R 1200 GS",
+    "year_from": 2004,
+    "year_to": 2018,
+    "in_production": False,
+    "year_ranges": [{"from": 2004, "to": 2018}],
+    "type_codes": ["K25", "K50"],
+    "links": ["https://en.wikipedia.org/wiki/BMW_R1200GS"],
+}
+
+
+def test_get_returns_the_suggestion_claim_camel_cased(
+    admin_client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    created = _create(admin_client).json()["data"]
+    # No suggestion until one is set: a plain admin-added row never has one.
+    assert created["attributes"]["suggestion"] is None
+    fake_session.store(Motorbike)[created["id"]].suggestion = dict(_SUGGESTION)
+
+    response = admin_client.get(f"/api/products/{created['id']}")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["attributes"]["suggestion"] == {
+        "source": "bike-list.txt",
+        "raw": "BMW R 1200 GS (2004–2018) [K25/K50]",
+        "manufacturer": "BMW",
+        "model": "R 1200 GS",
+        "yearFrom": 2004,
+        "yearTo": 2018,
+        "inProduction": False,
+        "yearRanges": [{"from": 2004, "to": 2018}],
+        "typeCodes": ["K25", "K50"],
+        "links": ["https://en.wikipedia.org/wiki/BMW_R1200GS"],
+    }

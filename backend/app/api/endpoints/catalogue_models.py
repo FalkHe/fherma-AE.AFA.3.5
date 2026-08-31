@@ -47,7 +47,7 @@ from app.api.schemas.catalogue_models import (
     CatalogueSource,
 )
 from app.api.schemas.images import variant_urls
-from app.api.schemas.products import PriceBand, SpecCategory
+from app.api.schemas.products import PriceBand, ProductVariant, SpecCategory
 from app.db.models.manufacturer import Manufacturer
 from app.db.models.motorbike import Motorbike, MotorbikeStatus
 from app.db.models.motorbike_image import ImageStatus, MotorbikeImage
@@ -203,6 +203,16 @@ def _sources(documents: Sequence[SourceDocument]) -> list[CatalogueSource]:
         CatalogueSource(source_title=document.source_title, source_url=document.source_url)
         for document in documents
     ]
+
+
+def _variants(motorbike: Motorbike) -> list[ProductVariant]:
+    """Project the row's stored trims (D1/D2, §2.5), detail only (D6).
+
+    `motorbike.variants` can be `None` in the in-memory test double (a
+    server-default gap that never happens in real Postgres, per 6.15's landed
+    note) — guarded the same way `products.py`'s equivalent helper is.
+    """
+    return [ProductVariant.model_validate(variant) for variant in motorbike.variants or []]
 
 
 def _image(image: MotorbikeImage) -> CatalogueImage:
@@ -419,6 +429,7 @@ async def get_catalogue_model(
                 article=_article(documents),
                 sources=_sources(documents),
                 images=_images(images),
+                variants=_variants(motorbike),
             ),
         )
     )

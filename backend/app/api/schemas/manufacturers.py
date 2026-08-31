@@ -9,12 +9,17 @@ fills yet.
 created only by `manufacturer_service.get_or_create` (extraction and the
 `catalogue set-manufacturer` CLI). `logoPath` is the MEDIA_DIR-relative path of
 the model, not a URL — nothing serves brand logos yet.
+
+`BuildinglinesDocument` (step 6.20, ui-spec API-5) is not a JSON:API resource
+document — it backs one admin-only read (`GET
+/api/manufacturers/{id}/buildinglines`), so its body is the plain `{"data": […
+of str]}` shape the step pins, not a `Resource`/`type`/`attributes` envelope.
 """
 
 from datetime import datetime
 from typing import Literal
 
-from pydantic import ConfigDict
+from pydantic import BaseModel, ConfigDict
 
 from app.api.jsonapi import Document, JsonApiModel, ListDocument, Resource
 
@@ -47,3 +52,11 @@ class ManufacturerDocument(Document[ManufacturerResource]):
 
 class ManufacturerListDocument(ListDocument[ManufacturerResource]):
     """Body of `GET /api/manufacturers`."""
+
+
+class BuildinglinesDocument(BaseModel):
+    """Body of `GET /api/manufacturers/{id}/buildinglines`: `{"data": [...]}`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    data: list[str]

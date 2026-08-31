@@ -414,6 +414,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/manufacturers/{manufacturer_id}/buildinglines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a manufacturer's buildingline values
+         * @description Return `manufacturer_id`'s distinct, sorted `buildingline` values.
+         *
+         *     Backs the identity review form's family `Autocomplete` (ui-spec API-5),
+         *     via 6.10's `product_service.list_buildinglines` — read-only, admin-only.
+         */
+        get: operations["list_buildinglines_api_manufacturers__manufacturer_id__buildinglines_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/operations": {
         parameters: {
             query?: never;
@@ -480,13 +503,20 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Update a product's status or draft specification
-         * @description Replace the draft specification and/or move the product to a new status.
+         * Update a product's identity, draft specification and/or status
+         * @description Replace the identity block, the draft specification and/or the status.
          *
-         *     Both attributes are optional and applied in that order, so a request that
-         *     saves a draft and approves in one go promotes the values it just sent.
-         *     A transition to `ingesting` is a retry: it re-enqueues the ingestion job
-         *     server-side, so the UI only ever asks for the status it wants.
+         *     All three attributes are optional and applied **in this order — identity,
+         *     then draft specification, then status (D2)** — so a request that fills a
+         *     missing identity and approves in the same call has the identity already
+         *     written when the D4 `IncompleteIdentityError` guard runs; reversing the
+         *     order would make that request fail the guard even though it supplies
+         *     everything needed. `identity` is a full-object replace through
+         *     `product_service.assign_identity`, the block's only writer; the response is
+         *     always rendered from the row *after* every requested change, so it carries
+         *     the recomputed `slug`. A transition to `ingesting` is a retry: it
+         *     re-enqueues the ingestion job server-side, so the UI only ever asks for the
+         *     status it wants.
          */
         patch: operations["update_product_api_products__product_id__patch"];
         trace?: never;
@@ -504,6 +534,14 @@ export interface components {
          * @enum {string}
          */
         BrowseSort: "name" | "-name" | "msrpEur" | "-msrpEur";
+        /**
+         * BuildinglinesDocument
+         * @description Body of `GET /api/manufacturers/{id}/buildinglines`: `{"data": [...]}`.
+         */
+        BuildinglinesDocument: {
+            /** Data */
+            data: string[];
+        };
         /**
          * CatalogueImage
          * @description One approved picture: the three variant URLs plus its attribution.
@@ -538,6 +576,8 @@ export interface components {
             sources: components["schemas"]["CatalogueSource"][];
             /** Images */
             images: components["schemas"]["CatalogueImage"][];
+            /** Variants */
+            variants: components["schemas"]["ProductVariant"][];
         };
         /**
          * CatalogueModelDocument
@@ -963,6 +1003,48 @@ export interface components {
             status: "ok";
         };
         /**
+         * IdentityRequest
+         * @description The writable identity block: a full-object replace (D2), never a merge.
+         *
+         *     Boundary caps reuse 6.10's `identity_validation` module rather than
+         *     restating its regex/caps: `variants` entries are validated by its
+         *     `Variant` model (name length, description length — `slug` is never
+         *     trusted from input, `identity_validation.Variant` always recomputes it),
+         *     and `type_codes`/`variants` are capped at
+         *     `identity_validation.MAX_TYPE_CODES`/`MAX_VARIANTS`. The year bounds
+         *     (`IDENTITY_YEAR_MIN` through the current year plus two) and the
+         *     `yearTo >= yearFrom` pair check are this schema's own — `assign_identity`
+         *     itself does not check plausibility, only shape.
+         *
+         *     An entry `assign_identity`'s own `identity_validation` pass would drop
+         *     (an unknown `specs` key, a duplicate slug, a type code past the cap) is
+         *     still accepted **here** and silently dropped there with a `logger.warning`
+         *     — this schema's checks are a stricter, earlier subset for immediate
+         *     feedback, not a second implementation of the same rules.
+         */
+        IdentityRequest: {
+            /** Manufacturerid */
+            manufacturerId?: string | null;
+            /** Buildingline */
+            buildingline?: string | null;
+            /** Modelname */
+            modelName?: string | null;
+            /** Yearfrom */
+            yearFrom?: number | null;
+            /** Yearto */
+            yearTo?: number | null;
+            /**
+             * Typecodes
+             * @default []
+             */
+            typeCodes: string[];
+            /**
+             * Variants
+             * @default []
+             */
+            variants: components["schemas"]["Variant"][];
+        };
+        /**
          * ImageStatus
          * @description Moderation state of an image.
          * @enum {string}
@@ -1169,20 +1251,46 @@ export interface components {
         /**
          * ProductAttributes
          * @description The pinned attribute set of a product.
+         *
+         *     `buildingline` and `suggestion` carry an explicit `None` default even
+         *     though nothing here ever *omits* them (`endpoints/products.py::_resource`
+         *     always supplies a value): FastAPI's exported OpenAPI schema drops the
+         *     `default` key for a field whose default is `None` and whose type already
+         *     allows `null`, which keeps those two out of the `required` list and, in
+         *     turn, keeps the generated TypeScript member optional (`?:`) rather than
+         *     mandatory — so a `Product`-typed fixture written before this step (there
+         *     are several, across the frontend) stays structurally valid without an
+         *     edit. The other three additions (`queryName`, `typeCodes`, `variants`)
+         *     cannot take the same shortcut honestly: they are never actually absent or
+         *     `null` on a real row, so giving them a non-`None` default would still
+         *     leave them required in the generated type (FastAPI keeps a non-`None`
+         *     default in the schema, and `openapi-typescript`'s `defaultNonNullable`
+         *     forces a defaulted-but-present field back to required) while also
+         *     misstating what the wire actually sends. They stay required, matching
+         *     every other non-nullable field this model already has.
          */
         ProductAttributes: {
             /** Name */
             name: string;
             /** Slug */
             slug: string;
+            /** Queryname */
+            queryName: string;
             /** Manufacturer */
             manufacturer: string | null;
+            /** Buildingline */
+            buildingline?: string | null;
             /** Modelname */
             modelName: string | null;
             /** Yearfrom */
             yearFrom: number | null;
             /** Yearto */
             yearTo: number | null;
+            /** Typecodes */
+            typeCodes: string[];
+            /** Variants */
+            variants: components["schemas"]["ProductVariant"][];
+            suggestion?: components["schemas"]["ProductSuggestion"] | null;
             status: components["schemas"]["MotorbikeStatus"];
             draftSpec: components["schemas"]["SpecAttributes"] | null;
             verifiedSpec: components["schemas"]["SpecAttributes"] | null;
@@ -1323,13 +1431,17 @@ export interface components {
          * ProductPatchAttributes
          * @description The writable attributes of an existing product.
          *
-         *     Both are optional; `verifiedSpec` (and anything else) is rejected outright.
+         *     All three are optional; `verifiedSpec` (and anything else) is rejected
+         *     outright. Applied by the endpoint in a fixed order — identity, then draft
+         *     specification, then status (D2) — documented on `update_product` itself.
          */
         ProductPatchAttributes: {
             /** @description Target status; must be legal for the current one. */
             status?: components["schemas"]["MotorbikeStatus"] | null;
             /** @description Full replacement of the draft specification. */
             draftSpec?: components["schemas"]["DraftSpecRequest"] | null;
+            /** @description Full replacement of the identity block (D2). */
+            identity?: components["schemas"]["IdentityRequest"] | null;
         };
         /**
          * ProductPatchRequest
@@ -1365,6 +1477,58 @@ export interface components {
              */
             type: "products";
             attributes: components["schemas"]["ProductAttributes"];
+        };
+        /**
+         * ProductSuggestion
+         * @description The unverified claim `motorbikes.suggestion` carries, camelCased (D6).
+         *
+         *     Never written by any schema in this module — only a human "using the
+         *     claim" in the review form copies a value into the typed `identity` block,
+         *     and that goes through `IdentityRequest` like any other admin edit. Unknown
+         *     keys are ignored, never rejected: this projects a stored JSON document,
+         *     not a request body.
+         */
+        ProductSuggestion: {
+            /** Source */
+            source: string;
+            /** Raw */
+            raw: string;
+            /** Manufacturer */
+            manufacturer: string | null;
+            /** Model */
+            model: string | null;
+            /** Yearfrom */
+            yearFrom: number | null;
+            /** Yearto */
+            yearTo: number | null;
+            /** Inproduction */
+            inProduction: boolean;
+            /** Yearranges */
+            yearRanges: components["schemas"]["SuggestionYearRange"][];
+            /** Typecodes */
+            typeCodes: string[];
+            /** Links */
+            links: string[];
+        };
+        /**
+         * ProductVariant
+         * @description One trim, as returned: a spec delta plus free text (D1/D2, §2.5).
+         *
+         *     `specs` keys stay the snake_case frozen spec column names verbatim — they
+         *     are data stored in the row's JSONB, not schema fields, so they are never
+         *     camelCased.
+         */
+        ProductVariant: {
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            /** Specs */
+            specs: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * ReadinessResponse
@@ -1440,7 +1604,7 @@ export interface components {
          * @description Where a document came from; also drives list ordering and prompts.
          * @enum {string}
          */
-        SourceType: "wikipedia" | "product" | "technical" | "magazine" | "upload";
+        SourceType: "wikipedia" | "product" | "technical" | "magazine" | "upload" | "listing";
         /**
          * SpecAttributes
          * @description One specification revision of a product, as returned.
@@ -1486,6 +1650,21 @@ export interface components {
          * @enum {string}
          */
         SpecCategory: "naked" | "sport" | "sport_touring" | "touring" | "adventure" | "cruiser" | "classic" | "scrambler" | "enduro" | "supermoto" | "scooter";
+        /**
+         * SuggestionYearRange
+         * @description One `(from, to)` pair out of a suggestion's claimed year ranges.
+         *
+         *     `from` is a Python keyword, hence the `from_` field name with an explicit
+         *     alias — the one place in this module the alias generator's default
+         *     (`to_camel("from_") == "from_"`, verified: it does not strip a trailing
+         *     underscore) would get it wrong.
+         */
+        SuggestionYearRange: {
+            /** From */
+            from?: number | null;
+            /** To */
+            to?: number | null;
+        };
         /**
          * ToolCall
          * @description One tool the advisor executed for this turn, with its outcome.
@@ -1544,6 +1723,37 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * Variant
+         * @description One trim: a spec delta plus free text — never the base (§2.5).
+         *
+         *     `slug` is always recomputed from `name` via `product_service.slugify` and
+         *     never trusted from input, so it needs no caller-supplied value. `specs`
+         *     keys are **not** restricted here — `normalize_variants` drops any key
+         *     outside `VARIANT_SPEC_KEYS` after validation, keeping the entry (a key is
+         *     dropped, not the variant).
+         */
+        Variant: {
+            /**
+             * Slug
+             * @default
+             */
+            slug: string;
+            /** Name */
+            name: string;
+            /**
+             * Specs
+             * @default {}
+             */
+            specs: {
+                [key: string]: unknown;
+            };
+            /**
+             * Description
+             * @default
+             */
+            description: string;
         };
     };
     responses: never;
@@ -2287,6 +2497,47 @@ export interface operations {
             };
         };
     };
+    list_buildinglines_api_manufacturers__manufacturer_id__buildinglines_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description ULID of the manufacturer. */
+                manufacturer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BuildinglinesDocument"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_operations_api_operations_get: {
         parameters: {
             query?: {
@@ -2491,6 +2742,15 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDocument"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

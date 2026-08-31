@@ -14,18 +14,22 @@ from collections.abc import Mapping, Sequence
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Path, Query, status
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import jsonapi
 from app.api.deps import csrf_protect, current_admin
 from app.api.schemas.products import (
     DraftSpecRequest,
+    IdentityRequest,
     ProductAttributes,
     ProductCreateRequest,
     ProductDocument,
     ProductListDocument,
     ProductPatchRequest,
     ProductResource,
+    ProductSuggestion,
+    ProductVariant,
     SpecAttributes,
 )
 from app.db.models.manufacturer import Manufacturer
@@ -92,6 +96,21 @@ async def _manufacturers_of(
     )
 
 
+def _variant_attributes(variants: Sequence[Mapping[str, Any]] | None) -> list[ProductVariant]:
+    """Project a row's stored trims (D1/D2, §2.5).
+
+    `None`, not just an empty list, guards against the in-memory test double's
+    server-default gap (6.15's landed note: `motorbike.variants` can be `None`
+    there, never in real Postgres).
+    """
+    return [ProductVariant.model_validate(variant) for variant in variants or []]
+
+
+def _suggestion_attributes(suggestion: Mapping[str, Any] | None) -> ProductSuggestion | None:
+    """Project the unverified claim JSONB, or `None` when the row has none (D6)."""
+    return None if suggestion is None else ProductSuggestion.model_validate(suggestion)
+
+
 def _resource(
     motorbike: Motorbike,
     specs: Mapping[SpecKind, MotorbikeSpec],
@@ -100,20 +119,26 @@ def _resource(
 ) -> ProductResource:
     """Project a catalogue row plus its specifications onto a resource object.
 
-    `name` is now the *rendered* name (D5/D10) — the admin surface renders at
+    `name` is the *rendered* name (D5/D10) — the admin surface renders at
     `MODEL` with no context (`docs/roadmap/model-naming-data-model.md` §5): an
     admin looks at one row at a time, so there is no page to disambiguate
-    against. `queryName` next to it is 6.20's addition, not this step's.
+    against. `queryName` next to it is the phrase the admin (or
+    `flag_unknown_bike`) originally typed, shown verbatim as context.
     """
     return ProductResource(
         id=motorbike.id,
         attributes=ProductAttributes(
             name=naming_service.render_name(name_parts, min_level=NameLevel.MODEL),
             slug=motorbike.slug,
+            query_name=motorbike.query_name,
             manufacturer=_manufacturer_name(motorbike, manufacturers),
+            buildingline=motorbike.buildingline,
             model_name=motorbike.model_name,
             year_from=motorbike.year_from,
             year_to=motorbike.year_to,
+            type_codes=list(motorbike.type_codes or []),
+            variants=_variant_attributes(motorbike.variants),
+            suggestion=_suggestion_attributes(motorbike.suggestion),
             status=motorbike.status,
             draft_spec=_spec_attributes(specs.get(SpecKind.DRAFT)),
             verified_spec=_spec_attributes(specs.get(SpecKind.VERIFIED)),
@@ -242,27 +267,96 @@ async def create_product(session: SessionDep, payload: ProductCreateRequest) -> 
     return await _document(session, motorbike)
 
 
+async def _check_manufacturer_exists(session: AsyncSession, manufacturer_id: str | None) -> None:
+    """Raise a request-validation 422 when `manufacturer_id` names no row.
+
+    A plain FastAPI request-validation error (not a `JsonApiError`), so the
+    body matches the standard `{"detail": [{"loc": …}]}` shape every other
+    field-level 422 in this API uses — the frontend's `validationFields`
+    helper reads `loc[-1]`. Existence needs a session, so it cannot live in a
+    Pydantic validator; skipping this check would leave `assign_identity`'s own
+    `ValueError` on an unknown id to become an unhandled 500.
+    """
+    if manufacturer_id is None:
+        return
+    manufacturers = await manufacturer_service.get_by_ids(session, [manufacturer_id])
+    if manufacturer_id not in manufacturers:
+        raise RequestValidationError(
+            [
+                {
+                    "type": "value_error",
+                    "loc": ("body", "data", "attributes", "identity", "manufacturerId"),
+                    "msg": f"Unknown manufacturer id '{manufacturer_id}'.",
+                    "input": manufacturer_id,
+                }
+            ]
+        )
+
+
+async def _apply_identity(
+    session: AsyncSession, motorbike: Motorbike, identity: IdentityRequest
+) -> None:
+    """Write `identity` through `assign_identity` (D2), the block's only writer.
+
+    `manufacturer_id` existence is checked first (a field-pointer 422);
+    `assign_identity` itself still full-object-replaces every field, so a
+    request that clears the manufacturer (`manufacturerId: null`) goes
+    straight through.
+    """
+    await _check_manufacturer_exists(session, identity.manufacturer_id)
+    try:
+        await product_service.assign_identity(
+            session,
+            motorbike,
+            manufacturer_id=identity.manufacturer_id,
+            buildingline=identity.buildingline,
+            model_name=identity.model_name,
+            year_from=identity.year_from,
+            year_to=identity.year_to,
+            type_codes=identity.type_codes,
+            variants=[variant.model_dump() for variant in identity.variants],
+        )
+    except product_service.DuplicateModelError as error:
+        raise jsonapi.JsonApiError(
+            status_code=status.HTTP_409_CONFLICT,
+            code="duplicate-model",
+            detail=f"A product with slug '{error.args[0]}' already exists.",
+        ) from error
+
+
 @router.patch(
     "/{product_id}",
     response_model=ProductDocument,
     dependencies=[Depends(csrf_protect)],
-    summary="Update a product's status or draft specification",
+    summary="Update a product's identity, draft specification and/or status",
     responses=jsonapi.error_responses(
-        status.HTTP_404_NOT_FOUND, status.HTTP_422_UNPROCESSABLE_CONTENT
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
     ),
 )
 async def update_product(
     session: SessionDep, product_id: ProductIdDep, payload: ProductPatchRequest
 ) -> ProductDocument:
-    """Replace the draft specification and/or move the product to a new status.
+    """Replace the identity block, the draft specification and/or the status.
 
-    Both attributes are optional and applied in that order, so a request that
-    saves a draft and approves in one go promotes the values it just sent.
-    A transition to `ingesting` is a retry: it re-enqueues the ingestion job
-    server-side, so the UI only ever asks for the status it wants.
+    All three attributes are optional and applied **in this order — identity,
+    then draft specification, then status (D2)** — so a request that fills a
+    missing identity and approves in the same call has the identity already
+    written when the D4 `IncompleteIdentityError` guard runs; reversing the
+    order would make that request fail the guard even though it supplies
+    everything needed. `identity` is a full-object replace through
+    `product_service.assign_identity`, the block's only writer; the response is
+    always rendered from the row *after* every requested change, so it carries
+    the recomputed `slug`. A transition to `ingesting` is a retry: it
+    re-enqueues the ingestion job server-side, so the UI only ever asks for the
+    status it wants.
     """
     motorbike = await _get_or_404(session, product_id)
     attributes = payload.data.attributes
+
+    if attributes.identity is not None:
+        await _apply_identity(session, motorbike, attributes.identity)
 
     if attributes.draft_spec is not None:
         await product_service.upsert_draft_spec(

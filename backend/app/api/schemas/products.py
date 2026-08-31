@@ -22,19 +22,36 @@ Two specification models on purpose:
 `verifiedSpec` is read-only everywhere: approval promotes a draft, and no API
 path writes a `verified` row. `extra="forbid"` on the request models is what
 turns a `verifiedSpec` in a PATCH body into a 422 instead of a silent no-op.
+
+Step 6.20 (`docs/roadmap/phase-6/shared-knowledge.md`) adds the identity block,
+additively (D6/D10): `queryName`, `buildingline`, `typeCodes`, `variants` and
+`suggestion` on `ProductAttributes`; a writable `identity` block
+(`IdentityRequest`) on `ProductPatchAttributes`, applied through
+`product_service.assign_identity` — the **only** writer of those columns (D2).
+`IdentityRequest` reuses `identity_validation`'s `Variant` model and its
+`TYPE_CODE_PATTERN`/`MAX_TYPE_CODES`/`MAX_VARIANTS` caps rather than restating
+them. `suggestion` (`ProductSuggestion`) is the unverified claim JSONB
+camelCased for the wire (D6) — never written by this schema, read-only,
+unknown keys ignored rather than rejected because it is stored JSON.
 """
 
 import json
 import string
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.api.jsonapi import Document, JsonApiModel, ListDocument, Resource
-from app.db.models.motorbike import NAME_LENGTH, MotorbikeStatus
+from app.db.models.motorbike import (
+    BUILDINGLINE_LENGTH,
+    MODEL_NAME_LENGTH,
+    NAME_LENGTH,
+    MotorbikeStatus,
+)
 from app.db.models.motorbike_spec import PRICE_BANDS, SPEC_CATEGORIES
+from app.services import identity_validation
 
 PRODUCT_TYPE = "products"
 
@@ -55,6 +72,12 @@ DRAFT_SPEC_EXTRA_VALUE_MAX_LENGTH = 2_000
 # What `product_service.slugify` keeps; a name without one of these has no
 # identity to be unique on.
 SLUG_CHARACTERS = frozenset(string.ascii_lowercase + string.digits)
+
+# `IdentityRequest.year_from`/`year_to` bounds (ui-spec §1.3): the first
+# production motorcycle predates 1900, so this is a wider window than
+# extraction's own plausibility check (`app.llm.extraction.YEAR_MIN` is 1900)
+# — the two are deliberately different constants for different purposes.
+IDENTITY_YEAR_MIN = 1885
 
 # The pinned vocabularies as enums, so they reach OpenAPI (and therefore the
 # review form's select options) instead of being free text. Built from the
@@ -87,16 +110,89 @@ class SpecAttributes(JsonApiModel):
     extracted_at: datetime | None
 
 
+class ProductVariant(JsonApiModel):
+    """One trim, as returned: a spec delta plus free text (D1/D2, §2.5).
+
+    `specs` keys stay the snake_case frozen spec column names verbatim — they
+    are data stored in the row's JSONB, not schema fields, so they are never
+    camelCased.
+    """
+
+    slug: str
+    name: str
+    description: str | None
+    specs: dict[str, Any] | None
+
+
+class SuggestionYearRange(JsonApiModel):
+    """One `(from, to)` pair out of a suggestion's claimed year ranges.
+
+    `from` is a Python keyword, hence the `from_` field name with an explicit
+    alias — the one place in this module the alias generator's default
+    (`to_camel("from_") == "from_"`, verified: it does not strip a trailing
+    underscore) would get it wrong.
+    """
+
+    from_: Annotated[int | None, Field(alias="from")] = None
+    to: int | None = None
+
+
+class ProductSuggestion(JsonApiModel):
+    """The unverified claim `motorbikes.suggestion` carries, camelCased (D6).
+
+    Never written by any schema in this module — only a human "using the
+    claim" in the review form copies a value into the typed `identity` block,
+    and that goes through `IdentityRequest` like any other admin edit. Unknown
+    keys are ignored, never rejected: this projects a stored JSON document,
+    not a request body.
+    """
+
+    source: str
+    raw: str
+    manufacturer: str | None
+    model: str | None
+    year_from: int | None
+    year_to: int | None
+    in_production: bool
+    year_ranges: list[SuggestionYearRange]
+    type_codes: list[str]
+    links: list[str]
+
+
 class ProductAttributes(JsonApiModel):
-    """The pinned attribute set of a product."""
+    """The pinned attribute set of a product.
+
+    `buildingline` and `suggestion` carry an explicit `None` default even
+    though nothing here ever *omits* them (`endpoints/products.py::_resource`
+    always supplies a value): FastAPI's exported OpenAPI schema drops the
+    `default` key for a field whose default is `None` and whose type already
+    allows `null`, which keeps those two out of the `required` list and, in
+    turn, keeps the generated TypeScript member optional (`?:`) rather than
+    mandatory — so a `Product`-typed fixture written before this step (there
+    are several, across the frontend) stays structurally valid without an
+    edit. The other three additions (`queryName`, `typeCodes`, `variants`)
+    cannot take the same shortcut honestly: they are never actually absent or
+    `null` on a real row, so giving them a non-`None` default would still
+    leave them required in the generated type (FastAPI keeps a non-`None`
+    default in the schema, and `openapi-typescript`'s `defaultNonNullable`
+    forces a defaulted-but-present field back to required) while also
+    misstating what the wire actually sends. They stay required, matching
+    every other non-nullable field this model already has.
+    """
 
     name: str
     slug: str
+    query_name: str
     # Derived: the related manufacturer's name, `null` when none is assigned.
     manufacturer: str | None
+    buildingline: str | None = None
     model_name: str | None
     year_from: int | None
     year_to: int | None
+    type_codes: list[str]
+    variants: list[ProductVariant]
+    # `null` when the row was never proposed from a suggestion list (D6).
+    suggestion: ProductSuggestion | None = None
     status: MotorbikeStatus
     draft_spec: SpecAttributes | None
     verified_spec: SpecAttributes | None
@@ -195,10 +291,76 @@ class ProductCreateAttributes(JsonApiModel):
         return stripped
 
 
+class IdentityRequest(JsonApiModel):
+    """The writable identity block: a full-object replace (D2), never a merge.
+
+    Boundary caps reuse 6.10's `identity_validation` module rather than
+    restating its regex/caps: `variants` entries are validated by its
+    `Variant` model (name length, description length — `slug` is never
+    trusted from input, `identity_validation.Variant` always recomputes it),
+    and `type_codes`/`variants` are capped at
+    `identity_validation.MAX_TYPE_CODES`/`MAX_VARIANTS`. The year bounds
+    (`IDENTITY_YEAR_MIN` through the current year plus two) and the
+    `yearTo >= yearFrom` pair check are this schema's own — `assign_identity`
+    itself does not check plausibility, only shape.
+
+    An entry `assign_identity`'s own `identity_validation` pass would drop
+    (an unknown `specs` key, a duplicate slug, a type code past the cap) is
+    still accepted **here** and silently dropped there with a `logger.warning`
+    — this schema's checks are a stricter, earlier subset for immediate
+    feedback, not a second implementation of the same rules.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    manufacturer_id: str | None = None
+    buildingline: Annotated[str | None, Field(max_length=BUILDINGLINE_LENGTH)] = None
+    model_name: Annotated[str | None, Field(max_length=MODEL_NAME_LENGTH)] = None
+    year_from: int | None = None
+    year_to: int | None = None
+    type_codes: Annotated[list[str], Field(max_length=identity_validation.MAX_TYPE_CODES)] = []
+    variants: Annotated[
+        list[identity_validation.Variant], Field(max_length=identity_validation.MAX_VARIANTS)
+    ] = []
+
+    @field_validator("year_from", "year_to")
+    @classmethod
+    def check_year_bounds(cls, value: int | None) -> int | None:
+        """Reject a year outside `[IDENTITY_YEAR_MIN, current year + 2]`."""
+        if value is None:
+            return value
+        year_max = datetime.now(UTC).year + 2
+        if not IDENTITY_YEAR_MIN <= value <= year_max:
+            raise ValueError(f"Must be between {IDENTITY_YEAR_MIN} and {year_max}.")
+        return value
+
+    @field_validator("type_codes")
+    @classmethod
+    def check_type_codes_shape(cls, value: list[str]) -> list[str]:
+        """Reject a type code that does not match `TYPE_CODE_PATTERN`."""
+        for code in value:
+            if not identity_validation.TYPE_CODE_PATTERN.match(code):
+                raise ValueError(f"Type code {code!r} does not match the required shape.")
+        return value
+
+    @model_validator(mode="after")
+    def check_year_pair(self) -> "IdentityRequest":
+        """Reject `yearTo` before `yearFrom` when both are set."""
+        if (
+            self.year_from is not None
+            and self.year_to is not None
+            and self.year_to < self.year_from
+        ):
+            raise ValueError("yearTo must not be before yearFrom.")
+        return self
+
+
 class ProductPatchAttributes(JsonApiModel):
     """The writable attributes of an existing product.
 
-    Both are optional; `verifiedSpec` (and anything else) is rejected outright.
+    All three are optional; `verifiedSpec` (and anything else) is rejected
+    outright. Applied by the endpoint in a fixed order — identity, then draft
+    specification, then status (D2) — documented on `update_product` itself.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -210,6 +372,10 @@ class ProductPatchAttributes(JsonApiModel):
     draft_spec: DraftSpecRequest | None = Field(
         default=None,
         description="Full replacement of the draft specification.",
+    )
+    identity: IdentityRequest | None = Field(
+        default=None,
+        description="Full replacement of the identity block (D2).",
     )
 
 

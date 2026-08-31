@@ -27,13 +27,20 @@ against `catalogue_search_service.COMPARISON_SPEC_FIELDS`.
 `sources` carries a document's title and its external URL only: `contentMarkdown`
 and `rawPath` are never served here — the one piece of prose a customer gets is
 the Wikipedia `article`, everything else is a link out (see D4).
+
+`CatalogueModelAttributes` also gains `variants` (step 6.20, ui-spec API-2): the
+same `ProductVariant` wire shape the admin `products` resource uses — one shape,
+imported rather than duplicated. It is **detail only**; the list resource gains
+nothing. `suggestion` and `typeCodes` appear on **no** attribute of this module
+— D6 — because the claim is never catalogue data and the type code is never
+customer-visible.
 """
 
 from typing import Literal
 
 from app.api.jsonapi import Document, JsonApiModel, ListDocument, Resource
 from app.api.schemas.images import ImageVariants
-from app.api.schemas.products import PriceBand, SpecCategory
+from app.api.schemas.products import PriceBand, ProductVariant, SpecCategory
 
 CATALOGUE_MODEL_TYPE = "catalogue-models"
 
@@ -108,6 +115,9 @@ class CatalogueModelAttributes(JsonApiModel):
     article: str | None
     sources: list[CatalogueSource]
     images: list[CatalogueImage]
+    # Detail only (D6, ui-spec API-2) — every trim of this generation except
+    # the base, which is this resource itself.
+    variants: list[ProductVariant]
 
 
 class CatalogueModelSummaryResource(Resource[CatalogueModelSummaryAttributes]):

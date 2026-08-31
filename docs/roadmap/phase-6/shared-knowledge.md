@@ -1393,3 +1393,91 @@ manufacturer prefix) is unaffected and applies to all 15.
   = []` and a NULL `suggestion` before this. The near-duplicate backlog row
   `suzuki-gsr-600` (imported, carrying the `WVB9` claim itself) is untouched
   and still pre-existing duplication, not this step's to resolve.
+
+### Step 6.20
+
+- **Final `identity` PATCH block** (`IdentityRequest`, `schemas/products.py`):
+  `manufacturerId`, `buildingline`, `modelName`, `yearFrom`, `yearTo`,
+  `typeCodes`, `variants` — exactly ui-spec API-1's names, `extra="forbid"`,
+  boundary caps reusing `identity_validation.Variant`/`TYPE_CODE_PATTERN`/
+  `MAX_TYPE_CODES`/`MAX_VARIANTS` directly (not restated), plus this schema's
+  own `IDENTITY_YEAR_MIN = 1885`/current-year+2 bounds and the `yearTo ≥
+  yearFrom` pair check. `update_product` applies `identity` **first**, then
+  `draftSpec`, then `status`; unknown `manufacturerId` is a **request-validation**
+  422 (`fastapi.exceptions.RequestValidationError`, loc
+  `["body","data","attributes","identity","manufacturerId"]`) — not a
+  `JsonApiError` — because the frontend's `validationFields` helper reads
+  `loc.at(-1)`; `DuplicateModelError` → 409 `duplicate-model`, now declared on
+  the route.
+- **`ProductAttributes` final additive members**: `queryName: string`
+  (required), `buildingline: string | null` (optional in the generated type —
+  see gotcha below), `typeCodes: string[]` (required), `variants:
+  ProductVariant[]` (required), `suggestion: ProductSuggestion | null`
+  (optional in the generated type). `ProductVariant`: `slug`, `name`,
+  `description: string | null`, `specs: Record<string, unknown> | null` (keys
+  stay the snake_case spec field names — data, not schema). `ProductSuggestion`:
+  `source`, `raw`, `manufacturer`, `model`, `yearFrom`, `yearTo`,
+  `inProduction`, `yearRanges: {from, to}[]`, `typeCodes`, `links` — camelCased
+  verbatim per ui-spec API-1, now final (not proposed).
+- **Buildinglines route**: `GET /api/manufacturers/{manufacturer_id}/buildinglines`,
+  admin-only (`current_admin` added on top of the router's own `current_user`),
+  404 on an unknown manufacturer, shape `{"data": ["GS", "RT", …]}`
+  (`BuildinglinesDocument`, `schemas/manufacturers.py`) via 6.10's
+  `list_buildinglines`.
+- **`CatalogueModelAttributes` gains `variants: ProductVariant[]` on the
+  detail only** (same imported wire model, not duplicated); the list resource
+  and `suggestion`/`typeCodes` on any catalogue-models resource stay absent —
+  D6 holds, asserted by
+  `test_suggestion_and_type_codes_never_appear_on_catalogue_models`.
+- **openapi-typescript gotcha, worth knowing before touching `ProductAttributes`
+  again**: FastAPI's exported schema drops the `default` key for a field whose
+  Python default is `None` *and* whose type already allows `null` — so giving
+  such a field `= None` removes it from `required` and the generated TS member
+  comes out optional (`?:`). A field whose real type is never `null` (e.g.
+  `queryName: str`, `typeCodes: list[str]`) cannot use the same trick
+  honestly: giving it a non-`None` default (`""`, `[]`) keeps a real `default`
+  key in the schema, and `openapi-typescript`'s `defaultNonNullable` (on by
+  default) then forces it back to **required** regardless. Only `buildingline`
+  and `suggestion` benefit from this; `queryName`/`typeCodes`/`variants` are
+  required, honestly, like every other non-nullable field on this model.
+- **`frontend/openapi.json` is git-ignored** (`frontend/.gitignore`: "only the
+  generated `src/api/schema.d.ts` is committed") and has **never** been a
+  tracked file in this repo's history — this document's "Merge-friction files"
+  entry and this step's own brief both say to commit it; that instruction
+  cannot be honoured without reversing a deliberate, documented frontend
+  convention (and backend agents don't touch `frontend/.gitignore`). Only
+  `frontend/src/api/schema.d.ts` was committed by this step; `frontend/openapi.json`
+  was regenerated on disk for the diff/verification but stays untracked, as
+  every prior state of the repo already had it.
+- **`pnpm typecheck` is not clean after this step**, and the gap is not
+  fixable from the schema without either editing a frontend file (out of
+  scope, forbidden) or misrepresenting a wire type (making a genuinely
+  non-nullable field nullable, or vice versa, purely to please a stand-in
+  type). Two independent causes, both pre-existing debt this step's
+  regeneration was the first to surface (it is the first `make generate-api`
+  run since 6.13):
+  1. `SourceType` gains `"listing"` (landed by 6.13, migration `d6545d99f81a`,
+     never previously regenerated into the client) and
+     `ModelDocumentsPanel.tsx`'s `t(\`admin.review.documents.sourceType.
+     ${row.sourceType}\`)` has no matching `admin.review.documents.sourceType.
+     listing` i18n key — 2 errors, unrelated to identity/variants/suggestion.
+  2. The 6.24/6.25/6.26-era **hand-authored stand-in types** in
+     `useProductReview.ts` (`ProductVariant`, `ProductIdentityFields`) and
+     `useCatalogueModel.ts` (`CatalogueVariant`) use `description?: string |
+     null` / `specs?: Partial<Record<string, unknown>>` (optional, never
+     `null`) where the now-real generated types are `description: string |
+     null` / `specs: Record<string, unknown> | null` (always present,
+     nullable) — exactly matching this step's pinned outline. Both landed
+     notes already flagged their own stand-ins as temporary: 6.24's "6.27
+     should re-check whether the landed schema adds a read-side id and
+     simplify this away", 6.25's "6.28 deletes this member and swaps to the
+     generated one". Plus every pre-6.20 fixture typed as plain `Product`
+     (`{ id: string } & components["schemas"]["ProductAttributes"]`,
+     `useProducts.ts`) now needs `queryName`/`typeCodes`/`variants` — 11
+     errors total, across `ModelIdentityPanel.tsx`/`.test.tsx`,
+     `ModelSpecsPanel.test.tsx`, `useCatalogueModel.ts`, `useProductReview
+     .test.ts`, `useProducts.test.ts`, `AdminBacklogRoute.test.tsx`,
+     `AdminModelReviewRoute.tsx`/`.test.tsx`, `test/catalogueApi.ts`. **6.27
+     (identity) and 6.28 (variants/usedPrice swap) own this reconciliation**;
+     it is not additional new debt, it is exactly the debt those steps'
+     own landed notes already named.

@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.db.models.manufacturer import Manufacturer
+from app.db.models.motorbike import Motorbike
 from app.db.models.user import UserRole
 from app.db.session import get_db_session
 from tests.services.conftest import FakeAsyncSession
@@ -196,3 +197,66 @@ def test_writes_are_not_routed(
 
     assert collection.status_code == 405
     assert detail.status_code == 405
+
+
+# --- GET /api/manufacturers/{id}/buildinglines (step 6.20, ui-spec API-5) -----
+
+
+def _seed_motorbike_with_buildingline(
+    session: FakeAsyncSession, manufacturer_id: str, name: str, buildingline: str | None
+) -> Motorbike:
+    motorbike = Motorbike(
+        query_name=name,
+        slug=name.lower().replace(" ", "-"),
+        manufacturer_id=manufacturer_id,
+        buildingline=buildingline,
+    )
+    session.add(motorbike)
+    return motorbike
+
+
+def test_buildinglines_returns_the_distinct_sorted_values(
+    admin_client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    bmw = _seed(fake_session, "BMW")[0]
+    _seed_motorbike_with_buildingline(fake_session, bmw.id, "BMW R 1250 RT", "RT")
+    _seed_motorbike_with_buildingline(fake_session, bmw.id, "BMW R 1250 GS", "GS")
+    _seed_motorbike_with_buildingline(fake_session, bmw.id, "BMW R 1300 GS", "GS")
+    _seed_motorbike_with_buildingline(fake_session, bmw.id, "BMW F 900 R", None)
+    other = _seed(fake_session, "Honda")[0]
+    _seed_motorbike_with_buildingline(fake_session, other.id, "Honda Africa Twin", "Africa Twin")
+
+    response = admin_client.get(f"/api/manufacturers/{bmw.id}/buildinglines")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"data": ["GS", "RT"]}
+
+
+def test_buildinglines_unknown_manufacturer_returns_404(admin_client: TestClient) -> None:
+    response = admin_client.get(f"/api/manufacturers/{'0' * 26}/buildinglines")
+
+    assert response.status_code == 404
+    assert response.json()["errors"][0]["code"] == "not-found"
+
+
+def test_buildinglines_as_non_admin_returns_403(
+    user_client: TestClient, fake_session: FakeAsyncSession
+) -> None:
+    """Admin-only, unlike the rest of this router (D2's `current_user` relax)."""
+    bmw = _seed(fake_session, "BMW")[0]
+
+    response = user_client.get(f"/api/manufacturers/{bmw.id}/buildinglines")
+
+    assert response.status_code == 403
+
+
+def test_buildinglines_without_a_session_returns_401(
+    api: FastAPI, fake_session: FakeAsyncSession
+) -> None:
+    bmw = _seed(fake_session, "BMW")[0]
+    api.dependency_overrides[get_db_session] = lambda: fake_session
+    with TestClient(api) as anonymous:
+        response = anonymous.get(f"/api/manufacturers/{bmw.id}/buildinglines")
+    api.dependency_overrides.clear()
+
+    assert response.status_code == 401

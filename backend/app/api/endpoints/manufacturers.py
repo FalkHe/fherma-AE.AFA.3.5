@@ -10,6 +10,11 @@ There is no write route at all: rows appear through
 `manufacturer_service.get_or_create`, called by extraction and by
 `app catalogue set-manufacturer`. Nothing to CSRF-protect, therefore, and no
 error code beyond the pinned `not-found`.
+
+The one exception is `buildinglines` (step 6.20, ui-spec API-5): admin-only
+(`current_admin`, on top of the router's own `current_user`), because it exists
+for the identity review form and nowhere else — a plain brand name is public
+information, a family list is curation tooling.
 """
 
 from typing import Annotated
@@ -18,8 +23,9 @@ from fastapi import APIRouter, Depends, Path, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import jsonapi
-from app.api.deps import current_user
+from app.api.deps import current_admin, current_user
 from app.api.schemas.manufacturers import (
+    BuildinglinesDocument,
     ManufacturerAttributes,
     ManufacturerDocument,
     ManufacturerListDocument,
@@ -27,7 +33,7 @@ from app.api.schemas.manufacturers import (
 )
 from app.db.models.manufacturer import Manufacturer
 from app.db.session import get_db_session
-from app.services import manufacturer_service
+from app.services import manufacturer_service, product_service
 
 router = APIRouter(
     prefix="/manufacturers",
@@ -94,3 +100,23 @@ async def get_manufacturer(
     """Return one manufacturer."""
     manufacturer = await _get_or_404(session, manufacturer_id)
     return ManufacturerDocument(data=_resource(manufacturer))
+
+
+@router.get(
+    "/{manufacturer_id}/buildinglines",
+    response_model=BuildinglinesDocument,
+    summary="List a manufacturer's buildingline values",
+    dependencies=[Depends(current_admin)],
+    responses=jsonapi.error_responses(status.HTTP_404_NOT_FOUND),
+)
+async def list_buildinglines(
+    session: SessionDep, manufacturer_id: ManufacturerIdDep
+) -> BuildinglinesDocument:
+    """Return `manufacturer_id`'s distinct, sorted `buildingline` values.
+
+    Backs the identity review form's family `Autocomplete` (ui-spec API-5),
+    via 6.10's `product_service.list_buildinglines` — read-only, admin-only.
+    """
+    await _get_or_404(session, manufacturer_id)
+    values = await product_service.list_buildinglines(session, manufacturer_id)
+    return BuildinglinesDocument(data=values)
