@@ -1484,3 +1484,47 @@ manufacturer prefix) is unaffected and applies to all 15.
      (identity) and 6.28 (variants/usedPrice swap) own this reconciliation**;
      it is not additional new debt, it is exactly the debt those steps'
      own landed notes already named.
+
+### Coordinator adjudication (2026-08-31) — 6.27's entry gate, and who owns the `listing` i18n key
+
+After 6.20 landed, `pnpm typecheck` reports **14 errors**. `step-6.27.md`'s
+entry gate says a type break "means 6.20 violated the additive rule — stop and
+report". **Adjudicated: 6.20 did *not* violate the additive rule, and 6.27
+proceeds.** The reasoning, so this is auditable rather than a convenient
+reading:
+
+- **The wire contract is additive.** No key was renamed, retyped or removed.
+  6.20 only *added* `queryName`, `buildingline`, `typeCodes`, `variants` and
+  `suggestion` to the admin products resource, `variants` to the
+  catalogue-models detail, and the `identity` PATCH block.
+- **12 of the 14 errors are the stand-in reconciliation this step exists to
+  do.** 6.24/6.25/6.26 deliberately hand-authored local approximations
+  (`ProductVariant`/`ProductIdentityFields` in `useProductReview.ts`,
+  `CatalogueVariant` in `useCatalogueModel.ts`) and typed fixtures as plain
+  `Product`. Their own Landed decisions entries said so and named the
+  reconciling step: 6.24 — *"6.27 should re-check … and simplify this away"*;
+  6.25/6.26 — *"6.28 deletes this"*. The errors are that idiom drift
+  (`description?: string | null` vs `description: string | null`) and fixtures
+  now missing newly-required response members. That is a **fixture and
+  stand-in** break, not a contract break.
+- **The remaining 2 errors are unowned and are hereby assigned to 6.27.**
+  `ModelDocumentsPanel.tsx` calls a typed `t()` for
+  `admin.review.documents.sourceType.<type>`, and 6.13 added the `listing`
+  enum value without the matching i18n key. 6.21 confirms **admin surfaces
+  keep showing `listing` documents** (that is where an admin audits what price
+  research fetched), so the key is genuinely needed and is not dead copy. No
+  step claimed it; 6.27 adds
+  `admin.review.documents.sourceType.listing` and says so in its report.
+
+**What does not change:** `frontend/src/api/schema.d.ts` is never hand-edited,
+and nothing casts around the generated types. 6.27's completion criterion is a
+**green `pnpm typecheck` after the swap**, achieved by deleting the local
+stand-ins and fixing the fixtures — never by loosening a generated type. If a
+genuine wire-shape problem surfaces during the swap (a field the SPA needs that
+6.20 did not expose, or a name that contradicts ui-spec §8), *that* is still a
+stop-and-report.
+
+**Note for 6.28:** it inherits the same reconciliation for the used-price
+stand-ins (`usedPrice` on `CatalogueModelDetail`, `CostEstimatorResult`) once
+6.23 regenerates the client. Expect the same class of fixture churn and treat
+it the same way.
