@@ -100,7 +100,7 @@ def _resource(
     return ProductResource(
         id=motorbike.id,
         attributes=ProductAttributes(
-            name=motorbike.name,
+            name=motorbike.query_name,
             slug=motorbike.slug,
             manufacturer=_manufacturer_name(motorbike, manufacturers),
             model_name=motorbike.model_name,

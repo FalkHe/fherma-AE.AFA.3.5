@@ -229,7 +229,9 @@ class _Run:
         """Store the Wikipedia article and return its lead image, if any."""
         await self._advance(*WIKIPEDIA_MILESTONE)
 
-        outcome = await wikipedia.lookup(self.motorbike.name, client=self.client, gate=self.gate)
+        outcome = await wikipedia.lookup(
+            self.motorbike.query_name, client=self.client, gate=self.gate
+        )
         if isinstance(outcome, wikipedia.WikipediaFailure):
             self._warn(outcome.detail)
             self.retryable |= outcome.reason in _TRANSIENT_WIKIPEDIA_REASONS
@@ -249,7 +251,7 @@ class _Run:
         await self._advance(*SEARCH_MILESTONE)
 
         results = await search.get_search_provider().search(
-            self.motorbike.name, client=self.client, gate=self.gate
+            self.motorbike.query_name, client=self.client, gate=self.gate
         )
         for warning in results.warnings:
             self._warn(warning)

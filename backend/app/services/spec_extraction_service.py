@@ -150,7 +150,7 @@ async def extract_draft_spec(
         return _failed(ExtractionFailureReason.NO_DOCUMENTS, MISSING_DOCUMENTS_DETAIL, motorbike)
 
     try:
-        extracted = await extraction.extract_spec(motorbike.name, documents, model=model)
+        extracted = await extraction.extract_spec(motorbike.query_name, documents, model=model)
     except MissingApiKeyError:
         # Deterministic, not transient: retrying cannot configure a key.
         return _failed(ExtractionFailureReason.MISSING_API_KEY, MISSING_KEY_DETAIL, motorbike)

@@ -133,7 +133,7 @@ def test_a_model_whose_slug_already_exists_in_any_status_is_skipped(
     ingested: list[str] = []
 
     async def _record_and_succeed(session: Any, motorbike: Any) -> Any:
-        ingested.append(motorbike.name)
+        ingested.append(motorbike.query_name)
         return await _stub_start_ingestion_success(session, motorbike)
 
     async def _seed_existing() -> None:
@@ -221,7 +221,9 @@ def test_auto_approve_calls_the_transition_service_on_success(
     for name in seed_list:
         assert f"{name}: approved" in result.stdout
     assert "0 seeded, 2 approved, 0 skipped, 0 failed." in result.stdout
-    statuses = {motorbike.name: motorbike.status for motorbike in fake_session.rows(Motorbike)}
+    statuses = {
+        motorbike.query_name: motorbike.status for motorbike in fake_session.rows(Motorbike)
+    }
     assert statuses == dict.fromkeys(seed_list, MotorbikeStatus.APPROVED)
 
 
@@ -233,5 +235,7 @@ def test_auto_approve_is_not_applied_to_a_failed_model(
     result = runner.invoke(cli, ["seed", "demo", "--auto-approve"])
 
     assert result.exit_code == 1, result.output
-    statuses = {motorbike.name: motorbike.status for motorbike in fake_session.rows(Motorbike)}
+    statuses = {
+        motorbike.query_name: motorbike.status for motorbike in fake_session.rows(Motorbike)
+    }
     assert statuses == dict.fromkeys(seed_list, MotorbikeStatus.BACKLOG)

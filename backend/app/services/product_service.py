@@ -240,7 +240,7 @@ async def create_backlog(
         raise DuplicateModelError(slug)
 
     motorbike = Motorbike(
-        name=name.strip(),
+        query_name=name.strip(),
         slug=slug,
         status=MotorbikeStatus.BACKLOG,
         suggestion=dict(suggestion) if suggestion is not None else None,

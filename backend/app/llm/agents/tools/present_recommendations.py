@@ -153,7 +153,7 @@ async def run(ctx: ToolContext, args: PresentRecommendationsArgs) -> PresentReco
     snapshots = [
         {
             "motorbikeId": motorbike.id,
-            "name": motorbike.name,
+            "name": motorbike.query_name,
             "imageUrl": await _card_image_url(ctx, motorbike.id),
             "rationale": item.rationale,
             "matchedPreferences": item.matched_preferences,

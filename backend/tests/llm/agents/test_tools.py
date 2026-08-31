@@ -58,7 +58,7 @@ class _Motorbike:
 
     def __init__(self, motorbike_id: str, name: str, status: Any) -> None:
         self.id = motorbike_id
-        self.name = name
+        self.query_name = name
         self.status = status
 
 

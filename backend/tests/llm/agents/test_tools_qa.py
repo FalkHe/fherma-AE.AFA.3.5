@@ -170,7 +170,7 @@ def _bike(name: str, status: MotorbikeStatus, motorbike_id: str = BIKE_A) -> Any
 
     entry = _M()
     entry.id = motorbike_id
-    entry.name = name
+    entry.query_name = name
     entry.status = status
     return entry
 
@@ -512,7 +512,7 @@ def test_the_drift_guard_would_fail_the_suite_for_an_unclassified_spec_column() 
 class _Motorbike:
     def __init__(self, motorbike_id: str, name: str, status: Any) -> None:
         self.id = motorbike_id
-        self.name = name
+        self.query_name = name
         self.status = status
 
 

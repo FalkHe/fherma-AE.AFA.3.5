@@ -568,3 +568,22 @@ Appended by the implementing agents — 1–3 bullets per step, no prose. Record
 anything a *later* step depends on: a name, a shape, a constant, a gotcha, a
 deviation that was approved. A step whose report mentions a convention or
 contract and does not appear here is not finished.
+
+### Step 6.9
+
+- Migration `7d45a675ac5e` (`down_revision = "c3a91f28b4d7"`) renames
+  `motorbikes.name` → `query_name` via a single `op.alter_column`; **6.10
+  chains its migration onto `7d45a675ac5e`**. Round trip (`upgrade head` →
+  `downgrade -1` → `upgrade head`) proven inside the container.
+- ORM attribute is now `Motorbike.query_name` (`NAME_LENGTH` constant kept its
+  name); every SQLAlchemy column reference, `.mappings()` dict key, and bound
+  `ilike`/substring param name that used to be `name`/`name_1` is now
+  `query_name`/`query_name_1` — anything reading a raw select-mapping row by
+  `["name"]` off `Motorbike.query_name` must use `["query_name"]`.
+  `BrowseRow.name` and `VerifiedSpecs.name` (the read-model dataclasses) and
+  every JSON:API/tool wire key `name` are **unchanged** — only the ORM
+  attribute renamed.
+- Both zero-behaviour-change captures (`/api/products` via an admin session,
+  `/api/catalogue-models?sort=name` via an authenticated session — the route
+  requires `current_user`, so the literal unauthenticated curl in the step
+  file was not meaningful) diffed **empty** before vs. after.

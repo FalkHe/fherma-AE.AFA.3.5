@@ -62,7 +62,7 @@ def _active(ctx: tools.ToolContext) -> list[tuple[str, str, str]]:
 
 def _backlog_names(session: FakeAsyncSession) -> list[tuple[str, str, str]]:
     """Every catalogue row as (name, slug, status) — the dedup evidence."""
-    return [(row.name, row.slug, row.status.value) for row in session.rows(Motorbike)]
+    return [(row.query_name, row.slug, row.status.value) for row in session.rows(Motorbike)]
 
 
 # --- record_preference --------------------------------------------------------

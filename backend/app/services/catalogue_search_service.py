@@ -237,7 +237,7 @@ async def get_verified_specs(
     return [
         VerifiedSpecs(
             motorbike_id=motorbike_id,
-            name=found[motorbike_id]["name"],
+            name=found[motorbike_id]["query_name"],
             values={field: _plain(found[motorbike_id][field]) for field in COMPARISON_SPEC_FIELDS},
         )
         for motorbike_id in motorbike_ids
@@ -290,7 +290,7 @@ async def browse_motorbikes(
         [
             BrowseRow(
                 motorbike_id=row["id"],
-                name=row["name"],
+                name=row["query_name"],
                 manufacturer_id=row["manufacturer_id"],
                 values={field: _plain(row[field]) for field in SUMMARY_SPEC_FIELDS},
             )
@@ -316,7 +316,7 @@ def _build_statement(filters: SpecFilters) -> Select[tuple[str]]:
             MotorbikeSpec.kind == SpecKind.VERIFIED,
             *_clauses(filters),
         )
-        .order_by(Motorbike.name, Motorbike.id)
+        .order_by(Motorbike.query_name, Motorbike.id)
     )
 
 
@@ -387,7 +387,7 @@ def _browse_statement(
     """Compose the one page statement `browse_motorbikes` issues."""
     columns = [getattr(MotorbikeSpec, field) for field in SUMMARY_SPEC_FIELDS]
     return (
-        select(Motorbike.id, Motorbike.name, Motorbike.manufacturer_id, *columns)
+        select(Motorbike.id, Motorbike.query_name, Motorbike.manufacturer_id, *columns)
         .outerjoin(MotorbikeSpec, _browse_join())
         .where(*conditions)
         .order_by(*_browse_order_by(sort))
@@ -419,18 +419,18 @@ def _browse_order_by(sort: BrowseSort) -> tuple[UnaryExpression[Any], ...]:
     and the id is always ascending, so paging is stable.
     """
     if sort is BrowseSort.NAME:
-        return (Motorbike.name.asc(), Motorbike.id.asc())
+        return (Motorbike.query_name.asc(), Motorbike.id.asc())
     if sort is BrowseSort.NAME_DESC:
-        return (Motorbike.name.desc(), Motorbike.id.asc())
+        return (Motorbike.query_name.desc(), Motorbike.id.asc())
     if sort is BrowseSort.MSRP_EUR:
         return (
             MotorbikeSpec.msrp_eur.asc().nulls_last(),
-            Motorbike.name.asc(),
+            Motorbike.query_name.asc(),
             Motorbike.id.asc(),
         )
     return (
         MotorbikeSpec.msrp_eur.desc().nulls_last(),
-        Motorbike.name.asc(),
+        Motorbike.query_name.asc(),
         Motorbike.id.asc(),
     )
 
@@ -441,11 +441,11 @@ def _name_match_statement(text: str) -> Select[tuple[Motorbike]]:
         select(Motorbike)
         .where(
             Motorbike.status == MotorbikeStatus.APPROVED,
-            Motorbike.name.ilike(f"%{_escaped(text)}%", escape="\\"),
+            Motorbike.query_name.ilike(f"%{_escaped(text)}%", escape="\\"),
         )
         # Shortest name first: "CB500F" should answer with the CB500F, not with a
         # longer entry that happens to contain it.
-        .order_by(func.length(Motorbike.name), Motorbike.name, Motorbike.id)
+        .order_by(func.length(Motorbike.query_name), Motorbike.query_name, Motorbike.id)
         .limit(1)
     )
 
@@ -469,7 +469,7 @@ def _specs_statement(motorbike_ids: Sequence[str]) -> Select[Any]:
     """
     columns = [getattr(MotorbikeSpec, field) for field in COMPARISON_SPEC_FIELDS]
     return (
-        select(Motorbike.id, Motorbike.name, *columns)
+        select(Motorbike.id, Motorbike.query_name, *columns)
         .outerjoin(
             MotorbikeSpec,
             and_(

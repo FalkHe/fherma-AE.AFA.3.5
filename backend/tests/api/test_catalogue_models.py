@@ -166,7 +166,7 @@ def _seed_motorbike(
     manufacturer_id: str | None = None,
 ) -> Motorbike:
     motorbike = Motorbike(
-        name=name,
+        query_name=name,
         slug=name.lower().replace(" ", "-"),
         status=status,
         manufacturer_id=manufacturer_id,
@@ -496,7 +496,7 @@ def test_detail_returns_specs_article_sources_and_images(
     verified_specs(
         VerifiedSpecs(
             motorbike_id=motorbike.id,
-            name=motorbike.name,
+            name=motorbike.query_name,
             values=_comparison_values(category="naked", engine_cc=471, a2_eligible=True),
         )
     )

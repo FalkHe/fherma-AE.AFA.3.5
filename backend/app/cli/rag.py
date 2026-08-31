@@ -88,7 +88,7 @@ async def _ask(
         for motorbike_id in result.candidate_motorbike_ids[:CANDIDATE_PREVIEW]:
             motorbike = await product_service.get_motorbike(session, motorbike_id)
             if motorbike is not None:
-                names[motorbike_id] = motorbike.name
+                names[motorbike_id] = motorbike.query_name
         return result, names
 
 

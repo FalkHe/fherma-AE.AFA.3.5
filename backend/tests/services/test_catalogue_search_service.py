@@ -119,7 +119,7 @@ def test_only_verified_specs_of_approved_models_are_searched() -> None:
     assert params["status_1"] is MotorbikeStatus.APPROVED
     assert params["kind_1"] is SpecKind.VERIFIED
     # A stable order the caller can cut without re-sorting.
-    assert "ORDER BY motorbikes.name, motorbikes.id" in sql
+    assert "ORDER BY motorbikes.query_name, motorbikes.id" in sql
 
 
 def test_an_empty_filter_set_narrows_nothing() -> None:
@@ -199,7 +199,7 @@ class _Motorbike:
     """The three attributes the resolver and the projection read."""
 
     id: str
-    name: str
+    query_name: str
     status: MotorbikeStatus
 
 
@@ -281,12 +281,12 @@ def test_a_name_the_slug_misses_falls_through_to_an_approved_substring_match() -
     assert _resolve(session, "CB500F") is approved
     sql = _sql_at(session, 1)
     params = _params_at(session, 1)
-    assert "motorbikes.name ILIKE ?" in sql
-    assert params["name_1"] == "%CB500F%"
+    assert "motorbikes.query_name ILIKE ?" in sql
+    assert params["query_name_1"] == "%CB500F%"
     # Approved only, shortest name first, one answer.
     assert "motorbikes.status = ?" in sql
     assert params["status_1"] is MotorbikeStatus.APPROVED
-    assert "ORDER BY length(motorbikes.name), motorbikes.name, motorbikes.id" in sql
+    assert "ORDER BY length(motorbikes.query_name), motorbikes.query_name, motorbikes.id" in sql
     assert "LIMIT ?" in sql
 
 
@@ -320,7 +320,7 @@ def test_like_wildcards_in_a_name_are_escaped_not_honoured() -> None:
 
     _resolve(session, "100% naked_bike")
 
-    assert _params_at(session, 1)["name_1"] == "%100\\% naked\\_bike%"
+    assert _params_at(session, 1)["query_name_1"] == "%100\\% naked\\_bike%"
     assert "ESCAPE '\\\\'" in _sql_at(session, 1)
 
 
@@ -373,9 +373,9 @@ def test_the_comparison_projection_keeps_the_requested_order_and_plain_values() 
     both are the service's problem, and a missing verified row stays `None`.
     """
     rows = [
-        {"id": OTHER_BIKE_ID, "name": "Suzuki GSR600"}
+        {"id": OTHER_BIKE_ID, "query_name": "Suzuki GSR600"}
         | dict.fromkeys(catalogue_search_service.COMPARISON_SPEC_FIELDS),
-        {"id": BIKE_ID, "name": "Honda CB500F"}
+        {"id": BIKE_ID, "query_name": "Honda CB500F"}
         | dict.fromkeys(catalogue_search_service.COMPARISON_SPEC_FIELDS)
         | {"power_kw": Decimal("35.0"), "seat_height_mm": 785, "category": "naked"},
     ]
@@ -414,13 +414,15 @@ BrowseSort = catalogue_search_service.BrowseSort
 
 # The four pinned orderings, spelled exactly as they must compile.
 BROWSE_ORDERINGS = {
-    BrowseSort.NAME: "ORDER BY motorbikes.name ASC, motorbikes.id ASC",
-    BrowseSort.NAME_DESC: "ORDER BY motorbikes.name DESC, motorbikes.id ASC",
+    BrowseSort.NAME: "ORDER BY motorbikes.query_name ASC, motorbikes.id ASC",
+    BrowseSort.NAME_DESC: "ORDER BY motorbikes.query_name DESC, motorbikes.id ASC",
     BrowseSort.MSRP_EUR: (
-        "ORDER BY motorbike_specs.msrp_eur ASC NULLS LAST, motorbikes.name ASC, motorbikes.id ASC"
+        "ORDER BY motorbike_specs.msrp_eur ASC NULLS LAST, "
+        "motorbikes.query_name ASC, motorbikes.id ASC"
     ),
     BrowseSort.MSRP_EUR_DESC: (
-        "ORDER BY motorbike_specs.msrp_eur DESC NULLS LAST, motorbikes.name ASC, motorbikes.id ASC"
+        "ORDER BY motorbike_specs.msrp_eur DESC NULLS LAST, "
+        "motorbikes.query_name ASC, motorbikes.id ASC"
     ),
 }
 
@@ -471,7 +473,7 @@ def _browse(
 def _browse_row(**values: Any) -> dict[str, Any]:
     """One page row as the database mapping would hand it over."""
     return (
-        {"id": BIKE_ID, "name": "Honda CB500F", "manufacturer_id": MANUFACTURER_ID}
+        {"id": BIKE_ID, "query_name": "Honda CB500F", "manufacturer_id": MANUFACTURER_ID}
         | dict.fromkeys(catalogue_search_service.SUMMARY_SPEC_FIELDS)
         | values
     )
@@ -601,7 +603,7 @@ def test_the_page_projects_identity_plus_the_summary_columns_only() -> None:
     _browse(session)
     sql = _sql_at(session, 1)
 
-    assert "SELECT motorbikes.id, motorbikes.name, motorbikes.manufacturer_id" in sql
+    assert "SELECT motorbikes.id, motorbikes.query_name, motorbikes.manufacturer_id" in sql
     for field in catalogue_search_service.SUMMARY_SPEC_FIELDS:
         assert f"motorbike_specs.{field}" in sql
     for field in set(catalogue_search_service.COMPARISON_SPEC_FIELDS) - set(

@@ -32,7 +32,7 @@ class MotorbikeStatus(StrEnum):
 class Motorbike(ULIDPrimaryKeyMixin, Base):
     """A motorcycle model the catalogue knows about.
 
-    `name` keeps the display form an admin typed ("Suzuki GSR 600"); `slug` is
+    `query_name` keeps the phrase an admin typed ("Suzuki GSR 600"); `slug` is
     the derived, unique identity used to reject duplicates. Structured fields
     (`manufacturer_id`, `model_name`, years) stay NULL until extraction or an
     admin fills them in.
@@ -47,7 +47,7 @@ class Motorbike(ULIDPrimaryKeyMixin, Base):
 
     __tablename__ = "motorbikes"
 
-    name: Mapped[str] = mapped_column(String(NAME_LENGTH))
+    query_name: Mapped[str] = mapped_column(String(NAME_LENGTH))
     slug: Mapped[str] = mapped_column(String(SLUG_LENGTH), unique=True)
     # No `ondelete`: nothing ever deletes a manufacturer, so the default NO
     # ACTION is the guard against a dangling reference.

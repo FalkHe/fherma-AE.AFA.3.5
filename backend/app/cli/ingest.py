@@ -219,7 +219,7 @@ async def _run(name: str) -> tuple[str, str]:
                 motorbike = await product_service.create_backlog(session, name)
                 typer.echo(f"Created catalogue entry {motorbike.id}.", err=True)
             operation = await product_service.start_ingestion(session, motorbike)
-            return motorbike.name, operation.id
+            return motorbike.query_name, operation.id
     finally:
         await broker.shutdown()
 

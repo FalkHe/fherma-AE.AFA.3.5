@@ -90,7 +90,7 @@ def test_slugify_pinned_rule(name: str, expected: str) -> None:
 def test_create_backlog_stores_slug_and_backlog_status(fake_session: FakeAsyncSession) -> None:
     motorbike = _backlog(fake_session, "  Suzuki GSR 600 ")
 
-    assert motorbike.name == "Suzuki GSR 600"
+    assert motorbike.query_name == "Suzuki GSR 600"
     assert motorbike.slug == "suzuki-gsr-600"
     assert motorbike.status is MotorbikeStatus.BACKLOG
     assert motorbike.id is not None

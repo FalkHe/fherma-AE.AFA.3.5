@@ -148,7 +148,7 @@ def test_import_creates_one_backlog_entry_per_line_and_ingests_nothing(
 
     assert result.exit_code == 0, result.output
     motorbikes = fake_session.rows(Motorbike)
-    assert [motorbike.name for motorbike in motorbikes] == [
+    assert [motorbike.query_name for motorbike in motorbikes] == [
         "BMW R 1200 GS",
         "Kawasaki Ninja ZX-6R",
         "Suzuki SV 650",
@@ -164,7 +164,7 @@ def test_import_stores_the_claims_without_touching_the_typed_columns(
 ) -> None:
     runner.invoke(cli, ["suggestions", "import", str(list_path)])
 
-    gs = next(row for row in fake_session.rows(Motorbike) if row.name == "BMW R 1200 GS")
+    gs = next(row for row in fake_session.rows(Motorbike) if row.query_name == "BMW R 1200 GS")
     assert gs.suggestion["year_from"] == 2004
     assert gs.suggestion["type_codes"] == ["K25", "K50"]
     # Only research fills these in — a claim is not a fact.
@@ -184,7 +184,7 @@ def test_import_leaves_an_existing_entry_alone(
     fake_session: FakeAsyncSession, list_path: Path
 ) -> None:
     existing = Motorbike(
-        name="Suzuki SV 650",
+        query_name="Suzuki SV 650",
         slug="suzuki-sv-650",
         status=MotorbikeStatus.APPROVED,
         suggestion={"source": "earlier"},
@@ -202,7 +202,7 @@ def test_import_attaches_the_suggestion_to_an_entry_that_has_none(
     fake_session: FakeAsyncSession, list_path: Path
 ) -> None:
     existing = Motorbike(
-        name="Suzuki SV 650", slug="suzuki-sv-650", status=MotorbikeStatus.IN_REVIEW
+        query_name="Suzuki SV 650", slug="suzuki-sv-650", status=MotorbikeStatus.IN_REVIEW
     )
     fake_session.add(existing)
 

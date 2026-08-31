@@ -389,7 +389,7 @@ async def get_catalogue_model(
         data=CatalogueModelResource(
             id=motorbike.id,
             attributes=CatalogueModelAttributes(
-                name=motorbike.name,
+                name=motorbike.query_name,
                 manufacturer=_manufacturer_name(motorbike.manufacturer_id, manufacturers),
                 specs=_specs(specs[0].values if specs else None),
                 article=_article(documents),
