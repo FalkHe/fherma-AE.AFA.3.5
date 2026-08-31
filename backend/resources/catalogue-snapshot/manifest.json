@@ -1,0 +1,18 @@
+{
+  "created_at": "2026-08-31T18:12:10.465786+00:00",
+  "data_files": 269,
+  "embedding_dimensions": 1536,
+  "embedding_model": "openai/text-embedding-3-small",
+  "media_files": 96,
+  "missing_files": [],
+  "snapshot_version": 1,
+  "tables": {
+    "chunks": 1744,
+    "manufacturers": 10,
+    "motorbike_images": 24,
+    "motorbike_specs": 108,
+    "motorbike_used_prices": 0,
+    "motorbikes": 208,
+    "source_documents": 269
+  }
+}
