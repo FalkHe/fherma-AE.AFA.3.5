@@ -19,6 +19,8 @@ import { ModelSources } from "../components/ModelSources";
 import { ModelSpecTable } from "../components/ModelSpecTable";
 import { formatSpecEnum } from "../components/specFields";
 import { UntrustedMarkdown } from "../components/UntrustedMarkdown";
+import { isUsedPrice } from "../components/usedPrice";
+import { UsedPriceSnapshot } from "../components/UsedPriceSnapshot";
 import { CatalogueError, useCatalogueModel } from "../hooks/useCatalogueModel";
 
 /**
@@ -180,7 +182,8 @@ export function CatalogueModelRoute() {
     );
   }
 
-  const { name, manufacturer, specs, article, sources, images, variants } = model.data;
+  const { name, manufacturer, specs, article, sources, images, variants, usedPrice } =
+    model.data;
 
   return (
     <>
@@ -247,6 +250,14 @@ export function CatalogueModelRoute() {
           <ModelSpecTable specs={specs} variants={variants} />
         </Grid>
       </Grid>
+      {isUsedPrice(usedPrice) && (
+        // Used-market snapshot (ui-spec §4.2) — full-width, between the
+        // image/spec Grid and the About article. Absent (`null` or member
+        // missing) renders nothing at all: no heading, no "no price yet" line.
+        <Paper variant="outlined" sx={{ p: 2, mt: 4 }}>
+          <UsedPriceSnapshot usedPrice={usedPrice} />
+        </Paper>
+      )}
       {article !== null && (
         <>
           <Typography variant="h5" component="h2" sx={{ mt: 4, mb: 1 }}>

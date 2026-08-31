@@ -50,6 +50,18 @@
       "yearFrom": "from {{from}}",
       "yearUntil": "until {{to}}",
       "yearSingle": "{{year}}"
+    },
+    "usedPrice": {
+      "heading": "Used market price",
+      "snapshotChip": "Market snapshot",
+      "range": "{{min}} – {{max}}",
+      "median": "Median {{median}}",
+      "sampleCount": "{{count}} listings observed",
+      "sampleUnknown": "Sample size unknown",
+      "asOf": "as of {{date}}",
+      "disclaimer": "Asking prices observed on the linked marketplaces — a dated snapshot, not a valuation.",
+      "sources": "Sources",
+      "stale": "This snapshot is older than the market-data window and may no longer reflect current prices."
     }
   },
   "auth": {

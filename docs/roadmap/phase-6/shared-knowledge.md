@@ -814,3 +814,56 @@ contract and does not appear here is not finished.
   useful as a fixture; its year range came from the step file, not a source
   document, so 6.18/6.30 should treat it as test scaffolding rather than
   reviewed catalogue data.
+
+### Step 6.26
+
+- New `frontend/src/components/usedPrice.ts` (types + guard, split out of the
+  component file for `react-refresh/only-export-components`) exports the D11
+  wire shape `UsedPrice = { medianEur, minEur, maxEur, sampleCount, asOf,
+  stale, sources: { title, url }[] }` and `isUsedPrice(value: unknown): value
+  is UsedPrice` — the single malformed guard (missing/mistyped `minEur`,
+  `maxEur`, `medianEur`, `asOf`, or a non-array/empty `sources`, all fail it).
+  New `frontend/src/components/UsedPriceSnapshot.tsx` exports **only**
+  `UsedPriceSnapshot({ usedPrice: unknown, currency = "EUR" })` — it runs
+  `isUsedPrice` itself and returns `null` on failure, so callers may pass the
+  raw, untyped payload straight through. `currency` is never read off
+  `usedPrice`; both call sites must supply it explicitly.
+- Formatting is pinned exactly as ui-spec §4.1: `Intl.NumberFormat(i18n
+  .language, { style: "currency", currency, maximumFractionDigits: 0 })` for
+  money, `Intl.DateTimeFormat(i18n.language, { dateStyle: "medium" })` over
+  `asOf`. Staleness renders from `usedPrice.stale` only — no client clock, no
+  `staleDays`. i18n keys landed under `common.usedPrice.*` in
+  `frontend/src/locales/en/translation.json`, values byte-exact to ui-spec §7
+  (only locale — there is no `de`).
+- Call sites: `frontend/src/routes/CatalogueModelRoute.tsx` renders
+  `<Paper variant="outlined" sx={{ p: 2, mt: 4 }}><UsedPriceSnapshot
+  usedPrice={usedPrice} /></Paper>` gated by `isUsedPrice(usedPrice)`, between
+  the image/spec `Grid` and the "About" article — absent renders nothing at
+  all (no `Paper`, no heading). `frontend/src/components/
+  ToolResultCostEstimator.tsx` renders `<Divider sx={{ my: 1 }}
+  /><UsedPriceSnapshot usedPrice={result.usedPrice} currency={result
+  .currency} />` after the assumptions `Collapse`, gated the same way — no
+  divider when absent, rest of the block byte-identical (line items, total,
+  "Estimate" chip, assumptions untouched).
+- Typing/stubs (6.28 deletes both): `frontend/src/hooks/useCatalogueModel.ts`'s
+  `CatalogueModelDetail` gained `Partial<{ …; usedPrice: UsedPrice | null }>`
+  (same pattern as 6.25's `variants`) — import `UsedPrice` from `../
+  components/usedPrice`, not `UsedPriceSnapshot.tsx`.
+  `frontend/src/components/toolResults.ts`'s `CostEstimatorResult` gained
+  `usedPrice?: unknown` deliberately untyped at that layer (the shape check
+  there validates only the fields `ToolResultCostEstimator` reads directly;
+  `UsedPriceSnapshot`'s own `isUsedPrice` is the malformed guard, so a broken
+  `usedPrice` never costs the rest of the tool result its styled renderer).
+- Fixtures: `frontend/src/test/catalogueApi.ts`'s `ModelAttributes` gained a
+  local `usedPrice?: {...} | null` member; the Suzuki GSR 600 detail fixture
+  now carries a present, non-stale snapshot (median €4,800, 14 listings), the
+  Honda Rebel 500 fixture stays absent (the defined "no researched price"
+  state). `frontend/src/test/chatFixtures.ts` gained
+  `costEstimatorCallWithUsedPrice` (same line items/total/assumptions as
+  `costEstimatorCall`, `usedPrice.stale: true`) alongside the untouched,
+  still-absent `costEstimatorCall`.
+- Two pre-existing `CatalogueModelRoute.test.tsx` chip-list assertions
+  (container-wide `.MuiChip-root` scans) needed updating to include the new
+  "Market snapshot" chip's concatenated icon-ligature + label text
+  (`"scheduleMarket snapshot"`) — same idiom as every other `Icon`-led `Chip`
+  already in that suite, not a new pattern.

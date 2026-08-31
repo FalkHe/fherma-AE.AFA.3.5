@@ -148,6 +148,33 @@ export const costEstimatorCall: ToolCall = {
   error: null,
 };
 
+/**
+ * The same estimate, with a researched used-price snapshot attached
+ * (shared-knowledge D11, ui-spec §4.3/§8 API-4) — additive, so every field
+ * `costEstimatorCall` already carries stays byte-identical.
+ */
+export const costEstimatorCallWithUsedPrice: ToolCall = {
+  ...costEstimatorCall,
+  id: "01TOOLCALL0000000000000008",
+  result: {
+    ...(costEstimatorCall.result as Record<string, unknown>),
+    usedPrice: {
+      medianEur: 4800,
+      minEur: 3900,
+      maxEur: 5600,
+      sampleCount: 14,
+      asOf: "2026-07-01T00:00:00Z",
+      stale: true,
+      sources: [
+        { title: "kleinanzeigen.de", url: "https://www.kleinanzeigen.de/s-anzeige/example" },
+        { title: "mobile.de", url: "https://suchen.mobile.de/example" },
+      ],
+    },
+  },
+  status: "succeeded",
+  error: null,
+};
+
 export const recordPreferenceCall: ToolCall = {
   id: "01TOOLCALL0000000000000005",
   tool: "record_preference",

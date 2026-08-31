@@ -1,6 +1,7 @@
 import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
 import Collapse from "@mui/material/Collapse";
+import Divider from "@mui/material/Divider";
 import Icon from "@mui/material/Icon";
 import List from "@mui/material/List";
 import ListItem from "@mui/material/ListItem";
@@ -13,6 +14,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { CostEstimatorResult } from "./toolResults";
+import { isUsedPrice } from "./usedPrice";
+import { UsedPriceSnapshot } from "./UsedPriceSnapshot";
 
 /**
  * What owning the bike costs (ui-spec §8.5).
@@ -114,6 +117,12 @@ export function ToolResultCostEstimator({ result }: { result: CostEstimatorResul
               ))}
             </List>
           </Collapse>
+        </>
+      )}
+      {isUsedPrice(result.usedPrice) && (
+        <>
+          <Divider sx={{ my: 1 }} />
+          <UsedPriceSnapshot usedPrice={result.usedPrice} currency={result.currency} />
         </>
       )}
     </>

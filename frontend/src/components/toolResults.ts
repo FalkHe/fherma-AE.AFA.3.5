@@ -133,11 +133,19 @@ export function isLicenceFitCheckResult(value: unknown): value is LicenceFitChec
 /** One line of the cost estimate; the label (incl. any "/year") is verbatim. */
 export type CostLineItem = { label: string; amount: number };
 
+/**
+ * `usedPrice` is additive (shared-knowledge D11, ui-spec §4.3/§8 API-4). Its
+ * shape is validated by `UsedPriceSnapshot`'s own guard, not here — a malformed
+ * or absent `usedPrice` must not cost the rest of this result its styled
+ * renderer, so it is deliberately typed `unknown` at this layer and passed
+ * through unchecked.
+ */
 export type CostEstimatorResult = {
   currency: string;
   lineItems: CostLineItem[];
   total: number;
   assumptions: string[];
+  usedPrice?: unknown;
 };
 
 function isCostLineItem(value: unknown): value is CostLineItem {

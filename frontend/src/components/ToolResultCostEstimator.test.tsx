@@ -2,7 +2,7 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import { costEstimatorCall } from "../test/chatFixtures";
+import { costEstimatorCall, costEstimatorCallWithUsedPrice } from "../test/chatFixtures";
 import { renderWithProviders } from "../test/render";
 
 import { CostEstimateChip, ToolResultCostEstimator } from "./ToolResultCostEstimator";
@@ -15,6 +15,16 @@ import { isCostEstimatorResult, type CostEstimatorResult } from "./toolResults";
 
 function fixtureResult(): CostEstimatorResult {
   const result = costEstimatorCall.result;
+
+  if (!isCostEstimatorResult(result)) {
+    throw new Error("the pinned cost_estimator fixture no longer matches its schema");
+  }
+
+  return result;
+}
+
+function fixtureResultWithUsedPrice(): CostEstimatorResult {
+  const result = costEstimatorCallWithUsedPrice.result;
 
   if (!isCostEstimatorResult(result)) {
     throw new Error("the pinned cost_estimator fixture no longer matches its schema");
@@ -63,6 +73,28 @@ describe("ToolResultCostEstimator", () => {
 
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("8,000 km per year in Germany.")).toBeVisible();
+  });
+
+  it("renders the used-price snapshot after the assumptions block when the result carries one", () => {
+    renderWithProviders(<ToolResultCostEstimator result={fixtureResultWithUsedPrice()} />);
+
+    // Line items, total and assumptions toggle are unaffected.
+    expect(screen.getByRole("rowheader", { name: "Total" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Assumptions \(3\)/ })).toBeInTheDocument();
+    // The snapshot block, including its stale caption (fixture is stale: true).
+    expect(screen.getByText("Used market price")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This snapshot is older than the market-data window and may no longer reflect current prices.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("renders no snapshot DOM, and the rest byte-identical, when usedPrice is absent", () => {
+    renderWithProviders(<ToolResultCostEstimator result={fixtureResult()} />);
+
+    expect(screen.queryByText("Used market price")).toBeNull();
+    expect(screen.getByRole("rowheader", { name: "Total" })).toBeInTheDocument();
   });
 
   it("omits the disclosure when there is nothing assumed", () => {

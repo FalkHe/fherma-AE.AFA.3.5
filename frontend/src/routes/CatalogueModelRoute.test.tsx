@@ -65,7 +65,15 @@ describe("CatalogueModelRoute", () => {
     // either; only a verified `true` earns the badge).
     expect(
       Array.from(container.querySelectorAll(".MuiChip-root"), (chip) => chip.textContent),
-    ).toEqual(["Comfort", "Sport", "Naked", "Budget (under €5,000)"]);
+    ).toEqual([
+      "Comfort",
+      "Sport",
+      "Naked",
+      "Budget (under €5,000)",
+      // The used-price block's "Market snapshot" chip (§4.1) — icon ligature
+      // text plus label, same as every other `Icon`-led `Chip` in this suite.
+      "scheduleMarket snapshot",
+    ]);
 
     const gallery = screen.getByRole("group", { name: "Photos of Suzuki GSR 600" });
 
@@ -130,7 +138,15 @@ describe("CatalogueModelRoute", () => {
     // Two chips — one description-only, one carrying a delta.
     expect(
       Array.from(container.querySelectorAll(".MuiChip-root"), (chip) => chip.textContent),
-    ).toEqual(["Comfort", "Sport", "Naked", "Budget (under €5,000)"]);
+    ).toEqual([
+      "Comfort",
+      "Sport",
+      "Naked",
+      "Budget (under €5,000)",
+      // The used-price block's "Market snapshot" chip (§4.1) — icon ligature
+      // text plus label, same as every other `Icon`-led `Chip` in this suite.
+      "scheduleMarket snapshot",
+    ]);
 
     // One delta row, appended as a final group titled "Trims", never phrased
     // as a filter promise.
@@ -226,6 +242,22 @@ describe("CatalogueModelRoute", () => {
     expect(screen.queryByText("About this bike")).toBeNull();
     // The sources block stays — it is the page's provenance surface.
     expect(screen.getByRole("list", { name: "Sources" })).toBeInTheDocument();
+  });
+
+  it("renders the used-price block when the detail carries one (ui-spec §4.2)", async () => {
+    renderRoute(IDS.full);
+
+    expect(await screen.findByText("Used market price")).toBeInTheDocument();
+    expect(screen.getByText("€3,900 – €5,600")).toBeInTheDocument();
+    expect(screen.getByText("Market snapshot")).toBeInTheDocument();
+  });
+
+  it("renders no used-price block, no heading, when the member is absent", async () => {
+    renderRoute(IDS.sparse);
+
+    await screen.findByText("Engine & performance");
+
+    expect(screen.queryByText("Used market price")).toBeNull();
   });
 
   it("answers an unpublished or unknown id with the not-found state", async () => {

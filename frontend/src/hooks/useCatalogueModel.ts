@@ -2,6 +2,7 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 import { apiClient } from "../api/client";
 import type { components } from "../api/schema";
+import type { UsedPrice } from "../components/usedPrice";
 import { queryKeys } from "../queryKeys";
 
 /**
@@ -59,11 +60,17 @@ export type CatalogueVariant = {
  * `variants` is `Partial` (step 6.25): today's payload does not carry it at
  * all, and the trims chip row / spec-table group both degrade to "renders
  * nothing" per display-spec §11 when the member is absent.
+ *
+ * `usedPrice` is `Partial` for the same reason (step 6.26, ui-spec §8 API-3):
+ * the generated `CatalogueModelAttributes` does not carry it until backend
+ * step 6.23 lands `usedPrice` on the detail resource — 6.28 deletes this
+ * member and swaps to the generated one. `null` is the defined "no researched
+ * price yet" state; an absent member is the pre-6.23 payload shape.
  */
 export type CatalogueModelDetail = {
   motorbikeId: string;
 } & components["schemas"]["CatalogueModelAttributes"] &
-  Partial<{ variants: CatalogueVariant[] }>;
+  Partial<{ variants: CatalogueVariant[]; usedPrice: UsedPrice | null }>;
 
 /**
  * A failed catalogue read.

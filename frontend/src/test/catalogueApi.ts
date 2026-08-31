@@ -32,6 +32,21 @@ type ModelAttributes = components["schemas"]["CatalogueModelAttributes"] & {
     description?: string | null;
     specs?: Partial<Record<string, unknown>>;
   }[];
+  /**
+   * `usedPrice` (data-model §2.5-adjacent, ui-spec §8 API-3) is a local
+   * addition — the generated `CatalogueModelAttributes` does not carry it
+   * until backend step 6.23 lands, same "local member, deleted by 6.28"
+   * pattern as `variants` above.
+   */
+  usedPrice?: {
+    medianEur: number;
+    minEur: number;
+    maxEur: number;
+    sampleCount: number | null;
+    asOf: string;
+    stale: boolean;
+    sources: { title: string; url: string }[];
+  } | null;
 };
 type SpecCategory = components["schemas"]["SpecCategory"];
 type PriceBand = components["schemas"]["PriceBand"];
@@ -234,6 +249,19 @@ const DETAILS: Record<string, ModelAttributes> = {
       imageVariants(IMAGE_PATHS[2], "Photo: Wikimedia Commons, CC BY-SA 4.0"),
       imageVariants(IMAGE_PATHS[3], null),
     ],
+    // A researched used-price snapshot (ui-spec §4.2) — present and not stale.
+    usedPrice: {
+      medianEur: 4800,
+      minEur: 3900,
+      maxEur: 5600,
+      sampleCount: 14,
+      asOf: "2026-07-01T00:00:00Z",
+      stale: false,
+      sources: [
+        { title: "kleinanzeigen.de", url: "https://www.kleinanzeigen.de/s-anzeige/example" },
+        { title: "mobile.de", url: "https://suchen.mobile.de/example" },
+      ],
+    },
   },
   [fixtureId("hondarebel500")]: {
     name: "Honda Rebel 500",
