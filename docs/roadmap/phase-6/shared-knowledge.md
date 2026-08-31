@@ -1253,3 +1253,38 @@ Also recorded from 6.15's live run, because later steps meet it:
   verbatim — a real, not synthetic, D13 contradiction. The row is now
   `in_review` at slug `bmw/f-750-gs/2018-`; 6.18/6.30 may treat it as a genuine
   ingestion output.
+
+### Coordinator note (2026-08-31) — step 6.18's data preparation is stale; read this before starting it
+
+`step-6.18.md`'s "Data preparation" paragraph is wrong in three ways, all
+verified by psql at head `d6545d99f81a`. It is **not** a contract change — D4
+and OQ-6 stand unaltered — but the concrete commands in that paragraph must not
+be run as written.
+
+1. **`bmw-s-1000-xr` and `honda-cb500f` do not exist in the dev DB at all.**
+   Two of the step's three `set-identity` commands target rows that are not
+   there. Only `suzuki-gsr600` exists (and is approved).
+2. **There are 16 approved rows, not 3, and 15 of them have a NULL
+   `model_name` *and* a NULL `year_from`.** The full list is in the earlier
+   coordinator note; the only complete one is `kawasaki/ninja-650/2006-`
+   (produced by 6.15's extraction and approved while proving the D4 guard).
+   So the migration's `VALIDATE` needs a **sourced year range on 15 rows**.
+3. **Every one of those 15 rows already has 2–7 ingested source documents**,
+   so D4's adjudicated method is available: read the year range out of the
+   row's *stored* documents and quote the sentence in the report. Do not guess,
+   do not use the agent's own knowledge, and do not read `suggestion` (D6).
+
+**The hard part, stated plainly: there is no legal way to demote an approved
+row.** `LEGAL_TRANSITIONS[APPROVED]` is `frozenset()` — approved is terminal
+(`product_service.py`). So OQ-6's "a row whose documents do not state a range
+is left unapproved and printed" **cannot be applied to a row that is already
+approved**: the service offers no `approved → in_review` path, and reaching for
+raw SQL to force one would violate "services own transactions". Consequently, a
+row among those 15 whose stored documents genuinely do not state a production
+start year is a **stop-and-report**, not a judgement call — it means the phase
+needs either an owner decision or a deliberate new transition, and neither is
+6.18's to invent. Report the row, its documents, and stop; do not guess a year
+to make the constraint pass, and do not force the status with SQL.
+
+The backfill's mechanical half (`model_name` = `query_name` minus the FK'd
+manufacturer prefix) is unaffected and applies to all 15.
