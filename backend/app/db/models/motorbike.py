@@ -2,8 +2,10 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import DateTime, Enum, ForeignKey, SmallInteger, String, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.models.base import ULID_LENGTH, Base, ULIDPrimaryKeyMixin
@@ -37,6 +39,10 @@ class Motorbike(ULIDPrimaryKeyMixin, Base):
 
     The brand lives in the `manufacturers` table, referenced by id: there is no
     relationship, so callers resolve it through `manufacturer_service`.
+
+    `suggestion` is the unverified counterpart of those structured fields: what
+    whoever proposed the model claimed about it. It is a hint for ingestion and
+    for the reviewing admin — **never** a fact, and never rendered as one.
     """
 
     __tablename__ = "motorbikes"
@@ -51,6 +57,11 @@ class Motorbike(ULIDPrimaryKeyMixin, Base):
     model_name: Mapped[str | None] = mapped_column(String(MODEL_NAME_LENGTH))
     year_from: Mapped[int | None] = mapped_column(SmallInteger)
     year_to: Mapped[int | None] = mapped_column(SmallInteger)
+    # Free-shape on purpose: a suggestion carries whatever its source knew
+    # (year range, type codes, links, the raw line). The keys the importer
+    # writes are documented in `app.cli.suggestions`; nothing filters on them,
+    # so the column stays a JSON document rather than a set of columns.
+    suggestion: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     status: Mapped[MotorbikeStatus] = mapped_column(
         # Native PostgreSQL enum carrying the member *values* (see `User.role`).
         Enum(

@@ -1,0 +1,242 @@
+BMW R 1200 GS (2004–2018) [K25/K50] ([Wikipedia][1])
+BMW R 1250 GS (2018–2023) [K50]
+BMW R 1300 GS (2023–present) [KA1]
+BMW R 1200 GS Adventure (2006–2018) [K255/K51] ([Wikipedia][2])
+BMW R 1250 GS Adventure (2018–2024) [K51]
+BMW F 650 GS Twin (2007–2012) [K72]
+BMW F 700 GS (2012–2018) [K70]
+BMW F 800 GS (2007–2018) [K72]
+BMW F 750 GS (2018–2023) [K80] ([Wikipedia][3])
+BMW F 850 GS (2018–2023) [K81] ([Wikipedia][4])
+BMW F 800 R (2009–2019) [K73]
+BMW F 900 R (2020–present) [K83]
+BMW R 1200 R (2006–2018) [K27/K53]
+BMW R 1250 R (2018–2024) [K53] ([Wikipedia][5])
+BMW R 1200 RT (2005–2018) [K26/K52]
+BMW R 1250 RT (2018–2024) [K52] ([Wikipedia][6])
+BMW R nineT (2014–2023) [K21]
+BMW S 1000 RR (2009–present) [K46/K67]
+BMW S 1000 R (2013–present) [K47/K63] ([Wikipedia][7])
+BMW F 800 GT (2012–2019) [K71] ([Wikipedia][8])
+Honda CBF 600 (2004–2013) [PC38/PC43] ([Wikipedia][9])
+Honda CBF 1000 (2006–2011) [SC58]
+Honda CBF 1000 F (2010–2016) [SC64]
+Honda CB 600 F Hornet (1998–2012) [PC34/PC36/PC41] ([Wikipedia][9])
+Honda CB 650 F (2014–2018) [RC75/RC97] ([Wikipedia][10])
+Honda CB 650 R (2019–present)
+Honda CB 1000 R (2008–2016, 2018–2024) [SC60/SC80]
+Honda NC 700 X (2012–2014) [RC63]
+Honda NC 750 X (2014–present) [RC72/RC90/RH09] ([Wikipedia][11])
+Honda CRF 1000 L Africa Twin (2015–2019) [SD04/SD06] ([Wikipedia][12])
+Honda CRF 1100 L Africa Twin (2020–present) [SD08] ([Wikipedia][13])
+Honda XL 700 V Transalp (2007–2012) [RD13/RD15]
+Honda XL 750 Transalp (2023–present) [RD16]
+Honda XL 1000 V Varadero (1999–2012) [SD01/SD02/SD03] ([Wikipedia][14])
+Honda VFR 800 X Crossrunner (2011–2020) [RC60/RC80/RC94]
+Honda CMX 500 Rebel (2017–present) [PC56] ([Wikipedia][15])
+Honda CBR 600 F (1999–2007, 2011–2013) [PC35/PC41]
+Honda CBR 650 F (2014–2018) [RC74/RC96] ([Wikipedia][16])
+Honda CBR 650 R (2019–present) [RH01/RH03/RH17] ([Wikipedia][9])
+Honda CBR 1000 RR Fireblade (2004–present) [SC57/SC59/SC77/SC82] ([Wikipedia][9])
+Kawasaki Z 750 (2004–2012) [ZR750J/ZR750L/ZR750M] ([Wikipedia][17])
+Kawasaki Z 800 (2013–2016) [ZR800A/ZR800B]
+Kawasaki Z 900 (2017–present) [ZR900]
+Kawasaki ER-6n (2006–2016) [ER650A/ER650C/ER650E]
+Kawasaki ER-6f (2006–2016) [EX650A/EX650C/EX650E]
+Kawasaki Z 650 (2017–present) [ER650]
+Kawasaki Ninja 650 (2017–present) [EX650]
+Kawasaki Versys 650 (2007–present) [KLE650]
+Kawasaki Z 1000 (2003–2020) [ZRT00]
+Kawasaki Z 1000 SX (2011–2019) [ZXT00]
+Kawasaki Ninja 1000 SX (2020–2024) [ZXT02]
+Kawasaki Versys 1000 (2012–2024) [KLZ1000]
+Kawasaki ZZR 1400 (2006–2020) [ZXT40]
+Kawasaki 1400 GTR (2007–2016) [ZGT40]
+Kawasaki Ninja ZX-6R (1995–2016, 2019–2020, 2024–present) [ZX600/ZX636]
+Kawasaki Ninja ZX-10R (2004–present) [ZXT00]
+Kawasaki Vulcan S (2015–present) [EN650]
+Kawasaki Z 900 RS (2018–present) [ZR900]
+Kawasaki Ninja 300 (2013–2017) [EX300]
+Kawasaki Ninja 400 (2018–2023) [EX400] ([Wikipedia][18])
+Yamaha FZ6 (2004–2010) [RJ07/RJ14] ([Wikipedia][19])
+Yamaha XJ6 (2009–2016) [RJ19/RJ22]
+Yamaha FZ1 (2006–2016) [RN16] ([Wikipedia][19])
+Yamaha FZ8 (2010–2016) [RN25]
+Yamaha MT-07 (2014–present) [RM04/RM17/RM33]
+Yamaha MT-09 (2013–present) [RN29/RN43/RN69/RN87] ([Wikipedia][20])
+Yamaha MT-10 (2016–present) [RN45/RN78]
+Yamaha MT-09 Tracer (2015–2017) [RN29]
+Yamaha Tracer 900 (2018–2020) [RN57]
+Yamaha Tracer 9 (2021–present) [RN70]
+Yamaha Tracer 700 (2016–2020) [RM14]
+Yamaha Tracer 7 (2021–present) [RM30] ([Wikipedia][21])
+Yamaha Ténéré 700 (2019–present) [DM07]
+Yamaha XT 660 R (2004–2016) [DM01]
+Yamaha XT 660 X (2004–2016) [DM01]
+Yamaha XT 660 Z Ténéré (2008–2016) [DM02]
+Yamaha TDM 900 (2002–2013) [RN08/RN11/RN18]
+Yamaha FJR 1300 (2001–2020) [RP04/RP08/RP11/RP13/RP23] ([Wikipedia][21])
+Yamaha YZF-R6 (1999–2020) [RJ03/RJ05/RJ09/RJ11/RJ15/RJ27]
+Yamaha YZF-R1 (1998–2024) [RN01/RN04/RN09/RN12/RN19/RN22/RN32/RN49/RN65] ([Wikipedia][21])
+Triumph Street Triple 675 (2007–2016)
+Triumph Street Triple 765 (2017–present)
+Triumph Speed Triple 1050 (2005–2020)
+Triumph Speed Triple 1200 RS (2021–present)
+Triumph Tiger 800 (2010–2020)
+Triumph Tiger 900 (2020–present)
+Triumph Tiger 1050 (2007–2012)
+Triumph Tiger Sport 1050 (2013–2021)
+Triumph Tiger Explorer 1200 (2012–2017)
+Triumph Tiger 1200 (2018–present)
+Triumph Bonneville T100 865 (2005–2016)
+Triumph Bonneville T100 900 (2017–present)
+Triumph Bonneville T120 (2016–present)
+Triumph Street Twin (2016–2022)
+Triumph Thruxton 900 (2004–2015)
+Triumph Scrambler 900 (2006–2016)
+Triumph Street Scrambler (2017–2022)
+Triumph Bonneville Bobber (2017–present)
+Triumph Daytona 675 (2006–2018)
+Triumph Rocket III (2004–2017) ([Wikipedia][22])
+Ducati Monster 695 (2006–2008)
+Ducati Monster 696 (2008–2014) ([Wikipedia][23])
+Ducati Monster 796 (2010–2014)
+Ducati Monster 797 (2017–2020)
+Ducati Monster 821 (2014–2020)
+Ducati Monster 1200 (2014–2021) ([Wikipedia][24])
+Ducati Monster 937 (2021–2025)
+Ducati Scrambler Icon 803 (2015–present) ([Wikipedia][25])
+Ducati Multistrada 1200 (2010–2017)
+Ducati Multistrada 1260 (2018–2020)
+Ducati Multistrada 950 (2017–2021)
+Ducati Multistrada V2 (2022–present)
+Ducati Multistrada V4 (2021–present) ([Wikipedia][26])
+Ducati Hypermotard 950 (2019–2025)
+Ducati Streetfighter V4 (2020–present) ([Wikipedia][27])
+Ducati Diavel (2011–2018)
+Ducati 899 Panigale (2013–2015) ([Wikipedia][28])
+Ducati 959 Panigale (2016–2019)
+Ducati Panigale V2 (2020–present)
+Ducati Panigale V4 (2018–present)
+Harley-Davidson Sportster Iron 883 (2009–2020) [XL883N]
+Harley-Davidson Sportster 883 Roadster (2002–2015) [XL883R]
+Harley-Davidson Sportster 1200 Custom (1996–2020) [XL1200C]
+Harley-Davidson Sportster Forty-Eight (2010–2020) [XL1200X]
+Harley-Davidson Dyna Street Bob (2006–2017) [FXDB]
+Harley-Davidson Dyna Fat Bob (2008–2017) [FXDF]
+Harley-Davidson Dyna Wide Glide (1993–2008, 2010–2017) [FXDWG]
+Harley-Davidson Softail Street Bob (2018–present) [FXBB/FXBBS]
+Harley-Davidson Softail Fat Bob (2018–2024) [FXFB/FXFBS]
+Harley-Davidson Softail Fat Boy (1990–present) [FLSTF/FLFB/FLFBS]
+Harley-Davidson Softail Breakout (2013–present) [FXSB/FXBR/FXBRS]
+Harley-Davidson Softail Heritage Classic (1986–present) [FLSTC/FLHC/FLHCS]
+Harley-Davidson Softail Sport Glide (2018–2024) [FLSB]
+Harley-Davidson Touring Street Glide (2006–present) [FLHX]
+Harley-Davidson Touring Road Glide (1998–2009, 2015–present) [FLTR/FLTRX]
+Harley-Davidson Touring Road King (1994–2022) [FLHR]
+Harley-Davidson V-Rod (2002–2006) [VRSCA]
+Harley-Davidson Night Rod Special (2007–2017) [VRSCDX]
+Harley-Davidson Pan America 1250 Special (2021–present) [RA1250S]
+Harley-Davidson Sportster S (2021–present) [RH1250S] ([Wikipedia][29])
+Suzuki GS 500 (1989–2008)
+Suzuki GSF 650 Bandit (2004–2016) [WVB5/WVCJ] ([Wikipedia][30])
+Suzuki GSF 1250 Bandit (2007–2016) [WVCH]
+Suzuki GSX 650 F (2008–2016) [WVCJ]
+Suzuki GSR 600 (2006–2011) [WVB9]
+Suzuki GSR 750 (2011–2016) [C5]
+Suzuki SV 650 (1999–2012, 2016–present)
+Suzuki SFV 650 Gladius (2009–2015) [WVCX]
+Suzuki DL 650 V-Strom (2004–2024) [WVB1/C7]
+Suzuki DL 1000 V-Strom (2002–2009, 2014–2019)
+Suzuki V-Strom 1050 (2020–present)
+Suzuki GSX-S 750 (2017–2021)
+Suzuki GSX-S 1000 (2015–present)
+Suzuki GSX-8S (2023–present)
+Suzuki GSX-R 600 (1997–2017) [WVCE/WVCV/C3]
+Suzuki GSX-R 750 (1985–2018)
+Suzuki GSX-R 1000 (2001–2022)
+Suzuki GSX 1300 R Hayabusa (1999–2018, 2021–present)
+Suzuki VZR 1800 Intruder M1800R (2006–2017)
+Suzuki GSX 1250 FA (2010–2016) [WVCH] ([Wikipedia][31])
+KTM 125 Duke (2011–present)
+KTM 390 Duke (2013–present)
+KTM 690 Duke (2008–2019)
+KTM 790 Duke (2018–2020, 2023–present)
+KTM 890 Duke (2020–2023)
+KTM 990 Duke (2024–present)
+KTM 990 Super Duke (2005–2013)
+KTM 1290 Super Duke R (2014–2023)
+KTM 1390 Super Duke R (2024–present)
+KTM 690 SMC R (2012–2017, 2019–present) ([Wikipedia][32])
+KTM 690 Enduro R (2009–2017, 2019–present)
+KTM 990 Adventure (2006–2013)
+KTM 1190 Adventure (2013–2016)
+KTM 1290 Super Adventure (2015–2016)
+KTM 1290 Super Adventure S (2017–2024)
+KTM 790 Adventure (2019–2021, 2023–present) ([Wikipedia][33])
+KTM 890 Adventure (2021–present)
+KTM RC 390 (2014–present)
+KTM 300 EXC (1990–present) ([Wikipedia][34])
+KTM 450 EXC-F (2012–present) ([Wikipedia][35])
+Aprilia SL 750 Shiver (2007–2016)
+Aprilia Shiver 900 (2017–2020) ([Wikipedia][36])
+Aprilia SMV 750 Dorsoduro (2008–2015)
+Aprilia Dorsoduro 900 (2017–2020) ([Wikipedia][37])
+Aprilia Tuono 1000 R (2006–2010) [RR] ([Wikipedia][38])
+Aprilia Tuono V4 R (2011–2014)
+Aprilia Tuono V4 1100 (2015–present)
+Aprilia RSV4 (2009–present)
+Aprilia RS 660 (2021–present)
+Aprilia Tuono 660 (2021–present)
+Aprilia Tuareg 660 (2022–present)
+Aprilia ETV 1200 Caponord (2013–2016)
+Aprilia Mana 850 (2007–2016)
+Aprilia Pegaso 650 Strada (2005–2009) [STRA]
+Aprilia Pegaso 650 Trail (2005–2009) [TRAI] ([Wikipedia][39])
+Aprilia RSV 1000 R (2004–2009) [RR] ([Wikipedia][40])
+Aprilia RS 125 2T (2006–2012) [RD/RM]
+Aprilia RS4 125 (2011–2016)
+Aprilia RS 125 4T (2017–present)
+Aprilia Tuono 125 (2017–present) ([Industrieverband Motorrad][41])
+
+[1]: https://de.wikipedia.org/wiki/BMW_R_1200_GS_K25 "https://de.wikipedia.org/wiki/BMW_R_1200_GS_K25"
+[2]: https://de.wikipedia.org/wiki/BMW_R_1200_GS_Adventure_K255 "https://de.wikipedia.org/wiki/BMW_R_1200_GS_Adventure_K255"
+[3]: https://de.wikipedia.org/wiki/BMW_F_750_GS?utm_source=chatgpt.com "BMW F 750 GS"
+[4]: https://de.wikipedia.org/wiki/BMW_F_850_GS?utm_source=chatgpt.com "BMW F 850 GS"
+[5]: https://de.wikipedia.org/wiki/BMW_R_1250_R?utm_source=chatgpt.com "BMW R 1250 R"
+[6]: https://de.wikipedia.org/wiki/BMW_R_1250_RT?utm_source=chatgpt.com "BMW R 1250 RT"
+[7]: https://de.wikipedia.org/wiki/BMW_S_1000_R?utm_source=chatgpt.com "BMW S 1000 R"
+[8]: https://de.wikipedia.org/wiki/BMW_F_800_GT "https://de.wikipedia.org/wiki/BMW_F_800_GT"
+[9]: https://de.wikipedia.org/wiki/Liste_der_Honda-Motorr%C3%A4der "https://de.wikipedia.org/wiki/Liste_der_Honda-Motorr%C3%A4der"
+[10]: https://de.wikipedia.org/wiki/Honda_CB_650_F "https://de.wikipedia.org/wiki/Honda_CB_650_F"
+[11]: https://de.wikipedia.org/wiki/Honda_NC_750_X "https://de.wikipedia.org/wiki/Honda_NC_750_X"
+[12]: https://de.wikipedia.org/wiki/Honda_CRF_1000_L_Africa_Twin "https://de.wikipedia.org/wiki/Honda_CRF_1000_L_Africa_Twin"
+[13]: https://de.wikipedia.org/wiki/Honda_CRF_1100_L_Africa_Twin "https://de.wikipedia.org/wiki/Honda_CRF_1100_L_Africa_Twin"
+[14]: https://de.wikipedia.org/wiki/Reiseenduro "https://de.wikipedia.org/wiki/Reiseenduro"
+[15]: https://de.wikipedia.org/wiki/Honda_CMX_500_Rebel "https://de.wikipedia.org/wiki/Honda_CMX_500_Rebel"
+[16]: https://de.wikipedia.org/wiki/Honda_CBR_650_F "https://de.wikipedia.org/wiki/Honda_CBR_650_F"
+[17]: https://de.wikipedia.org/wiki/Kawasaki_Z_750 "https://de.wikipedia.org/wiki/Kawasaki_Z_750"
+[18]: https://de.wikipedia.org/wiki/Liste_der_Kawasaki-Motorr%C3%A4der "https://de.wikipedia.org/wiki/Liste_der_Kawasaki-Motorr%C3%A4der"
+[19]: https://de.wikipedia.org/wiki/Yamaha_Fazer "https://de.wikipedia.org/wiki/Yamaha_Fazer"
+[20]: https://de.wikipedia.org/wiki/Yamaha_MT-09 "https://de.wikipedia.org/wiki/Yamaha_MT-09"
+[21]: https://de.wikipedia.org/wiki/Liste_der_Yamaha-Motorr%C3%A4der "https://de.wikipedia.org/wiki/Liste_der_Yamaha-Motorr%C3%A4der"
+[22]: https://de.wikipedia.org/wiki/Liste_der_Triumph-Motorr%C3%A4der "https://de.wikipedia.org/wiki/Liste_der_Triumph-Motorr%C3%A4der"
+[23]: https://de.wikipedia.org/wiki/Ducati_Monster_696 "https://de.wikipedia.org/wiki/Ducati_Monster_696"
+[24]: https://de.wikipedia.org/wiki/Ducati_Monster "https://de.wikipedia.org/wiki/Ducati_Monster"
+[25]: https://de.wikipedia.org/wiki/Ducati_Scrambler "https://de.wikipedia.org/wiki/Ducati_Scrambler"
+[26]: https://de.wikipedia.org/wiki/Ducati_Multistrada_1200 "https://de.wikipedia.org/wiki/Ducati_Multistrada_1200"
+[27]: https://de.wikipedia.org/wiki/Ducati_Streetfighter "https://de.wikipedia.org/wiki/Ducati_Streetfighter"
+[28]: https://de.wikipedia.org/wiki/Ducati_899_Panigale "https://de.wikipedia.org/wiki/Ducati_899_Panigale"
+[29]: https://de.wikipedia.org/wiki/Harley-Davidson "https://de.wikipedia.org/wiki/Harley-Davidson"
+[30]: https://de.wikipedia.org/wiki/Suzuki_GSF_650 "https://de.wikipedia.org/wiki/Suzuki_GSF_650"
+[31]: https://de.wikipedia.org/wiki/Liste_der_Suzuki-Motorr%C3%A4der "https://de.wikipedia.org/wiki/Liste_der_Suzuki-Motorr%C3%A4der"
+[32]: https://de.wikipedia.org/wiki/KTM_690_SMC-R "https://de.wikipedia.org/wiki/KTM_690_SMC-R"
+[33]: https://de.wikipedia.org/wiki/KTM_790_Adventure "https://de.wikipedia.org/wiki/KTM_790_Adventure"
+[34]: https://en.wikipedia.org/wiki/KTM_300?utm_source=chatgpt.com "KTM 300"
+[35]: https://en.wikipedia.org/wiki/KTM_450_series?utm_source=chatgpt.com "KTM 450 series"
+[36]: https://de.wikipedia.org/wiki/Aprilia_Shiver_900?utm_source=chatgpt.com "Aprilia Shiver 900"
+[37]: https://en.wikipedia.org/wiki/Aprilia_Dorsoduro?utm_source=chatgpt.com "Aprilia Dorsoduro"
+[38]: https://de.wikipedia.org/wiki/Aprilia_Tuono?utm_source=chatgpt.com "Aprilia Tuono"
+[39]: https://de.wikipedia.org/wiki/Aprilia_Pegaso_650?utm_source=chatgpt.com "Aprilia Pegaso 650"
+[40]: https://de.wikipedia.org/wiki/Aprilia_RSV_1000_R?utm_source=chatgpt.com "Aprilia RSV 1000 R"
+[41]: https://www.ivm-ev.de/assets/Uploads/IVM-Jahresbericht-2025.pdf "https://www.ivm-ev.de/assets/Uploads/IVM-Jahresbericht-2025.pdf"

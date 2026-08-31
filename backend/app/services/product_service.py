@@ -222,8 +222,15 @@ async def newest_approved_images(
     return {image.motorbike_id: image for image in result.scalars().all()}
 
 
-async def create_backlog(session: AsyncSession, name: str) -> Motorbike:
+async def create_backlog(
+    session: AsyncSession, name: str, *, suggestion: Mapping[str, Any] | None = None
+) -> Motorbike:
     """Create a `backlog` entry for `name` and return it.
+
+    `suggestion` is the unverified claim the entry was proposed with (year
+    range, type codes, links — see `app.cli.suggestions`). It is stored as
+    given and never promoted into the typed columns here: only research
+    confirms those.
 
     Raises:
         DuplicateModelError: the derived slug is already in the catalogue.
@@ -232,7 +239,12 @@ async def create_backlog(session: AsyncSession, name: str) -> Motorbike:
     if await get_by_slug(session, slug) is not None:
         raise DuplicateModelError(slug)
 
-    motorbike = Motorbike(name=name.strip(), slug=slug, status=MotorbikeStatus.BACKLOG)
+    motorbike = Motorbike(
+        name=name.strip(),
+        slug=slug,
+        status=MotorbikeStatus.BACKLOG,
+        suggestion=dict(suggestion) if suggestion is not None else None,
+    )
     session.add(motorbike)
     await session.commit()
     await _announce(session, motorbike.id)
@@ -333,6 +345,21 @@ async def assign_manufacturer(
     row.
     """
     motorbike.manufacturer_id = manufacturer_id
+    await session.commit()
+    await _announce(session, motorbike.id)
+    return motorbike
+
+
+async def set_suggestion(
+    session: AsyncSession, motorbike: Motorbike, suggestion: Mapping[str, Any] | None
+) -> Motorbike:
+    """Replace the unverified suggestion document of `motorbike` and announce it.
+
+    Nothing else on the row is touched — in particular not the status and not
+    the typed columns: a suggestion is a claim, and only research turns a claim
+    into a catalogue fact.
+    """
+    motorbike.suggestion = dict(suggestion) if suggestion is not None else None
     await session.commit()
     await _announce(session, motorbike.id)
     return motorbike
