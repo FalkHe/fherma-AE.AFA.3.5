@@ -65,6 +65,18 @@ the same day; see below)*
   manufacturers in the review flow so an admin resolves the split before
   approval. Owner decision needed.
 
+  **Closed 2026-08-31, Phase-6 step 6.16.** `manufacturer_service.normalize_name`
+  now maps a case-insensitive, first-word marque prefix
+  (`backend/app/services/known_marques.py::KNOWN_MARQUES`) onto its canonical
+  spelling, so `"Kawasaki Motors"`/`"Honda Motor"` collapse onto `"Kawasaki"`/
+  `"Honda"` for every caller by construction. By the time this landed the dev
+  DB's split had already self-resolved (all three Kawasaki rows were already
+  on the single canonical `Kawasaki` manufacturer; no `Kawasaki Motors` row
+  existed to merge) — verified live with `app catalogue set-manufacturer
+  kawasaki-versys-650 "Kawasaki Motors"`, which re-pointed to the existing
+  `Kawasaki` row without growing `manufacturers`. See
+  `../phase-6/shared-knowledge.md` § Landed decisions, Step 6.16.
+
 ---
 
 ## Carried over (tracked elsewhere, listed for visibility)

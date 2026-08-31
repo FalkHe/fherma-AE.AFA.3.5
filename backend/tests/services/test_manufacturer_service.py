@@ -83,6 +83,37 @@ def test_normalize_name_truncates_to_the_column_width() -> None:
     assert len(manufacturer_service.normalize_name("x" * 200) or "") == 64
 
 
+# --- normalize_name: known-marque mapping (D14, step 6.16) --------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Kawasaki Motors", "Kawasaki"),
+        ("KTM Sportmotorcycle", "KTM"),
+        ("kawasaki motors", "Kawasaki"),
+        ("bmw", "BMW"),
+        ("Honda Motor", "Honda"),
+        ("Kawasaki", "Kawasaki"),
+        ("KAWASAKI", "Kawasaki"),
+    ],
+)
+def test_normalize_name_maps_a_known_marque_prefix_onto_the_canonical_spelling(
+    raw: str, expected: str
+) -> None:
+    assert manufacturer_service.normalize_name(raw) == expected
+
+
+def test_normalize_name_leaves_an_unknown_marque_verbatim() -> None:
+    assert manufacturer_service.normalize_name("MV Agusta") == "MV Agusta"
+
+
+def test_normalize_name_never_matches_a_marque_mid_string() -> None:
+    # The marque must be the first word — "Honda" appearing later in the
+    # string must never trigger the mapping.
+    assert manufacturer_service.normalize_name("Big Honda Fan Club") == "Big Honda Fan Club"
+
+
 # --- get_or_create ------------------------------------------------------------
 
 

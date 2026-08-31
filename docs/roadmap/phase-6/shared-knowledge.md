@@ -1175,3 +1175,34 @@ Also recorded from 6.15's live run, because later steps meet it:
   from reading the `suggestion` claim that carries them. **This is the gap
   6.17 exists to close** (search the claimed type codes), not an infrastructure
   failure.
+
+### Step 6.16
+
+- New `backend/app/services/known_marques.py::KNOWN_MARQUES` — a generated,
+  committed tuple (never a runtime parse of `bike-list.txt`, per D14):
+  `Aprilia, BMW, Ducati, Harley-Davidson, Honda, Kawasaki, KTM, Suzuki,
+  Triumph, Yamaha`. `manufacturer_service.normalize_name` matches the
+  collapsed name case-insensitively against it, longest marque first, and an
+  exact/`"{marque} "`-prefix match returns the canonical spelling; anything
+  else (including a marque appearing mid-string, e.g. `"Big Honda Fan Club"`)
+  passes through unchanged. `get_or_create("Kawasaki Motors")` now resolves to
+  the `Kawasaki` row for every caller (`get_or_create`, extraction's
+  `_assign_identity`/`_resolve_manufacturer_id`, `app catalogue
+  set-manufacturer`) by construction — documented in both modules' docstrings
+  so it is not "fixed" back.
+  Closes the Phase-5 open question ("manufacturer names are inconsistent") in
+  `../phase-5/open-questions.md`.
+- **Confirmed live, no merge performed:** by the time this step landed, the
+  dev DB's Kawasaki split had already self-resolved (per the 2026-08-31
+  coordinator note above) — all three Kawasaki rows were already on the single
+  canonical `Kawasaki` manufacturer and no `Kawasaki Motors` row existed. The
+  split-listing query returned zero rows; nothing was merged, no motorbike row
+  touched. The live proof of the mapping is instead the CLI probe: `app
+  catalogue set-manufacturer kawasaki-versys-650 "Kawasaki Motors"` printed
+  `'Kawasaki'` (id `01M169DWZHXZF8M4XX5QEB6NP8`) and `manufacturers` count for
+  `ilike 'kawasaki%'` stayed `1` before and after.
+- **6.18 depends on this:** its backfill strips the FK'd manufacturer's
+  canonical name (as this step now guarantees it) as a prefix of `query_name`
+  when deriving `model_name` mechanically — it relies on the canonical
+  spellings `normalize_name` now enforces, not on whatever string an earlier
+  extraction happened to store.
