@@ -75,7 +75,7 @@ plus optional Langfuse tracing via `make langfuse-up` — see
 `backend/app/llm/models.py`; no per-turn grouping, no metrics), multi-model
 support (`CHAT_MODEL` / `ADVISOR_MODEL` / `EMBEDDING_MODEL` are independent
 settings, but no in-UI picker), automated KB updates (fully automated once
-triggered, but the trigger is an admin action). `docs/checklist.md` lists the
+triggered, but the trigger is an admin action). `docs/core-requirements-checklist.md` lists the
 scope of each partial honestly, and what was not attempted.
 
 ## Quick start (for reviewers)
@@ -592,7 +592,7 @@ convention that keeps it from drifting.
   scoping checks
 - `docs/roadmap.md` — phased implementation plan
 - `docs/core-requirements.md` — grading requirements
-- `docs/grading-map.md` — every grading requirement and claimed bonus mapped
-  to concrete files/endpoints/screens
+- `docs/core-requirements-checklist.md` — every grading requirement and claimed bonus mapped
+  to concrete files/endpoints/screens, with how each is implemented
 - `docs/qa-checklist.md` — QA checklist and known rough edges
 - `125.md` — original task brief

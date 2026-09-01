@@ -2,7 +2,7 @@
 phase: 6
 step: "6.29"
 title: "Docs: identity, prices, the CLI reference and the grading map"
-summary: Documentation catch-up against landed behaviour — ingestion.md gains the identity fields, the claim-not-data rule and the listing quarantine; README gains the five new CLI commands and the one new config key; demo-walkthrough gains an identity+price chapter; grading-map and model-naming cross-links updated — with three explicit honesty requirements.
+summary: Documentation catch-up against landed behaviour — ingestion.md gains the identity fields, the claim-not-data rule and the listing quarantine; README gains the five new CLI commands and the one new config key; demo-walkthrough gains an identity+price chapter; core-requirements-checklist and model-naming cross-links updated — with three explicit honesty requirements.
 effort: 3
 dependencies: ["6.23"]
 ---
@@ -45,7 +45,7 @@ the imported backlog and at least one researched price snapshot present.
   approval refused while incomplete), then `app prices research` on an
   approved bike and the snapshot appearing on the detail page and in a
   chat cost answer.
-- `docs/grading-map.md`: map the new machinery onto the criteria it
+- `docs/core-requirements-checklist.md`: map the new machinery onto the criteria it
   serves (structured retrieval via type codes, tool-result additions,
   provenance display, security posture of D8).
 - `docs/model-naming.md`: cross-links to the landed implementation

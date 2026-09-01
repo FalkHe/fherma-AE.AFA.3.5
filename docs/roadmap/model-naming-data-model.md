@@ -509,7 +509,7 @@ layout.
 | Seeds / fixtures | `backend/app/cli/data/seed_models.json` (unchanged — those are `query_name`s) | none |
 | CLI | `backend/app/cli/catalogue.py` | new `backfill-identity`; optional `render-name` for debugging |
 | Tests | ~9 backend files constructing `Motorbike(name=…)`, `test_catalogue_search_service.py` (sort order), tool tests asserting `name` | mechanical `name=` → `query_name=`; the `query_name` fallback in `render_name` keeps assertions that do not set an identity green **by design** |
-| Docs | `docs/ingestion.md`, `docs/model-naming.md`, `README.md`, `docs/grading-map.md` | identity section, CLI reference, cross-link |
+| Docs | `docs/ingestion.md`, `docs/model-naming.md`, `README.md`, `docs/core-requirements-checklist.md` | identity section, CLI reference, cross-link |
 
 Not affected at all: auth, chat persistence, the advisor loop, operations/SSE,
 embeddings, images, the fencing layer.

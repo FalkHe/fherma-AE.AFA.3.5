@@ -26,7 +26,7 @@ Two demo assets exist. Pick whichever fits:
   URL, curl command and expected outcome below was replayed against a
   fresh clone with an empty database at `HEAD 51eb323` on 2026-08-29
   (step 5.18's acceptance run). Each numbered item below
-  names the `docs/grading-map.md` row it demonstrates, in brackets.
+  names the `docs/core-requirements-checklist.md` row it demonstrates, in brackets.
 
 ## Prerequisites
 
@@ -365,5 +365,5 @@ cache.
   it didn't — there is no hand-entered guess left in this catalogue's price
   data (the earlier Phase-4 demo fixtures that carried guessed prices have
   since been removed from the database entirely).
-- See `docs/grading-map.md` for the full requirement-to-file mapping this
+- See `docs/core-requirements-checklist.md` for the full requirement-to-file mapping this
   walkthrough exercises; the `[bracketed]` tags above point at its rows.
