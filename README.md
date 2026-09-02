@@ -71,11 +71,11 @@ freezing.
 
 Partially implemented: conversation history (persisted and resumable at
 `/consultations`, but no export), logging and monitoring (structured logging
-plus optional Langfuse tracing via `make langfuse-up` — see
+plus optional Langfuse tracing via `compose.langfuse.yaml` — see
 `backend/app/llm/models.py`; no per-turn grouping, no metrics), multi-model
 support (`CHAT_MODEL` / `ADVISOR_MODEL` / `EMBEDDING_MODEL` are independent
 settings, but no in-UI picker), automated KB updates (fully automated once
-triggered, but the trigger is an admin action). `docs/checklist.md` lists the
+triggered, but the trigger is an admin action). `docs/core-requirements-checklist.md` lists the
 scope of each partial honestly, and what was not attempted.
 
 ## Quick start (for reviewers)
@@ -407,43 +407,50 @@ year columns NULL.
 
 ## Optional observability (Langfuse)
 
-A bonus, fully optional profile traces individual chat-model calls (never
-embeddings — LangChain's embeddings wrapper emits no callback events) to a
-self-hosted [Langfuse](https://langfuse.com/) instance:
+A bonus, fully optional compose file (`compose.langfuse.yaml`) traces
+individual chat-model calls (never embeddings — LangChain's embeddings
+wrapper emits no callback events) to a self-hosted
+[Langfuse](https://langfuse.com/) instance. Enable it by adding the file to
+`COMPOSE_FILE` in `.env` (docker compose reads that variable from `.env`),
+then bring the stack up:
 
 ```bash
-make langfuse-up   # docker compose --profile langfuse up -d
+# in .env:
+#   COMPOSE_FILE=compose.yaml:compose.langfuse.yaml
+# (append :compose.local.yaml if you use local overrides)
+make up
 ```
 
 This starts `langfuse-web`, `langfuse-worker`, `clickhouse`, `valkey`, `minio`
-and a dedicated `langfuse-postgres` alongside the default stack. Open
-<http://localhost:3000>, create an org/project, and paste its generated
-public/secret API key pair into `.env`'s `LANGFUSE_PUBLIC_KEY` and
-`LANGFUSE_SECRET_KEY`; set `LANGFUSE_HOST=http://langfuse-web:3000` (the
-Compose-network hostname `app-web`/`app-worker` need — `localhost:3000` only
-works from the host browser). Then recreate the two services that read `.env`:
+and a dedicated `langfuse-postgres` alongside the default stack, **and** wires
+`app-web`/`app-worker` to it: the file overrides their `LANGFUSE_*`
+environment with an API key pair that `langfuse-web` self-provisions on
+first boot (`LANGFUSE_INIT_*`: org, project, keys and a login user), so no
+manual UI setup is needed. The compose file itself contains no secrets: every
+password/key/salt is interpolated from git-ignored `.env` variables
+(`LANGFUSE_POSTGRES_PASSWORD`, `LANGFUSE_INIT_*`, …) documented in
+`.env.dist`, and compose fails loudly if the file is enabled with any of them
+unset. The three plain `LANGFUSE_*` keys in `.env` stay empty — set those
+only to trace to Langfuse Cloud instead. Open <http://localhost:3000> and
+sign in with the `LANGFUSE_INIT_USER_*` credentials from your `.env` to
+browse traces.
 
-```bash
-docker compose up -d app-web app-worker
-```
-
-Leaving all three `LANGFUSE_*` keys empty (the default) runs the app exactly
-as without this profile — byte-identical behaviour, and a Langfuse outage
-(or a wrong `LANGFUSE_HOST`) never fails a chat turn. This is a bonus item:
-nothing else in this repo, and no grading criterion, depends on it running.
+Removing the file from `COMPOSE_FILE` (then `docker compose up -d` to recreate
+`app-web`/`app-worker`) returns the app to its no-tracing default —
+byte-identical behaviour, and even with tracing on, a Langfuse outage never
+fails a chat turn. This is a bonus item: nothing else in this repo, and no
+grading criterion, depends on it running. Stop the Langfuse services before
+disabling the file, or Compose will later flag their containers as orphans.
 
 **Destructive-command warning:** never run `docker compose down -v` — it
 deletes the shared `postgres-data` volume, i.e. the entire dev database, not
-just Langfuse's data. Also avoid `docker compose --profile langfuse down`
-(`make langfuse-down` does **not** run it — the target stops the six
-Langfuse services by name): `down` is **never** scoped by a `--profile`
-flag — it tears down every service in the project regardless (confirmed
-with `docker compose --profile langfuse down --dry-run`: it lists all five
-default containers for removal, Langfuse or not). To stop only the Langfuse
-services and leave the rest of the stack running, use:
+just Langfuse's data. There is no Langfuse-scoped `down` at all: `down`
+always tears down every service in the project. To stop only the Langfuse
+services and leave the rest of the stack running, use `make langfuse-down`,
+which stops the six services by name:
 
 ```bash
-docker compose --profile langfuse stop
+docker compose stop langfuse-web langfuse-worker clickhouse valkey minio langfuse-postgres
 ```
 
 ## Running the backend locally with uv
@@ -592,7 +599,7 @@ convention that keeps it from drifting.
   scoping checks
 - `docs/roadmap.md` — phased implementation plan
 - `docs/core-requirements.md` — grading requirements
-- `docs/grading-map.md` — every grading requirement and claimed bonus mapped
-  to concrete files/endpoints/screens
+- `docs/core-requirements-checklist.md` — every grading requirement and claimed bonus mapped
+  to concrete files/endpoints/screens, with how each is implemented
 - `docs/qa-checklist.md` — QA checklist and known rough edges
 - `125.md` — original task brief

@@ -40,15 +40,18 @@ ps: ## Show service status
 	$(COMPOSE) ps
 .PHONY: ps
 
-langfuse-up: ## Start the optional Langfuse tracing stack (bonus, profile "langfuse")
-	$(COMPOSE) --profile langfuse up -d
+# The Langfuse stack lives in compose.langfuse.yaml and is enabled by adding
+# that file to COMPOSE_FILE in .env (see .env.dist); these targets error with
+# "no such service" when it is not enabled.
+langfuse-up: ## Start the optional Langfuse tracing stack (needs compose.langfuse.yaml in COMPOSE_FILE)
+	$(COMPOSE) up -d langfuse-web langfuse-worker
 .PHONY: langfuse-up
 
 langfuse-down: ## Stop the optional Langfuse tracing stack (leaves the app stack running)
-	# `down` is NEVER profile-scoped -- it tears down the whole project, and with
-	# -v it deletes postgres-data (the entire dev database). `stop` is scoped to
-	# the profile's services, which is what this target must do.
-	$(COMPOSE) --profile langfuse stop langfuse-web langfuse-worker clickhouse valkey minio langfuse-postgres
+	# Never `down` here -- it is not service-scoped: it tears down the whole
+	# project, and with -v it deletes postgres-data (the entire dev database).
+	# `stop` with explicit names touches only the Langfuse services.
+	$(COMPOSE) stop langfuse-web langfuse-worker clickhouse valkey minio langfuse-postgres
 .PHONY: langfuse-down
 
 test: backend-test frontend-test ## Run both test suites
